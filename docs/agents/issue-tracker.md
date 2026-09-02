@@ -2,8 +2,7 @@
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
-> Setup note: this repo is not yet a git repository and has no GitHub remote. Run `git init`,
-> create the GitHub repo, and push before the `gh`-based flows below will work.
+Repo: `zhong-xian-guang/jelly-image-sandbox` (public).
 
 ## Conventions
 
