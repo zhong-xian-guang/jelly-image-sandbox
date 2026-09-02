@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 目前狀態
 
-全新專案。截至 2026-09-02，此資料夾為空：沒有程式碼、沒有建置工具、沒有套件管理器，也不是 git 儲存庫。目前沒有 build / lint / test 指令，請勿自行杜撰。本檔記錄產品構想與設計限制，讓第一個實作階段能從正確的方向開始。
+截至 2026-09-02：技術棧與物理／網格架構已定案（見下方「技術棧」與 `docs/adr/`），但 `src/` 尚無程式碼、專案骨架（`package.json`、Vite 設定）尚未建立。**目前沒有可運作的 build / lint / test 指令，請勿自行杜撰**；骨架建立後把實際指令補到「技術棧」節。本檔記錄產品構想與設計限制。
 
 ## 產品概念
 
@@ -31,19 +31,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - *無限*：桌面無限延伸。
 - **相機跟隨** — 視角動態平移／縮放，讓果凍持續留在畫面內，尤其是在無限模式下、以及甩動把果凍拋到離原點很遠時。
 
-## 尚未決定的技術選擇（不要預設）
+## 技術棧
 
-使用者明確表示以下項目**尚未**決定，且過去有失敗經驗要先討論，之後才會定案。在未經確認前，不要以某個特定選擇為前提搭建骨架：
+`/grill-with-docs`（2026-09-02）定案。脈絡見 `docs/adr/0001`、`docs/adr/0002`、`docs/research/soft-body-2d-jelly.md`；管線與參數見 `docs/design/simulation-and-mesh.md`；詞彙見 `CONTEXT.md`。
 
-- **柔體物理方法** — 自寫的 mass-spring / Position-Based Dynamics 網格、既有 2D 物理引擎的柔體支援、或是在剛體引擎上疊一層粒子晶格。使用者過去的做法遇到問題，想先回顧那些問題。
-- **變形貼圖的算繪方式** — 匯入的圖片如何隨著變形後的網格扭曲（WebGL 貼圖網格 vs. 2D canvas 近似）。
-- **建置工具／語言** — 打包工具，以及是否使用 TypeScript。
+- **建置／語言** — Vite + TypeScript。輸出為靜態包，直接打包 itch.io zip。
+- **柔體物理方法** — 完全手寫的 2D 求解器，**不用物理引擎**。骨幹 = region-based shape matching（重疊方格 lattice）；細節層 = XPBD 的 distance + signed-area 約束。俯視、無重力。固定 60 Hz 幀、每幀 4 substep。
+- **網格生成** — 手刻 marching squares 描 Contour → `simplify-js`（MIT）→ `cdt2d`（MIT）CDT + 手刻 Ruppert 細化。**不可**用 Shewchuk Triangle／JIGSAW（禁付費商業散布）、CGAL Mesh_2（GPL）、`MarchingSquares.js`（AGPL）。
+- **算繪** — WebGL 每頂點 UV 三角網格（PixiJS `Mesh` 或自寫 shader）。不用 Canvas 2D 逐三角 `drawImage`。
 
-這些定案後，請把本節換成實際的技術棧與 build / dev / test 指令，並刪除上面的「目前狀態」說明。
+build / dev / test 指令：待專案骨架建立後補上。
 
 ## 給第一位實作者的架構筆記
 
-不論最後選用哪個物理／算繪函式庫，以下模組都會存在，值得從一開始就分開設計：
+模組邊界與初始參數見 `docs/design/simulation-and-mesh.md`。以下模組會存在，值得從一開始就分開設計：
 
 - **圖片 → 物件匯入**：解碼 PNG、取出 alpha 遮罩、產生模擬網格（頂點網格或裁切到不透明區域的三角化），並指定貼圖 UV，讓算繪端能把原圖貼到變形後的網格上。非矩形、甚至不連通的 alpha 區域是實際會遇到的情況。
 - **模擬核心**：推進柔體。必須提供 (a) 在任意頂點附加／移除抓取約束、(b) 對質心的全域釘選約束、(c) 可替換的邊界（有牆 vs. 無）。保持與算繪端無關，並採用固定時間步（fixed timestep），讓行為可重現、且在掉幀時仍穩定。
@@ -59,8 +60,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Issue tracker
 
-Issue 與 spec 追蹤在 GitHub Issues，透過 `gh` CLI 操作。詳見 `docs/agents/issue-tracker.md`。
-（注意：此專案尚未 `git init`、也還沒有 GitHub 遠端；`gh` 相關流程要等建立儲存庫並推送後才能運作。）
+Issue 與 spec 追蹤在 GitHub Issues（`zhong-xian-guang/jelly-image-sandbox`），透過 `gh` CLI 操作。詳見 `docs/agents/issue-tracker.md`。
 
 ### Triage labels
 
