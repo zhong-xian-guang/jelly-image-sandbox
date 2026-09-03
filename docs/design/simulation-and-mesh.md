@@ -36,7 +36,7 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 
 1. 套用外力（v1 只有無）與既有速度，symplectic Euler 預測新位置。**所有 Particle 一視同仁**——被抓的 Particle 不設 `invMass = 0`，也不直接搬位置（見 [ADR-0003](../adr/0003-grab-attaches-at-a-barycentric-surface-point.md)）。
 2. **shape-matching 脊椎**（骨幹）：
-   - Region = 在 Sim mesh bounding box 上鋪的**重疊方格 lattice**。cell 邊長初始 = Jelly 尺寸的 `1/6`，是 **Softness** 的主旋鈕（越大越硬）。
+   - Region = 在 Sim mesh bounding box 上鋪的**重疊方格 lattice**。cell 邊長初始 = Jelly 對角線 × `0.15`（prototype 實測；越大越硬），是 **Softness** 的主旋鈕。
    - 每個含 ≥ `4` 個 Particle 的 cell 是一個 Region。
    - 每 substep 每 Region：算目前質心與 rest 質心 → 最佳線性變換 → 對旋轉部分做 **2×2 polar decomposition** 取 `R` → 每個成員 Particle 的 goal `g = R(x0 − c0) + c`。
    - Particle 的最終 goal = 所屬各 Region goal 的加權平均。
@@ -82,7 +82,7 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 | 顯示幀 | 60 Hz |
 | substep / 幀 | 4（弱裝置 2） |
 | 約束迭代 / substep | 1 |
-| Region cell 邊長 | Jelly 尺寸 × 1/6 |
+| Region cell 邊長 | Jelly 對角線 × 0.15（prototype 手感實測） |
 | Region 最小成員數 | 4 |
 | shape-matching α_sm | 0.7 |
 | Grab 硬度 β | 1.0（精準貼游標；調低＝彈性把手） |

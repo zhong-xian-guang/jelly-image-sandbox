@@ -79,7 +79,7 @@
   </details>
 
   <h2>參數</h2>
-  <div class="row"><label>Region 邊長 / 對角線</label><input id="p-cell" type="range" min="0.08" max="0.6" step="0.005" value="0.17"><span class="val" id="v-cell"></span></div>
+  <div class="row"><label>Region 邊長 / 對角線</label><input id="p-cell" type="range" min="0.08" max="0.6" step="0.005" value="0.15"><span class="val" id="v-cell"></span></div>
   <div class="row"><label>α<sub>sm</sub>（拉向 goal）</label><input id="p-alpha" type="range" min="0.05" max="1" step="0.01" value="0.7"><span class="val" id="v-alpha"></span></div>
   <div class="row"><label>速度阻尼 / substep</label><input id="p-damp" type="range" min="0" max="0.15" step="0.002" value="0.02"><span class="val" id="v-damp"></span></div>
   <div class="row"><label>substep / 幀</label><input id="p-sub" type="range" min="1" max="8" step="1" value="4"><span class="val" id="v-sub"></span></div>
@@ -153,7 +153,7 @@ class ShapeMatchingJelly {
     this.vel  = new Float64Array(restXY.length);
     this.tris = tris;
     this.params = Object.assign(
-      { cellFrac:0.17, alphaSm:0.7, damping:0.02, substeps:4, pin:false, boundary:'infinite', boxHalf:[400,400] },
+      { cellFrac:0.15, alphaSm:0.7, damping:0.02, substeps:4, pin:false, boundary:'infinite', boxHalf:[400,400] },
       params || {}
     );
     this.grabs = new Map();        // pointerId -> { tri:[i0,i1,i2], w:[w0,w1,w2], tx, ty }
@@ -405,7 +405,7 @@ const ctx = canvas.getContext('2d');
 const stage = document.getElementById('stage');
 
 // ---- 參數綁定 --------------------------------------------------------------
-const P = { cellFrac:0.17, alphaSm:0.7, damping:0.02, substeps:4, gridN:20, grabR:34,
+const P = { cellFrac:0.15, alphaSm:0.7, damping:0.02, substeps:4, gridN:20, grabR:34,
             pin:false, boundary:'infinite', boxHalf:[380,300],
             cam:true, showMesh:false, showReg:false, showPts:false };
 
