@@ -33,7 +33,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 技術棧
 
-`/grill-with-docs`（2026-09-02）定案。脈絡見 `docs/adr/0001`、`docs/adr/0002`、`docs/research/soft-body-2d-jelly.md`；管線與參數見 `docs/design/simulation-and-mesh.md`；詞彙見 `CONTEXT.md`。
+`/grill-with-docs`（2026-09-02）定案，`/prototype` 修正若干細節（2026-09-03）。脈絡見 `docs/adr/0001`–`0003`、`docs/research/soft-body-2d-jelly.md`；管線與參數見 `docs/design/simulation-and-mesh.md`；詞彙見 `CONTEXT.md`。
 
 - **建置／語言** — Vite + TypeScript。輸出為靜態包，直接打包 itch.io zip。
 - **柔體物理方法** — 完全手寫的 2D 求解器，**不用物理引擎**。骨幹 = region-based shape matching（重疊方格 lattice）；細節層 = XPBD 的 distance + signed-area 約束。俯視、無重力。固定 60 Hz 幀、每幀 4 substep。
@@ -47,8 +47,8 @@ build / dev / test 指令：待專案骨架建立後補上。
 模組邊界與初始參數見 `docs/design/simulation-and-mesh.md`。以下模組會存在，值得從一開始就分開設計：
 
 - **圖片 → 物件匯入**：解碼 PNG、取出 alpha 遮罩、產生模擬網格（頂點網格或裁切到不透明區域的三角化），並指定貼圖 UV，讓算繪端能把原圖貼到變形後的網格上。非矩形、甚至不連通的 alpha 區域是實際會遇到的情況。
-- **模擬核心**：推進柔體。必須提供 (a) 在任意頂點附加／移除抓取約束、(b) 對質心的全域釘選約束、(c) 可替換的邊界（有牆 vs. 無）。保持與算繪端無關，並採用固定時間步（fixed timestep），讓行為可重現、且在掉幀時仍穩定。
-- **輸入層**：指標／觸控 → 世界座標挑選（picking）→ 抓取約束。多重抓取代表這裡是一組作用中的抓取，而非單一。甩動則是放開時由近期指標移動推算出的速度。
+- **模擬核心**：推進柔體。必須提供 (a) 在任意**表面點**（三角形 + 重心座標，見 `docs/adr/0003`）附加／移除抓取軟約束、(b) 對質心的全域釘選約束、(c) 可替換的邊界（有牆 vs. 無）。保持與算繪端無關，並採用固定時間步（fixed timestep），讓行為可重現、且在掉幀時仍穩定。
+- **輸入層**：指標／觸控 → 世界座標挑選（picking，命中哪個三角形 + 重心座標）→ 抓取軟約束。多重抓取代表這裡是一組作用中的抓取，而非單一。甩動不需另外算：被抓的頂點本身帶著拖曳速度，放開即是。
 - **相機**：由物體的邊界框／質心驅動的世界→螢幕轉換，帶平滑與 zoom-to-fit。所有繪製與挑選都要經過它。
 - **邊界**：由模擬核心使用的可替換碰撞環境。
 

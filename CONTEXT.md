@@ -29,8 +29,12 @@ Jelly 對使用者呈現的軟硬程度，由 Region 邊長與 shape-matching �
 _Avoid_: stiffness、elasticity、彈性、Q 度
 
 **Grab（抓取）**：
-把單一 Particle 固定到某個指標位置的約束。
+把 Jelly 表面某一點附著到指標位置的軟約束。附著點以「所屬三角形 + 重心座標」表示，不吸附到 Particle 頂點（見 ADR-0003）。
 _Avoid_: pinch、hold、drag handle、拖曳點
+
+**Attach point（附著點）**：
+一個 Grab 抓住的表面點，隨網格變形而移動；由三角形三頂點的重心加權得出。
+_Avoid_: 抓取點（易與指標位置混淆）、grabbed vertex
 
 **Multi-grab（多重抓取）**：
 同時存在的一組彼此獨立的 Grab。

@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>果凍手感試驗 · shape-matching 脊椎</title>
+<style>
+  :root { --accent:#1f9d74; --ink:#1b2320; --muted:#6b7a74; --line:#dfe6e2; --bg:#f6f8f7; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    font:14px/1.5 system-ui,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;
+    color:var(--ink); background:var(--bg);
+    display:flex; min-height:100%;
+  }
+  #stage { flex:1 1 auto; position:relative; min-width:0; background:#eef2f0; }
+  #c { display:block; width:100%; height:100%; touch-action:none; }
+  #dropHint {
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    pointer-events:none; color:var(--muted); font-size:13px; opacity:0; transition:opacity .15s;
+  }
+  #stage.drag #dropHint { opacity:1; background:rgba(31,157,116,.08); }
+  aside {
+    flex:0 0 340px; max-width:340px; padding:18px 18px 40px; overflow-y:auto;
+    background:#fff; border-left:1px solid var(--line);
+  }
+  h1 { font-size:15px; margin:0 0 2px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted);
+       margin:22px 0 8px; font-weight:600; }
+  p.lede { margin:0 0 6px; color:var(--muted); font-size:12.5px; }
+  details { margin:8px 0 0; font-size:12.5px; color:var(--muted); }
+  details summary { cursor:pointer; color:var(--accent); }
+  details ol { margin:6px 0; padding-left:18px; }
+  .row { display:flex; align-items:center; gap:8px; margin:7px 0; }
+  .row label { flex:0 0 132px; color:var(--muted); font-size:12px; }
+  .row input[type=range] { flex:1 1 auto; min-width:0; accent-color:var(--accent); }
+  .row .val { flex:0 0 42px; text-align:right; font-variant-numeric:tabular-nums; font-size:12px; }
+  .toggles { display:flex; flex-wrap:wrap; gap:6px 14px; margin:8px 0; }
+  .toggles label { display:flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); }
+  .btns { display:flex; flex-wrap:wrap; gap:6px; }
+  button {
+    font:inherit; font-size:12px; padding:6px 10px; border:1px solid var(--line);
+    background:#fff; color:var(--ink); border-radius:6px; cursor:pointer;
+  }
+  button:hover { border-color:var(--accent); color:var(--accent); }
+  button.run { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .state { border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:var(--bg); }
+  .state div { display:flex; justify-content:space-between; gap:10px; padding:2px 0;
+               font-variant-numeric:tabular-nums; }
+  .state div span:first-child { color:var(--muted); }
+  .state div.hi span:last-child { color:var(--accent); font-weight:600; }
+  .tag { display:inline-block; font-size:10px; padding:1px 6px; border-radius:4px;
+         background:#ffe9c7; color:#8a5a12; margin-left:6px; vertical-align:1px; }
+  footer { margin-top:24px; font-size:11px; color:var(--muted); }
+  code { background:#eef2f0; padding:1px 4px; border-radius:3px; font-size:11px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="dropHint">放開以載入這張 PNG 作為果凍</div>
+</div>
+
+<aside>
+  <h1>果凍手感試驗 <span class="tag">拋棄式 PROTOTYPE</span></h1>
+  <p class="lede">
+    驗證 <b>region-based shape matching</b> 當骨幹夠不夠撐住「一張會 Q 彈的圖」。
+    只有脊椎：沒有 XPBD 細節層、沒有 Ruppert 品質細化。
+  </p>
+  <details open>
+    <summary>要看什麼</summary>
+    <ol>
+      <li><b>全域形狀一致性</b>：拖一角時整張圖跟著轉、跟著變形，不是一堆各轉各的磁磚（舊專案就卡在這）。共用頂點保證沒有縫。</li>
+      <li><b>釘質心 + 拉到極限</b>：開 Pin，拉一角，看「質心偏移」是否維持 ~0、同時「最大拉伸比」衝到上限後穩住。</li>
+      <li><b>參數手感範圍</b>：Region 邊長、α<sub>sm</sub>、阻尼各自把手感推到哪。</li>
+    </ol>
+    網格 = marching squares 描輪廓 + Delaunay，<b>沒有</b> Ruppert 品質細化（那步照 <code>docs/adr/0002</code> 延後）。俯視、無重力。
+    <br>把任何 PNG 拖進畫面可換成你自己的圖。
+  </details>
+
+  <h2>參數</h2>
+  <div class="row"><label>Region 邊長 / 對角線</label><input id="p-cell" type="range" min="0.08" max="0.6" step="0.005" value="0.17"><span class="val" id="v-cell"></span></div>
+  <div class="row"><label>α<sub>sm</sub>（拉向 goal）</label><input id="p-alpha" type="range" min="0.05" max="1" step="0.01" value="0.7"><span class="val" id="v-alpha"></span></div>
+  <div class="row"><label>速度阻尼 / substep</label><input id="p-damp" type="range" min="0" max="0.15" step="0.002" value="0.02"><span class="val" id="v-damp"></span></div>
+  <div class="row"><label>substep / 幀</label><input id="p-sub" type="range" min="1" max="8" step="1" value="4"><span class="val" id="v-sub"></span></div>
+  <div class="row"><label>內部點密度</label><input id="p-grid" type="range" min="8" max="40" step="1" value="20"><span class="val" id="v-grid"></span></div>
+  <div class="row"><label>抓取半徑（框外才用）</label><input id="p-grab" type="range" min="8" max="90" step="1" value="34"><span class="val" id="v-grab"></span></div>
+
+  <div class="toggles">
+    <label><input id="t-pin" type="checkbox"> Pin 釘質心</label>
+    <label><input id="t-box" type="checkbox"> 邊界方框</label>
+    <label><input id="t-cam" type="checkbox" checked> 相機跟隨</label>
+    <label><input id="t-mesh" type="checkbox"> 顯示網格</label>
+    <label><input id="t-reg" type="checkbox"> 顯示 regions</label>
+    <label><input id="t-pts" type="checkbox"> 顯示質點</label>
+  </div>
+
+  <h2>引導情境</h2>
+  <div class="btns">
+    <button class="run" data-sc="limit">拖到極限並放開</button>
+    <button class="run" data-sc="fling">用力向右甩</button>
+    <button class="run" data-sc="pinpull">釘質心 + 拉一角</button>
+    <button class="run" data-sc="twist">雙手扭轉</button>
+    <button class="run" data-sc="squash">壓扁後放開</button>
+    <button data-sc="stop">停止腳本</button>
+    <button data-sc="reset">重設果凍</button>
+  </div>
+  <p class="lede" id="scNote" style="margin-top:8px;min-height:2.4em"></p>
+
+  <h2>目前狀態</h2>
+  <div class="state">
+    <div><span>質點 / 三角形</span><span id="s-mesh">–</span></div>
+    <div><span>Region 數</span><span id="s-reg">–</span></div>
+    <div class="hi"><span>質心偏移（世界單位）</span><span id="s-off">–</span></div>
+    <div class="hi"><span>最大邊拉伸比</span><span id="s-maxs">–</span></div>
+    <div><span>平均邊拉伸比</span><span id="s-avgs">–</span></div>
+    <div class="hi"><span>動能（收斂看這）</span><span id="s-ke">–</span></div>
+    <div><span>作用中抓取</span><span id="s-grab">–</span></div>
+    <div><span>FPS</span><span id="s-fps">–</span></div>
+  </div>
+
+  <footer>
+    純脊椎試驗。決策脈絡：<code>docs/adr/0001</code>、<code>docs/design/simulation-and-mesh.md</code>。
+    求解器在 <code>&lt;script id="jelly-core"&gt;</code>，可整塊搬進正式碼。
+  </footer>
+</aside>
+
+<!-- ================================================================
+     PURE MODULE — 可搬進正式碼。無 DOM、無 document、無事件處理。
+     頁面只呼叫它；沒有東西反向流入。
+     ================================================================ -->
+<script id="jelly-core">
+/**
+ * ShapeMatchingJelly — 2D region-based shape matching 柔體脊椎。
+ *
+ * 回答的問題：把物體切成重疊方格 region、每步把質點拉向「region 剛體最佳擬合」
+ * 出來的 goal position，這個全域形狀約束夠不夠讓真實圖片看起來像「一整張會 Q 彈的圖」，
+ * 而不是舊專案那種「各自旋轉、對不齊的磁磚」。
+ *
+ * 不含：XPBD distance / signed-area 約束、品質三角化、碰撞（只有可選方框 clamp）。
+ */
+class ShapeMatchingJelly {
+  /**
+   * @param {Float64Array} restXY  靜止頂點座標 [x0,y0,x1,y1,...]，原點已平移到質心
+   * @param {Uint32Array}  tris    三角形頂點索引 [a,b,c, a,b,c, ...]
+   * @param {object}        params { cellFrac, alphaSm, damping, substeps, pin, boundary, boxHalf:[w,h] }
+   */
+  constructor(restXY, tris, params) {
+    this.n = restXY.length / 2;
+    this.rest = restXY.slice();
+    this.pos  = restXY.slice();
+    this.prev = restXY.slice();
+    this.vel  = new Float64Array(restXY.length);
+    this.tris = tris;
+    this.params = Object.assign(
+      { cellFrac:0.17, alphaSm:0.7, damping:0.02, substeps:4, pin:false, boundary:'infinite', boxHalf:[400,400] },
+      params || {}
+    );
+    this.grabs = new Map();        // pointerId -> { tri:[i0,i1,i2], w:[w0,w1,w2], tx, ty }
+    this._goalX = new Float64Array(this.n);
+    this._goalY = new Float64Array(this.n);
+    this._goalC = new Float64Array(this.n);
+    this._restEdges = this._collectEdges(this.rest);
+    this.rebuildRegions();
+  }
+
+  // ---- setup ---------------------------------------------------------------
+  _collectEdges(xy) {
+    const seen = new Set(), edges = [];
+    const key = (a,b) => a < b ? a*this.n+b : b*this.n+a;
+    for (let t = 0; t < this.tris.length; t += 3) {
+      const [a,b,c] = [this.tris[t], this.tris[t+1], this.tris[t+2]];
+      for (const [p,q] of [[a,b],[b,c],[c,a]]) {
+        const k = key(p,q);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const dx = xy[2*p]-xy[2*q], dy = xy[2*p+1]-xy[2*q+1];
+        edges.push({ p, q, L0: Math.hypot(dx,dy) || 1e-6 });
+      }
+    }
+    return edges;
+  }
+
+  /** 重建重疊方格 region（改 cellFrac 或網格後呼叫）。 */
+  rebuildRegions() {
+    let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+    for (let i = 0; i < this.n; i++) {
+      const x = this.rest[2*i], y = this.rest[2*i+1];
+      if (x<minX) minX=x; if (y<minY) minY=y;
+      if (x>maxX) maxX=x; if (y>maxY) maxY=y;
+    }
+    const diag = Math.hypot(maxX-minX, maxY-minY) || 1;
+    const L = Math.max(diag * this.params.cellFrac, 1e-3);
+    const stride = L / 2;                       // 每軸重疊 2×
+    const regions = [];
+    for (let gx = minX - stride; gx < maxX + stride; gx += stride) {
+      for (let gy = minY - stride; gy < maxY + stride; gy += stride) {
+        const members = [];
+        for (let i = 0; i < this.n; i++) {
+          const x = this.rest[2*i], y = this.rest[2*i+1];
+          if (x >= gx && x < gx+L && y >= gy && y < gy+L) members.push(i);
+        }
+        if (members.length < 4) continue;
+        let cx=0, cy=0;
+        for (const i of members) { cx += this.rest[2*i]; cy += this.rest[2*i+1]; }
+        cx /= members.length; cy /= members.length;
+        const q = new Float64Array(members.length * 2);
+        for (let m = 0; m < members.length; m++) {
+          q[2*m]   = this.rest[2*members[m]]   - cx;
+          q[2*m+1] = this.rest[2*members[m]+1] - cy;
+        }
+        regions.push({ members, q });
+      }
+    }
+    this.regions = regions;
+    this.L = L;
+  }
+
+  // ---- interaction ------------------------------------------------------------
+  /**
+   * 在 world 座標 (x,y) 抓住 Jelly 表面**那一點**（不吸附到頂點）。
+   * 找出包含 (x,y) 的三角形，記下重心座標當附著點；抓取時把「附著點 → 目標」
+   * 的位置差按重心權重分回三個頂點。按下當下 目標==附著點 → 零修正 → 不會一按就動。
+   * 點在所有三角形外時，退回抓半徑 r 內最近的頂點。回傳是否抓到。
+   */
+  grab(pointerId, x, y, r) {
+    for (let t = 0; t < this.tris.length; t += 3) {
+      const a = this.tris[t], b = this.tris[t+1], c = this.tris[t+2];
+      const ax = this.pos[2*a], ay = this.pos[2*a+1];
+      const bx = this.pos[2*b], by = this.pos[2*b+1];
+      const cx = this.pos[2*c], cy = this.pos[2*c+1];
+      const det = (by-cy)*(ax-cx) + (cx-bx)*(ay-cy);
+      if (Math.abs(det) < 1e-9) continue;
+      const w0 = ((by-cy)*(x-cx) + (cx-bx)*(y-cy)) / det;
+      const w1 = ((cy-ay)*(x-cx) + (ax-cx)*(y-cy)) / det;
+      const w2 = 1 - w0 - w1;
+      if (w0 >= -0.02 && w1 >= -0.02 && w2 >= -0.02) {
+        this.grabs.set(pointerId, { tri:[a,b,c], w:[w0,w1,w2], tx:x, ty:y });
+        return true;
+      }
+    }
+    let best = -1, bestD = r*r;
+    for (let i = 0; i < this.n; i++) {
+      const dx = this.pos[2*i]-x, dy = this.pos[2*i+1]-y, d = dx*dx+dy*dy;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best >= 0) { this.grabs.set(pointerId, { tri:[best,best,best], w:[1,0,0], tx:x, ty:y }); return true; }
+    return false;
+  }
+  /** 附著點目前的世界座標（給算繪用）。 */
+  grabAnchor(g) {
+    const [i0,i1,i2] = g.tri, [w0,w1,w2] = g.w;
+    return [
+      w0*this.pos[2*i0] + w1*this.pos[2*i1] + w2*this.pos[2*i2],
+      w0*this.pos[2*i0+1] + w1*this.pos[2*i1+1] + w2*this.pos[2*i2+1],
+    ];
+  }
+  moveGrab(pointerId, x, y) {
+    const g = this.grabs.get(pointerId);
+    if (g) { g.tx = x; g.ty = y; }
+  }
+  release(pointerId) { this.grabs.delete(pointerId); }
+  releaseAll() { this.grabs.clear(); }
+  setPin(on) { this.params.pin = !!on; }
+
+  /** 極端測試：壓成一條水平線再放開，看能不能乾淨恢復（防翻面）。 */
+  squash() {
+    for (let i = 0; i < this.n; i++) {
+      this.pos[2*i]   = this.rest[2*i] * 1.6;
+      this.pos[2*i+1] = this.rest[2*i+1] * 0.03;
+    }
+    this.vel.fill(0);
+    this.grabs.clear();
+  }
+
+  reset() {
+    this.pos.set(this.rest); this.prev.set(this.rest);
+    this.vel.fill(0); this.grabs.clear();
+  }
+
+  // ---- step ----------------------------------------------------------------
+  step(dt) {
+    const P = this.params;
+    const subs = Math.max(1, P.substeps|0);
+    const h = dt / subs;
+
+    for (let s = 0; s < subs; s++) {
+      // 1. 預測（無重力）——所有質點都照常積分，抓取改用軟約束
+      for (let i = 0; i < this.n; i++) {
+        this.prev[2*i]   = this.pos[2*i];
+        this.prev[2*i+1] = this.pos[2*i+1];
+        this.pos[2*i]   += this.vel[2*i]   * h;
+        this.pos[2*i+1] += this.vel[2*i+1] * h;
+      }
+      // 3. shape matching 脊椎
+      this._goalX.fill(0); this._goalY.fill(0); this._goalC.fill(0);
+      for (const R of this.regions) {
+        const mem = R.members, q = R.q, k = mem.length;
+        let cx = 0, cy = 0;
+        for (let m = 0; m < k; m++) { cx += this.pos[2*mem[m]]; cy += this.pos[2*mem[m]+1]; }
+        cx /= k; cy /= k;
+        // A_pq = Σ (p - c) ⊗ q
+        let a00=0, a01=0, a10=0, a11=0;
+        for (let m = 0; m < k; m++) {
+          const px = this.pos[2*mem[m]] - cx, py = this.pos[2*mem[m]+1] - cy;
+          const qx = q[2*m], qy = q[2*m+1];
+          a00 += px*qx; a01 += px*qy; a10 += py*qx; a11 += py*qy;
+        }
+        // 2×2 polar decomposition → 最接近的旋轉（det<0 也給正規旋轉，力會主動翻正）
+        const sx = a00 + a11, sy = a10 - a01;
+        const d = Math.hypot(sx, sy);
+        const ct = d < 1e-9 ? 1 : sx/d, st = d < 1e-9 ? 0 : sy/d;
+        // R = [[ct,-st],[st,ct]]
+        for (let m = 0; m < k; m++) {
+          const i = mem[m], qx = q[2*m], qy = q[2*m+1];
+          this._goalX[i] += cx + ct*qx - st*qy;
+          this._goalY[i] += cy + st*qx + ct*qy;
+          this._goalC[i] += 1;
+        }
+      }
+      const a = P.alphaSm;
+      for (let i = 0; i < this.n; i++) {
+        if (this._goalC[i] === 0) continue;
+        this.pos[2*i]   += a * (this._goalX[i]/this._goalC[i] - this.pos[2*i]);
+        this.pos[2*i+1] += a * (this._goalY[i]/this._goalC[i] - this.pos[2*i+1]);
+      }
+      // 3b. 抓取軟約束：附著點 → 目標，位置修正按重心權重分回三頂點
+      //     Σ w_k·dx_k = e，取 dx_k ∝ w_k → dx_k = w_k·e / Σw²（一步剛好命中）
+      for (const g of this.grabs.values()) {
+        const [i0,i1,i2] = g.tri, [w0,w1,w2] = g.w;
+        const px = w0*this.pos[2*i0] + w1*this.pos[2*i1] + w2*this.pos[2*i2];
+        const py = w0*this.pos[2*i0+1] + w1*this.pos[2*i1+1] + w2*this.pos[2*i2+1];
+        const ex = g.tx - px, ey = g.ty - py;
+        const s2 = (w0*w0 + w1*w1 + w2*w2) || 1;
+        this.pos[2*i0]   += w0*ex/s2; this.pos[2*i0+1] += w0*ey/s2;
+        this.pos[2*i1]   += w1*ex/s2; this.pos[2*i1+1] += w1*ey/s2;
+        this.pos[2*i2]   += w2*ex/s2; this.pos[2*i2+1] += w2*ey/s2;
+      }
+      // 4. Pin：絕對錨定——把整體質心平移回原點
+      if (P.pin) {
+        let mx = 0, my = 0;
+        for (let i = 0; i < this.n; i++) { mx += this.pos[2*i]; my += this.pos[2*i+1]; }
+        mx /= this.n; my /= this.n;
+        for (let i = 0; i < this.n; i++) { this.pos[2*i] -= mx; this.pos[2*i+1] -= my; }
+      }
+      // 5. 邊界
+      if (P.boundary === 'box') {
+        const [bw, bh] = P.boxHalf;
+        for (let i = 0; i < this.n; i++) {
+          if (this.pos[2*i] < -bw) this.pos[2*i] = -bw; else if (this.pos[2*i] > bw) this.pos[2*i] = bw;
+          if (this.pos[2*i+1] < -bh) this.pos[2*i+1] = -bh; else if (this.pos[2*i+1] > bh) this.pos[2*i+1] = bh;
+        }
+      }
+      // 6. 回推速度 + 阻尼（被抓的頂點也照推 → 放開時自然帶著拖曳速度＝甩動）
+      const keep = 1 - P.damping;
+      for (let i = 0; i < this.n; i++) {
+        this.vel[2*i]   = (this.pos[2*i]   - this.prev[2*i])   / h * keep;
+        this.vel[2*i+1] = (this.pos[2*i+1] - this.prev[2*i+1]) / h * keep;
+      }
+    }
+  }
+
+  // ---- readouts ----------------------------------------------------------------
+  centroid() {
+    let mx = 0, my = 0;
+    for (let i = 0; i < this.n; i++) { mx += this.pos[2*i]; my += this.pos[2*i+1]; }
+    return [mx/this.n, my/this.n];
+  }
+  centroidOffset() { const [x,y] = this.centroid(); return Math.hypot(x,y); }
+  stretchStats() {
+    let max = 0, sum = 0;
+    for (const e of this._restEdges) {
+      const dx = this.pos[2*e.p]-this.pos[2*e.q], dy = this.pos[2*e.p+1]-this.pos[2*e.q+1];
+      const r = Math.hypot(dx,dy) / e.L0;
+      if (r > max) max = r;
+      sum += r;
+    }
+    return { max, avg: sum / this._restEdges.length };
+  }
+  kineticEnergy() {
+    let ke = 0;
+    for (let i = 0; i < this.vel.length; i++) ke += this.vel[i]*this.vel[i];
+    return 0.5 * ke;
+  }
+  bbox() {
+    let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity;
+    for (let i = 0; i < this.n; i++) {
+      const x=this.pos[2*i], y=this.pos[2*i+1];
+      if(x<a)a=x; if(y<b)b=y; if(x>c)c=x; if(y>d)d=y;
+    }
+    return [a,b,c,d];
+  }
+}
+window.ShapeMatchingJelly = ShapeMatchingJelly;
+</script>
+
+<!-- ================================================================
+     THROWAWAY PAGE SHELL — 只是把上面的純模組接到畫布、滑鼠、滑桿。
+     不要搬進正式碼。
+     ================================================================ -->
+<script>
+"use strict";
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const stage = document.getElementById('stage');
+
+// ---- 參數綁定 --------------------------------------------------------------
+const P = { cellFrac:0.17, alphaSm:0.7, damping:0.02, substeps:4, gridN:20, grabR:34,
+            pin:false, boundary:'infinite', boxHalf:[380,300],
+            cam:true, showMesh:false, showReg:false, showPts:false };
+
+// 世界狀態（先宣告，滑桿 apply() 會在初始化前就跑一次）
+let texture = null, mesh = null, jelly = null, inited = false;
+const cam = { x:0, y:0, scale:1 };
+
+const bind = (id, key, fmt, after) => {
+  const el = document.getElementById(id), out = document.getElementById(id.replace('p-','v-'));
+  const apply = () => {
+    const v = parseFloat(el.value);
+    P[key] = v;
+    if (out) out.textContent = fmt ? fmt(v) : v;
+    if (after) after(v);
+  };
+  el.addEventListener('input', apply); apply();
+};
+bind('p-cell','cellFrac', v=>v.toFixed(3), v=>{ if(jelly){ jelly.params.cellFrac=v; jelly.rebuildRegions(); }});
+bind('p-alpha','alphaSm', v=>v.toFixed(2), v=>{ if(jelly) jelly.params.alphaSm=v; });
+bind('p-damp','damping', v=>v.toFixed(3), v=>{ if(jelly) jelly.params.damping=v; });
+bind('p-sub','substeps', v=>v.toFixed(0), v=>{ if(jelly) jelly.params.substeps=v; });
+bind('p-grid','gridN', v=>v.toFixed(0), ()=>{ if (inited) rebuildJelly(); });
+bind('p-grab','grabR', v=>v.toFixed(0));
+const tog = (id, key, after) => {
+  const el = document.getElementById(id);
+  const apply = () => { P[key] = el.checked; if (after) after(el.checked); };
+  el.addEventListener('change', apply); apply();
+};
+tog('t-pin','pin', v=>{ if(jelly) jelly.setPin(v); });
+tog('t-box','box', v=>{ if(jelly) jelly.params.boundary = v ? 'box' : 'infinite'; });
+tog('t-cam','cam'); tog('t-mesh','showMesh'); tog('t-reg','showReg'); tog('t-pts','showPts');
+
+// ---- 預設程序化貼圖（凹形 + 明顯方向）------------------------------------
+function makeDefaultTexture() {
+  const S = 512, cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const g = cv.getContext('2d');
+  g.clearRect(0,0,S,S);
+  // 凹形：大圓挖掉一個朝右的楔形（吃豆人嘴），方向感強
+  g.save();
+  g.beginPath();
+  g.moveTo(S/2, S/2);
+  g.arc(S/2, S/2, 210, 0.42, Math.PI*2 - 0.42, false);
+  g.closePath();
+  g.clip();
+  // 底：棋盤格
+  for (let y = 0; y < S; y += 32)
+    for (let x = 0; x < S; x += 32) {
+      g.fillStyle = ((x+y)/32) % 2 ? '#2fae82' : '#7fd9b8';
+      g.fillRect(x,y,32,32);
+    }
+  // 斜紋
+  g.strokeStyle = 'rgba(255,255,255,.35)'; g.lineWidth = 6;
+  for (let d = -S; d < S*2; d += 46) { g.beginPath(); g.moveTo(d,0); g.lineTo(d-S,S); g.stroke(); }
+  // 眼睛 + 字，方向與一致性一眼可辨
+  g.fillStyle = '#10201a';
+  g.beginPath(); g.arc(S/2-40, S/2-70, 26, 0, 7); g.fill();
+  g.beginPath(); g.arc(S/2+70, S/2-70, 26, 0, 7); g.fill();
+  g.font = 'bold 92px system-ui,sans-serif'; g.textAlign = 'center';
+  g.save(); g.translate(S/2+10, S/2+90); g.rotate(-0.08);
+  g.fillText('JELLY', 0, 0); g.restore();
+  g.restore();
+  return cv;
+}
+
+// ---- 幾何小工具 --------------------------------------------------------------
+function polyArea(p) { let a = 0; for (let i = 0, j = p.length-1; i < p.length; j = i++) a += (p[j][0]+p[i][0])*(p[j][1]-p[i][1]); return a/2; }
+function pointInPoly(x, y, p) {
+  let inside = false;
+  for (let i = 0, j = p.length-1; i < p.length; j = i++) {
+    const xi = p[i][0], yi = p[i][1], xj = p[j][0], yj = p[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj-xi)*(y-yi)/(yj-yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function distToPoly(x, y, p) {
+  let best = Infinity;
+  for (let i = 0, j = p.length-1; i < p.length; j = i++) {
+    const ax = p[j][0], ay = p[j][1], bx = p[i][0], by = p[i][1];
+    const dx = bx-ax, dy = by-ay, L2 = dx*dx+dy*dy || 1e-9;
+    let t = ((x-ax)*dx + (y-ay)*dy) / L2; t = Math.max(0, Math.min(1, t));
+    const cx = ax+t*dx, cy = ay+t*dy, d = Math.hypot(x-cx, y-cy);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+// ---- Bowyer–Watson Delaunay（一次性、prototype 尺度足夠）--------------------
+function delaunay(pts) {
+  const n = pts.length;
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  for (const [x,y] of pts) { if(x<minX)minX=x; if(y<minY)minY=y; if(x>maxX)maxX=x; if(y>maxY)maxY=y; }
+  const dmax = Math.max(maxX-minX, maxY-minY) || 1, cx = (minX+maxX)/2, cy = (minY+maxY)/2;
+  const P = pts.slice();
+  P.push([cx-20*dmax, cy-dmax], [cx, cy+20*dmax], [cx+20*dmax, cy-dmax]);
+  const s0 = n, s1 = n+1, s2 = n+2;
+  const orient = (a,b,c) => (P[b][0]-P[a][0])*(P[c][1]-P[a][1]) - (P[b][1]-P[a][1])*(P[c][0]-P[a][0]);
+  const mkCCW = t => { if (orient(t[0],t[1],t[2]) < 0) { const s = t[1]; t[1] = t[2]; t[2] = s; } return t; };
+  const inCirc = (t, dI) => {
+    const [a,b,c] = t, dx = P[dI][0], dy = P[dI][1];
+    const ax=P[a][0]-dx, ay=P[a][1]-dy, bx=P[b][0]-dx, by=P[b][1]-dy, cxx=P[c][0]-dx, cyy=P[c][1]-dy;
+    const ad=ax*ax+ay*ay, bd=bx*bx+by*by, cd=cxx*cxx+cyy*cyy;
+    return ax*(by*cd-bd*cyy) - ay*(bx*cd-bd*cxx) + ad*(bx*cyy-by*cxx) > 0;
+  };
+  let tris = [ mkCCW([s0,s1,s2]) ];
+  for (let ip = 0; ip < n; ip++) {
+    const bad = [], keep = [];
+    for (const t of tris) (inCirc(t, ip) ? bad : keep).push(t);
+    const edgeCount = new Map();
+    for (const t of bad) for (const [u,v] of [[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]) {
+      const k = u < v ? u+','+v : v+','+u;
+      edgeCount.set(k, (edgeCount.get(k) || 0) + 1);
+    }
+    tris = keep;
+    for (const t of bad) for (const [u,v] of [[t[0],t[1]],[t[1],t[2]],[t[2],t[0]]]) {
+      const k = u < v ? u+','+v : v+','+u;
+      if (edgeCount.get(k) === 1) tris.push(mkCCW([u, v, ip]));
+    }
+  }
+  return tris.filter(t => t[0] < n && t[1] < n && t[2] < n);
+}
+
+// ---- marching squares：alpha → 平滑輪廓 -----------------------------------
+// sample() 在影像外須回傳 0（透明），否則貼到畫框邊緣的剪影不會閉合。
+// 掃描範圍外擴一圈，讓貼邊的剪影在畫框內側被描出封閉輪廓。
+function traceContours(sample, W, H, step) {
+  const nx = Math.ceil(W/step), ny = Math.ceil(H/step);
+  const a = (i,j) => sample(i*step, j*step);
+  const T = 128;
+  const segs = [];
+  const crossX = (i,j) => { const v0=a(i,j), v1=a(i+1,j); const t=(T-v0)/((v1-v0)||1e-9); return [(i+t)*step, j*step]; };
+  const crossY = (i,j) => { const v0=a(i,j), v1=a(i,j+1); const t=(T-v0)/((v1-v0)||1e-9); return [i*step, (j+t)*step]; };
+  for (let j = -1; j <= ny; j++) for (let i = -1; i <= nx; i++) {
+    let c = 0;
+    if (a(i,j)   >= T) c |= 1;
+    if (a(i+1,j) >= T) c |= 2;
+    if (a(i+1,j+1) >= T) c |= 4;
+    if (a(i,j+1) >= T) c |= 8;
+    if (c === 0 || c === 15) continue;
+    const top = () => crossX(i,j), bot = () => crossX(i,j+1), lft = () => crossY(i,j), rgt = () => crossY(i+1,j);
+    const push = (p,q) => segs.push([p,q]);
+    switch (c) {
+      case 1: case 14: push(lft(), top()); break;
+      case 2: case 13: push(top(), rgt()); break;
+      case 3: case 12: push(lft(), rgt()); break;
+      case 4: case 11: push(rgt(), bot()); break;
+      case 6: case 9:  push(top(), bot()); break;
+      case 7: case 8:  push(lft(), bot()); break;
+      case 5:  push(lft(), top()); push(rgt(), bot()); break;
+      case 10: push(top(), rgt()); push(lft(), bot()); break;
+    }
+  }
+  // 串成封閉環：把 segment 當無向圖，用鄰接關係走（不依賴 segment 方向）
+  const key = p => Math.round(p[0]*4) + ':' + Math.round(p[1]*4);
+  const nodes = new Map();          // key -> [x,y]
+  const adj = new Map();            // key -> [key,...]
+  const link = (k, o) => { let l = adj.get(k); if (!l) adj.set(k, l = []); l.push(o); };
+  const edges = [];
+  for (const [p,q] of segs) {
+    const ka = key(p), kb = key(q);
+    if (ka === kb) continue;
+    if (!nodes.has(ka)) nodes.set(ka, p);
+    if (!nodes.has(kb)) nodes.set(kb, q);
+    edges.push([ka, kb]); link(ka, kb); link(kb, ka);
+  }
+  const ek = (a,b) => a < b ? a+'|'+b : b+'|'+a;
+  const usedEdge = new Set(), loops = [];
+  for (const [a0,b0] of edges) {
+    if (usedEdge.has(ek(a0,b0))) continue;
+    usedEdge.add(ek(a0,b0));
+    const loop = [nodes.get(a0)];
+    let prev = a0, cur = b0, guard = 0;
+    while (guard++ < edges.length + 5) {
+      loop.push(nodes.get(cur));
+      let nxt = null;
+      for (const cand of adj.get(cur) || []) {
+        if (cand === prev || usedEdge.has(ek(cur,cand))) continue;
+        nxt = cand; break;
+      }
+      if (nxt == null) break;
+      usedEdge.add(ek(cur,nxt));
+      prev = cur; cur = nxt;
+      if (cur === a0) break;
+    }
+    if (loop.length >= 6) loops.push(loop);
+  }
+  return loops;
+}
+
+// 沿輪廓等距重採樣：保留彼此至少 minSeg 的點（夠平滑、頂點分佈均勻）
+function simplifyLoop(loop, minSeg) {
+  const out = [loop[0]];
+  for (let i = 1; i < loop.length; i++) {
+    const p = loop[i], q = out[out.length-1];
+    if (Math.hypot(p[0]-q[0], p[1]-q[1]) >= minSeg) out.push(p);
+  }
+  // 收尾點與起點太近就丟掉
+  if (out.length > 3 && Math.hypot(out[out.length-1][0]-out[0][0], out[out.length-1][1]-out[0][1]) < minSeg*0.5) out.pop();
+  return out.length >= 3 ? out : loop;
+}
+
+// ---- 圖片 → 模擬網格（marching squares 輪廓 + Delaunay；無 Ruppert 細化）----
+function buildMeshFromTexture(tex, density) {
+  const TW = tex.width, TH = tex.height;
+  const data = tex.getContext('2d').getImageData(0,0,TW,TH).data;
+  const alphaAt = (x,y) => {
+    const xi = x|0, yi = y|0;
+    if (xi < 0 || yi < 0 || xi >= TW || yi >= TH) return 0;   // 影像外＝透明
+    return data[(yi*TW + xi)*4 + 3];
+  };
+  const maxDim = Math.max(TW, TH);
+  // 較粗的步距：小於這個尺度的細縫／髮絲會被抹平，換取輪廓串接穩定（feel 試驗夠用）
+  const msStep = Math.max(3, maxDim / 110);
+  let loops = traceContours(alphaAt, TW, TH, msStep);
+  if (!loops.length) throw new Error('這張圖找不到不透明輪廓');
+  // 輪廓點夾回影像框內
+  for (const L of loops) for (const p of L) {
+    p[0] = p[0] < 0 ? 0 : p[0] > TW ? TW : p[0];
+    p[1] = p[1] < 0 ? 0 : p[1] > TH ? TH : p[1];
+  }
+  loops.sort((a,b) => Math.abs(polyArea(b)) - Math.abs(polyArea(a)));
+  const minSeg = maxDim / density * 0.6;
+  const outer = simplifyLoop(loops[0], minSeg);
+  const holes = loops.slice(1)
+    .filter(l => Math.abs(polyArea(l)) > (maxDim*maxDim) * 0.0015)
+    .filter(l => pointInPoly(l[0][0], l[0][1], outer))
+    .map(l => simplifyLoop(l, minSeg));
+
+  // 頂點 = 輪廓點 + 內部撒點
+  const verts = outer.map(p => [p[0], p[1]]);
+  const spacing = maxDim / density;
+  for (let y = spacing/2; y < TH; y += spacing)
+    for (let x = spacing/2; x < TW; x += spacing) {
+      const jx = x + (Math.random()-0.5)*spacing*0.5, jy = y + (Math.random()-0.5)*spacing*0.5;
+      if (!pointInPoly(jx, jy, outer)) continue;
+      if (holes.some(h => pointInPoly(jx, jy, h))) continue;
+      if (distToPoly(jx, jy, outer) < spacing*0.45) continue;
+      verts.push([jx, jy]);
+    }
+
+  // Delaunay，再剔除落在形狀外／洞內的三角形
+  const allTris = delaunay(verts);
+  const tris = [];
+  for (const t of allTris) {
+    const gx = (verts[t[0]][0]+verts[t[1]][0]+verts[t[2]][0])/3;
+    const gy = (verts[t[0]][1]+verts[t[1]][1]+verts[t[2]][1])/3;
+    if (!pointInPoly(gx, gy, outer)) continue;
+    if (holes.some(h => pointInPoly(gx, gy, h))) continue;
+    tris.push(t[0], t[1], t[2]);
+  }
+
+  // 丟掉沒被任何三角形用到的頂點
+  const used = new Set(tris);
+  const remap = new Int32Array(verts.length).fill(-1);
+  const xy = [], uv = [];
+  let count = 0;
+  for (let i = 0; i < verts.length; i++) {
+    if (!used.has(i)) continue;
+    remap[i] = count++;
+    xy.push(verts[i][0], verts[i][1]);
+    uv.push(verts[i][0], verts[i][1]);
+  }
+  const outTris = new Uint32Array(tris.length);
+  for (let i = 0; i < tris.length; i++) outTris[i] = remap[tris[i]];
+
+  let mx = 0, my = 0;
+  for (let i = 0; i < count; i++) { mx += xy[2*i]; my += xy[2*i+1]; }
+  mx /= count; my /= count;
+  const restXY = new Float64Array(count*2);
+  for (let i = 0; i < count; i++) { restXY[2*i] = xy[2*i]-mx; restXY[2*i+1] = xy[2*i+1]-my; }
+  return { restXY, tris: outTris, uv, texCentroid:[mx,my], TW, TH };
+}
+
+// ---- 果凍生成 ------------------------------------------------------------
+function rebuildJelly() {
+  mesh = buildMeshFromTexture(texture, P.gridN);
+  jelly = new ShapeMatchingJelly(mesh.restXY, mesh.tris, {
+    cellFrac:P.cellFrac, alphaSm:P.alphaSm, damping:P.damping, substeps:P.substeps,
+    pin:P.pin, boundary:P.boundary, boxHalf:P.boxHalf
+  });
+  // 相機初始 fit
+  const [a,b,c,d] = jelly.bbox();
+  fitCamera(a,b,c,d, true);
+}
+function fitCamera(a,b,c,d, snap) {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const margin = 80;
+  const target = Math.min((w-margin)/Math.max(c-a,1), (h-margin)/Math.max(d-b,1), 2.2);
+  const tx = (a+c)/2, ty = (b+d)/2;
+  if (snap) { cam.scale = target; cam.x = tx; cam.y = ty; }
+  else {
+    cam.scale += (target - cam.scale) * 0.06;
+    cam.x += (tx - cam.x) * 0.08;
+    cam.y += (ty - cam.y) * 0.08;
+  }
+}
+const worldToScreen = (x,y) => [
+  (x - cam.x) * cam.scale + canvas.clientWidth/2,
+  (y - cam.y) * cam.scale + canvas.clientHeight/2
+];
+const screenToWorld = (sx,sy) => [
+  (sx - canvas.clientWidth/2) / cam.scale + cam.x,
+  (sy - canvas.clientHeight/2) / cam.scale + cam.y
+];
+
+// ---- 輸入層（多指 = 多抓取）-------------------------------------------------
+function pointerWorld(ev) {
+  const r = canvas.getBoundingClientRect();
+  return screenToWorld(ev.clientX - r.left, ev.clientY - r.top);
+}
+canvas.addEventListener('pointerdown', ev => {
+  canvas.setPointerCapture(ev.pointerId);
+  const [x,y] = pointerWorld(ev);
+  jelly.grab(ev.pointerId, x, y, P.grabR / cam.scale);
+});
+canvas.addEventListener('pointermove', ev => {
+  if (!jelly.grabs.has(ev.pointerId)) return;
+  const [x,y] = pointerWorld(ev);
+  jelly.moveGrab(ev.pointerId, x, y);
+});
+const endPtr = ev => jelly && jelly.release(ev.pointerId);
+canvas.addEventListener('pointerup', endPtr);
+canvas.addEventListener('pointercancel', endPtr);
+
+// 拖放 PNG
+['dragenter','dragover'].forEach(e => stage.addEventListener(e, ev => { ev.preventDefault(); stage.classList.add('drag'); }));
+['dragleave','drop'].forEach(e => stage.addEventListener(e, ev => { ev.preventDefault(); stage.classList.remove('drag'); }));
+stage.addEventListener('drop', ev => {
+  const f = ev.dataTransfer.files[0];
+  if (!f || !/image\/(png|webp)/.test(f.type)) return;
+  const img = new Image();
+  img.onload = () => {
+    const cv = document.createElement('canvas');
+    cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+    cv.getContext('2d').drawImage(img, 0, 0);
+    texture = cv; stopScenario(); rebuildJelly();
+  };
+  img.src = URL.createObjectURL(f);
+});
+
+// ---- 引導情境（腳本化抓取）------------------------------------------------
+let scenario = null;   // { t0, segs:[{t0,t1,pid,from,to}], events:[{t,fn}], done }
+const SCN = document.getElementById('scNote');
+function extremeParticle(dirx, diry) {
+  let best = -1, bestP = -Infinity;
+  for (let i = 0; i < jelly.n; i++) {
+    const p = jelly.rest[2*i]*dirx + jelly.rest[2*i+1]*diry;
+    if (p > bestP) { bestP = p; best = i; }
+  }
+  return best;
+}
+function startScenario(name) {
+  stopScenario();
+  jelly.reset();
+  const now = performance.now();
+  const S = { t0: now, segs: [], events: [], name };
+  const mv = (pid, i, t0, t1, tox, toy) => {
+    S.segs.push({ pid, i, t0, t1, fromX:jelly.rest[2*i], fromY:jelly.rest[2*i+1], toX:tox, toY:toy });
+  };
+  if (name === 'limit') {
+    SCN.textContent = '抓一角，1 秒內拉遠、停住 1.5 秒、放開。看「最大邊拉伸比」爬到上限後穩住，放開後整張圖一起彈回。';
+    const i = extremeParticle(-1,-0.6);
+    S.events.push({ t:0,   fn:()=>jelly.grab('s0', jelly.rest[2*i], jelly.rest[2*i+1], 9999) });
+    mv('s0', i, 0, 1000, jelly.rest[2*i]*3.4, jelly.rest[2*i+1]*3.4 - 40);
+    S.events.push({ t:2600, fn:()=>jelly.release('s0') });
+    S.events.push({ t:4200, fn:()=>stopScenario() });
+  } else if (name === 'fling') {
+    SCN.textContent = '抓一角，快速往右甩到一半放手。看它飛出去、邊晃邊收斂，相機（若開）跟上。';
+    const i = extremeParticle(-1, 0);
+    S.events.push({ t:0, fn:()=>jelly.grab('s0', jelly.rest[2*i], jelly.rest[2*i+1], 9999) });
+    mv('s0', i, 0, 260, jelly.rest[2*i] + 900, jelly.rest[2*i+1] - 120);
+    S.events.push({ t:250, fn:()=>jelly.release('s0') });
+    S.events.push({ t:4500, fn:()=>stopScenario() });
+  } else if (name === 'pinpull') {
+    SCN.textContent = '開 Pin，抓一角拉到極限並停住。看「質心偏移」維持 ~0，「最大拉伸比」到頂後穩定——這就是「觀察拉到極限的穩定態」。';
+    document.getElementById('t-pin').checked = true; P.pin = true; jelly.setPin(true);
+    const i = extremeParticle(1, 0.3);
+    S.events.push({ t:0, fn:()=>jelly.grab('s0', jelly.rest[2*i], jelly.rest[2*i+1], 9999) });
+    mv('s0', i, 0, 1200, jelly.rest[2*i]*4.2 + 120, jelly.rest[2*i+1]*4.2);
+    // 停在極限，不放開；使用者自己觀察 / 按停止
+  } else if (name === 'twist') {
+    SCN.textContent = '兩個抓取點抓住左右兩端、反方向繞。看它像一整片被扭轉，還是從中間散開成磁磚。';
+    const iL = extremeParticle(-1, 0), iR = extremeParticle(1, 0);
+    S.events.push({ t:0, fn:()=>{
+      jelly.grab('s0', jelly.rest[2*iL], jelly.rest[2*iL+1], 9999);
+      jelly.grab('s1', jelly.rest[2*iR], jelly.rest[2*iR+1], 9999);
+    }});
+    // 以圓弧繞質心旋轉 ±120°
+    S.twist = { iL, iR, rL:Math.hypot(jelly.rest[2*iL], jelly.rest[2*iL+1]),
+                aL:Math.atan2(jelly.rest[2*iL+1], jelly.rest[2*iL]),
+                rR:Math.hypot(jelly.rest[2*iR], jelly.rest[2*iR+1]),
+                aR:Math.atan2(jelly.rest[2*iR+1], jelly.rest[2*iR]) };
+    S.events.push({ t:5000, fn:()=>stopScenario() });
+  } else if (name === 'squash') {
+    SCN.textContent = '壓成一條水平線再放開（含元素翻面）。看它是否乾淨恢復原形，還是卡在翻面／皺掉的狀態。';
+    S.events.push({ t:0,   fn:()=>jelly.squash() });
+    S.events.push({ t:100, fn:()=>{} });
+    S.events.push({ t:4500, fn:()=>stopScenario() });
+  }
+  S.events.sort((a,b)=>a.t-b.t);
+  scenario = S;
+}
+function stopScenario() {
+  if (scenario) { jelly.releaseAll(); }
+  scenario = null; SCN.textContent = '';
+}
+function tickScenario(now) {
+  if (!scenario) return;
+  const t = now - scenario.t0;
+  // fn() 可能是 stopScenario（會把 scenario 設 null）——每次呼叫後重新確認
+  while (scenario && scenario.events.length && scenario.events[0].t <= t) scenario.events.shift().fn();
+  if (!scenario) return;
+  for (const sg of scenario.segs) {
+    if (t < sg.t0) continue;
+    const k = sg.t1 <= sg.t0 ? 1 : Math.min(1, (t - sg.t0) / (sg.t1 - sg.t0));
+    const e = k*k*(3-2*k); // smoothstep
+    jelly.moveGrab(sg.pid, sg.fromX + (sg.toX-sg.fromX)*e, sg.fromY + (sg.toY-sg.fromY)*e);
+  }
+  if (scenario.twist) {
+    const w = scenario.twist;
+    const ang = Math.min(1, t/3500) * 2.1;   // ~120°
+    jelly.moveGrab('s0', Math.cos(w.aL+ang)*w.rL, Math.sin(w.aL+ang)*w.rL);
+    jelly.moveGrab('s1', Math.cos(w.aR-ang)*w.rR, Math.sin(w.aR-ang)*w.rR);
+  }
+}
+document.querySelector('.btns').addEventListener('click', ev => {
+  const sc = ev.target.dataset.sc; if (!sc) return;
+  if (sc === 'stop') stopScenario();
+  else if (sc === 'reset') { stopScenario(); jelly.reset(); }
+  else startScenario(sc);
+});
+
+// ---- 算繪 --------------------------------------------------------------
+function resize() {
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener('resize', resize);
+
+function drawTexturedTri(ax,ay,bx,by,cx,cy, au,av,bu,bv,cu,cv) {
+  // 目的三角形（螢幕）
+  const [Ax,Ay] = worldToScreen(ax,ay), [Bx,By] = worldToScreen(bx,by), [Cx,Cy] = worldToScreen(cx,cy);
+  // 從 UV 基底解仿射
+  const su1 = bu-au, sv1 = bv-av, su2 = cu-au, sv2 = cv-av;
+  const det = su1*sv2 - su2*sv1;
+  if (Math.abs(det) < 1e-6) return;
+  const m11 = ((Bx-Ax)*sv2 - (Cx-Ax)*sv1) / det;
+  const m12 = ((Cx-Ax)*su1 - (Bx-Ax)*su2) / det;
+  const m21 = ((By-Ay)*sv2 - (Cy-Ay)*sv1) / det;
+  const m22 = ((Cy-Ay)*su1 - (By-Ay)*su2) / det;
+  const dx = Ax - m11*au - m12*av;
+  const dy = Ay - m21*au - m22*av;
+  ctx.save();
+  // 從三角形形心稍微外擴 ~2%，蓋掉三角形之間的反鋸齒髮絲縫
+  const gx = (Ax+Bx+Cx)/3, gy = (Ay+By+Cy)/3, k = 1.02;
+  ctx.beginPath();
+  ctx.moveTo(gx+(Ax-gx)*k, gy+(Ay-gy)*k);
+  ctx.lineTo(gx+(Bx-gx)*k, gy+(By-gy)*k);
+  ctx.lineTo(gx+(Cx-gx)*k, gy+(Cy-gy)*k);
+  ctx.closePath(); ctx.clip();
+  // 疊上 texture-px → 螢幕-px 的仿射（ctx.transform 會與目前的 dpr 變換相乘）
+  ctx.transform(m11, m21, m12, m22, dx, dy);
+  ctx.drawImage(texture, 0, 0);
+  ctx.restore();
+}
+
+function render() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = '#eef2f0'; ctx.fillRect(0,0,w,h);
+
+  // 邊界方框
+  if (P.boundary === 'box') {
+    const [p0x,p0y] = worldToScreen(-P.boxHalf[0], -P.boxHalf[1]);
+    const [p1x,p1y] = worldToScreen( P.boxHalf[0],  P.boxHalf[1]);
+    ctx.strokeStyle = '#b9c6c0'; ctx.lineWidth = 1.5;
+    ctx.setLineDash([6,5]); ctx.strokeRect(p0x,p0y,p1x-p0x,p1y-p0y); ctx.setLineDash([]);
+  }
+  // 原點十字（pin 目標）
+  const [ox,oy] = worldToScreen(0,0);
+  ctx.strokeStyle = P.pin ? '#e0645a' : '#c7d2cd'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(ox-9,oy); ctx.lineTo(ox+9,oy); ctx.moveTo(ox,oy-9); ctx.lineTo(ox,oy+9); ctx.stroke();
+
+  // 貼圖網格
+  const pos = jelly.pos, uv = mesh.uv, tris = jelly.tris;
+  for (let t = 0; t < tris.length; t += 3) {
+    const a = tris[t], b = tris[t+1], c = tris[t+2];
+    drawTexturedTri(
+      pos[2*a],pos[2*a+1], pos[2*b],pos[2*b+1], pos[2*c],pos[2*c+1],
+      uv[2*a],uv[2*a+1],   uv[2*b],uv[2*b+1],   uv[2*c],uv[2*c+1]
+    );
+  }
+  // 疊圖
+  if (P.showMesh) {
+    ctx.strokeStyle = 'rgba(20,40,30,.35)'; ctx.lineWidth = 0.6;
+    ctx.beginPath();
+    for (let t = 0; t < tris.length; t += 3) {
+      const a = tris[t], b = tris[t+1], c = tris[t+2];
+      const [Ax,Ay]=worldToScreen(pos[2*a],pos[2*a+1]);
+      const [Bx,By]=worldToScreen(pos[2*b],pos[2*b+1]);
+      const [Cx,Cy]=worldToScreen(pos[2*c],pos[2*c+1]);
+      ctx.moveTo(Ax,Ay); ctx.lineTo(Bx,By); ctx.lineTo(Cx,Cy); ctx.closePath();
+    }
+    ctx.stroke();
+  }
+  if (P.showReg) {
+    ctx.strokeStyle = 'rgba(31,157,116,.5)'; ctx.lineWidth = 1;
+    for (const R of jelly.regions) {
+      let a=Infinity,bb=Infinity,cc=-Infinity,d=-Infinity;
+      for (const i of R.members) {
+        const x=pos[2*i], y=pos[2*i+1];
+        if(x<a)a=x; if(y<bb)bb=y; if(x>cc)cc=x; if(y>d)d=y;
+      }
+      const [Ax,Ay]=worldToScreen(a,bb), [Bx,By]=worldToScreen(cc,d);
+      ctx.strokeRect(Ax,Ay,Bx-Ax,By-Ay);
+    }
+  }
+  if (P.showPts) {
+    ctx.fillStyle = '#12332a';
+    for (let i = 0; i < jelly.n; i++) {
+      const [x,y] = worldToScreen(pos[2*i],pos[2*i+1]);
+      ctx.fillRect(x-1.4,y-1.4,2.8,2.8);
+    }
+  }
+  // 抓取：附著點（實心）— 連線 — 游標目標（空心）
+  ctx.strokeStyle = '#e0645a'; ctx.fillStyle = '#e0645a'; ctx.lineWidth = 1.5;
+  for (const g of jelly.grabs.values()) {
+    const [ax,ay] = jelly.grabAnchor(g);
+    const [px,py] = worldToScreen(ax,ay);
+    const [tx,ty] = worldToScreen(g.tx,g.ty);
+    ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(tx,ty); ctx.stroke();
+    ctx.beginPath(); ctx.arc(px,py,4,0,7); ctx.fill();
+    ctx.beginPath(); ctx.arc(tx,ty,4,0,7); ctx.stroke();
+  }
+  // 質心
+  const [cxw,cyw] = jelly.centroid();
+  const [csx,csy] = worldToScreen(cxw,cyw);
+  ctx.strokeStyle = '#1f9d74'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(csx,csy,5,0,7); ctx.stroke();
+}
+
+// ---- 主迴圈 --------------------------------------------------------------
+let last = performance.now(), fps = 60, acc = 0, panelT = 0;
+function frame(now) {
+  const dt = Math.min(0.25, (now - last) / 1000); last = now;
+  fps += ((1/Math.max(dt,1e-4)) - fps) * 0.1;
+
+  tickScenario(now);
+  jelly.step(1/60);                        // 固定步
+
+  if (P.cam) { const [a,b,c,d] = jelly.bbox(); fitCamera(a,b,c,d, false); }
+  render();
+
+  if (now - panelT > 90) { updatePanel(); panelT = now; }
+  requestAnimationFrame(frame);
+}
+function updatePanel() {
+  const ss = jelly.stretchStats();
+  document.getElementById('s-mesh').textContent = jelly.n + ' / ' + (jelly.tris.length/3);
+  document.getElementById('s-reg').textContent  = jelly.regions.length + '（邊長 ' + jelly.L.toFixed(0) + '）';
+  document.getElementById('s-off').textContent  = jelly.centroidOffset().toFixed(1);
+  document.getElementById('s-maxs').textContent = ss.max.toFixed(2) + '×';
+  document.getElementById('s-avgs').textContent = ss.avg.toFixed(3) + '×';
+  document.getElementById('s-ke').textContent   = jelly.kineticEnergy().toExponential(1);
+  document.getElementById('s-grab').textContent = jelly.grabs.size;
+  document.getElementById('s-fps').textContent  = fps.toFixed(0);
+}
+
+texture = makeDefaultTexture();
+resize();
+inited = true;
+rebuildJelly();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
