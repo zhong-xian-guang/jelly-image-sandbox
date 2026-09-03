@@ -64,15 +64,16 @@
 <aside>
   <h1>果凍手感試驗 <span class="tag">拋棄式 PROTOTYPE</span></h1>
   <p class="lede">
-    驗證 <b>region-based shape matching</b> 當骨幹夠不夠撐住「一張會 Q 彈的圖」。
-    只有脊椎：沒有 XPBD 細節層、沒有 Ruppert 品質細化。
+    驗證 <b>region-based shape matching 脊椎 + XPBD 細節層</b> 的 hybrid 手感。
+    XPBD 可即時開關做 A/B。沒有 Ruppert 品質細化。
   </p>
   <details open>
     <summary>要看什麼</summary>
     <ol>
+      <li><b>XPBD A/B</b>：切「XPBD 細節層」開關。開＝拖一角時局部有拉伸擠壓的 Q 彈；關＝純脊椎、整團偏硬。開了會不會反而不穩／破壞防翻面？</li>
       <li><b>全域形狀一致性</b>：拖一角時整張圖跟著轉、跟著變形，不是一堆各轉各的磁磚（舊專案就卡在這）。共用頂點保證沒有縫。</li>
       <li><b>釘質心 + 拉到極限</b>：開 Pin，拉一角，看「質心偏移」是否維持 ~0、同時「最大拉伸比」衝到上限後穩住。</li>
-      <li><b>參數手感範圍</b>：Region 邊長、α<sub>sm</sub>、阻尼各自把手感推到哪。</li>
+      <li><b>參數手感範圍</b>：Region 邊長、α<sub>sm</sub>、阻尼、兩個 compliance 各自把手感推到哪。</li>
       <li><b>輕拍脈衝響應</b>：點一下放開＝輕拍。看它 ring-down 的樣子——比拖曳更純的手感探針（拖曳被抓取約束主導）。</li>
     </ol>
     網格 = marching squares 描輪廓 + Delaunay，<b>沒有</b> Ruppert 品質細化（那步照 <code>docs/adr/0002</code> 延後）。俯視、無重力。
@@ -82,12 +83,19 @@
   <h2>參數</h2>
   <div class="row"><label>Region 邊長 / 對角線</label><input id="p-cell" type="range" min="0.08" max="0.6" step="0.005" value="0.15"><span class="val" id="v-cell"></span></div>
   <div class="row"><label>α<sub>sm</sub>（拉向 goal）</label><input id="p-alpha" type="range" min="0.05" max="1" step="0.01" value="0.7"><span class="val" id="v-alpha"></span></div>
-  <div class="row"><label>速度阻尼 / substep</label><input id="p-damp" type="range" min="0" max="0.15" step="0.002" value="0.02"><span class="val" id="v-damp"></span></div>
+  <div class="row"><label>速度阻尼 / substep</label><input id="p-damp" type="range" min="0.002" max="0.15" step="0.002" value="0.02"><span class="val" id="v-damp"></span></div>
   <div class="row"><label>substep / 幀</label><input id="p-sub" type="range" min="1" max="8" step="1" value="4"><span class="val" id="v-sub"></span></div>
   <div class="row"><label>內部點密度</label><input id="p-grid" type="range" min="8" max="40" step="1" value="20"><span class="val" id="v-grid"></span></div>
   <div class="row"><label>抓取半徑（框外才用）</label><input id="p-grab" type="range" min="8" max="90" step="1" value="34"><span class="val" id="v-grab"></span></div>
   <div class="row"><label>輕拍力道</label><input id="p-tap" type="range" min="0" max="15000" step="250" value="6000"><span class="val" id="v-tap"></span></div>
 
+  <h2>XPBD 細節層</h2>
+  <div class="toggles"><label><input id="t-xpbd" type="checkbox" checked> 開啟（關＝純脊椎）</label></div>
+  <div class="row"><label>distance compliance（大＝軟）</label><input id="p-distc" type="range" min="0" max="0.0006" step="0.00001" value="0.00015"><span class="val" id="v-distc"></span></div>
+  <div class="row"><label>area compliance（大＝軟）</label><input id="p-areac" type="range" min="0" max="0.03" step="0.0005" value="0.003"><span class="val" id="v-areac"></span></div>
+  <p class="lede" style="margin:2px 0 0">補脊椎缺的局部拉伸擠壓 Q 彈；area 用<b>有號</b>面積，兼第二道防翻面。<b>脊椎偏硬時效果很小；把 α<sub>sm</sub> / Region 調小再 A/B 最看得出差別</b>（軟脊椎下它防止局部塌陷成薄三角形）。</p>
+
+  <h2>其他</h2>
   <div class="toggles">
     <label><input id="t-pin" type="checkbox"> Pin 釘質心</label>
     <label><input id="t-box" type="checkbox"> 邊界方框</label>
@@ -158,7 +166,8 @@ class ShapeMatchingJelly {
     this.vel  = new Float64Array(restXY.length);
     this.tris = tris;
     this.params = Object.assign(
-      { cellFrac:0.15, alphaSm:0.7, damping:0.02, substeps:4, pin:false, boundary:'infinite', boxHalf:[400,400] },
+      { cellFrac:0.15, alphaSm:0.7, damping:0.02, substeps:4, pin:false, boundary:'infinite', boxHalf:[400,400],
+        xpbd:true, distCompliance:1.5e-4, areaCompliance:3e-3 },
       params || {}
     );
     this.grabs = new Map();        // pointerId -> { tri:[i0,i1,i2], w:[w0,w1,w2], tx, ty }
@@ -166,7 +175,15 @@ class ShapeMatchingJelly {
     this._goalY = new Float64Array(this.n);
     this._goalC = new Float64Array(this.n);
     this._restEdges = this._collectEdges(this.rest);
+    // 每個三角形的靜止**有號**面積（XPBD signed-area 約束用；翻面時號變、把元素翻正）
+    this._restAreas = new Float64Array(this.tris.length / 3);
+    for (let t = 0; t < this.tris.length; t += 3)
+      this._restAreas[t/3] = this._triArea(this.rest, this.tris[t], this.tris[t+1], this.tris[t+2]);
     this.rebuildRegions();
+  }
+
+  _triArea(xy, a, b, c) {
+    return 0.5 * ((xy[2*b]-xy[2*a])*(xy[2*c+1]-xy[2*a+1]) - (xy[2*b+1]-xy[2*a+1])*(xy[2*c]-xy[2*a]));
   }
 
   // ---- setup ---------------------------------------------------------------
@@ -349,7 +366,42 @@ class ShapeMatchingJelly {
         this.pos[2*i]   += a * (this._goalX[i]/this._goalC[i] - this.pos[2*i]);
         this.pos[2*i+1] += a * (this._goalY[i]/this._goalC[i] - this.pos[2*i+1]);
       }
-      // 3b. 抓取軟約束：附著點 → 目標，位置修正按重心權重分回三頂點
+      // 3b. XPBD 細節層（疊加；補局部拉伸擠壓 Q 彈 + 第二道防翻面）。關掉 = 純脊椎。
+      if (P.xpbd) {
+        const h2 = h * h;
+        // distance 約束：每條邊，compliant projection（1 iter，λ 不累積）
+        const ad = P.distCompliance / h2;
+        for (const e of this._restEdges) {
+          const p = e.p, q = e.q;
+          const dx = this.pos[2*p]-this.pos[2*q], dy = this.pos[2*p+1]-this.pos[2*q+1];
+          const len = Math.hypot(dx, dy) || 1e-9;
+          const dl = -(len - e.L0) / (2 + ad);
+          const nx = dx/len*dl, ny = dy/len*dl;
+          this.pos[2*p]+=nx; this.pos[2*p+1]+=ny;
+          this.pos[2*q]-=nx; this.pos[2*q+1]-=ny;
+        }
+        // signed-area 約束：每個三角形，C = 有號面積 − 靜止有號面積（翻面時號變、梯度翻正）
+        const aa = P.areaCompliance / h2;
+        const tr = this.tris;
+        for (let t = 0; t < tr.length; t += 3) {
+          const A0 = this._restAreas[t/3];
+          if (Math.abs(A0) < 1) continue;            // 跳過退化三角形（prototype 沒做 sliver 清理）
+          const ai = tr[t], bi = tr[t+1], ci = tr[t+2];
+          const ax=this.pos[2*ai], ay=this.pos[2*ai+1];
+          const bx=this.pos[2*bi], by=this.pos[2*bi+1];
+          const cx=this.pos[2*ci], cy=this.pos[2*ci+1];
+          const C = 0.5*((bx-ax)*(cy-ay) - (by-ay)*(cx-ax)) - A0;
+          const gax=0.5*(by-cy), gay=0.5*(cx-bx);
+          const gbx=0.5*(cy-ay), gby=0.5*(ax-cx);
+          const gcx=0.5*(ay-by), gcy=0.5*(bx-ax);
+          const denom = gax*gax+gay*gay + gbx*gbx+gby*gby + gcx*gcx+gcy*gcy + aa;
+          const dl = -C / denom;
+          this.pos[2*ai]+=gax*dl; this.pos[2*ai+1]+=gay*dl;
+          this.pos[2*bi]+=gbx*dl; this.pos[2*bi+1]+=gby*dl;
+          this.pos[2*ci]+=gcx*dl; this.pos[2*ci+1]+=gcy*dl;
+        }
+      }
+      // 3c. 抓取軟約束：附著點 → 目標，位置修正按重心權重分回三頂點
       //     Σ w_k·dx_k = e，取 dx_k ∝ w_k → dx_k = w_k·e / Σw²（一步剛好命中）
       for (const g of this.grabs.values()) {
         const [i0,i1,i2] = g.tri, [w0,w1,w2] = g.w;
@@ -431,6 +483,7 @@ const stage = document.getElementById('stage');
 
 // ---- 參數綁定 --------------------------------------------------------------
 const P = { cellFrac:0.15, alphaSm:0.7, damping:0.02, substeps:4, gridN:20, grabR:34, tapStrength:6000,
+            xpbd:true, distCompliance:1.5e-4, areaCompliance:3e-3,
             pin:false, boundary:'infinite', boxHalf:[380,300], tapOut:false,
             cam:true, showMesh:false, showReg:false, showPts:false };
 
@@ -455,6 +508,8 @@ bind('p-sub','substeps', v=>v.toFixed(0), v=>{ if(jelly) jelly.params.substeps=v
 bind('p-grid','gridN', v=>v.toFixed(0), ()=>{ if (inited) rebuildJelly(); });
 bind('p-grab','grabR', v=>v.toFixed(0));
 bind('p-tap','tapStrength', v=>v.toFixed(0));
+bind('p-distc','distCompliance', v=>v.toExponential(1), v=>{ if(jelly) jelly.params.distCompliance=v; });
+bind('p-areac','areaCompliance', v=>v.toExponential(1), v=>{ if(jelly) jelly.params.areaCompliance=v; });
 const tog = (id, key, after) => {
   const el = document.getElementById(id);
   const apply = () => { P[key] = el.checked; if (after) after(el.checked); };
@@ -462,6 +517,7 @@ const tog = (id, key, after) => {
 };
 tog('t-pin','pin', v=>{ if(jelly) jelly.setPin(v); });
 tog('t-box','box', v=>{ if(jelly) jelly.params.boundary = v ? 'box' : 'infinite'; });
+tog('t-xpbd','xpbd', v=>{ if(jelly) jelly.params.xpbd=v; });
 tog('t-tapout','tapOut');
 tog('t-cam','cam'); tog('t-mesh','showMesh'); tog('t-reg','showReg'); tog('t-pts','showPts');
 
