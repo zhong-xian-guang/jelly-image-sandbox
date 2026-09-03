@@ -73,6 +73,7 @@
       <li><b>全域形狀一致性</b>：拖一角時整張圖跟著轉、跟著變形，不是一堆各轉各的磁磚（舊專案就卡在這）。共用頂點保證沒有縫。</li>
       <li><b>釘質心 + 拉到極限</b>：開 Pin，拉一角，看「質心偏移」是否維持 ~0、同時「最大拉伸比」衝到上限後穩住。</li>
       <li><b>參數手感範圍</b>：Region 邊長、α<sub>sm</sub>、阻尼各自把手感推到哪。</li>
+      <li><b>輕拍脈衝響應</b>：點一下放開＝輕拍。看它 ring-down 的樣子——比拖曳更純的手感探針（拖曳被抓取約束主導）。</li>
     </ol>
     網格 = marching squares 描輪廓 + Delaunay，<b>沒有</b> Ruppert 品質細化（那步照 <code>docs/adr/0002</code> 延後）。俯視、無重力。
     <br>把任何 PNG 拖進畫面可換成你自己的圖。
@@ -85,15 +86,18 @@
   <div class="row"><label>substep / 幀</label><input id="p-sub" type="range" min="1" max="8" step="1" value="4"><span class="val" id="v-sub"></span></div>
   <div class="row"><label>內部點密度</label><input id="p-grid" type="range" min="8" max="40" step="1" value="20"><span class="val" id="v-grid"></span></div>
   <div class="row"><label>抓取半徑（框外才用）</label><input id="p-grab" type="range" min="8" max="90" step="1" value="34"><span class="val" id="v-grab"></span></div>
+  <div class="row"><label>輕拍力道</label><input id="p-tap" type="range" min="0" max="6000" step="100" value="2800"><span class="val" id="v-tap"></span></div>
 
   <div class="toggles">
     <label><input id="t-pin" type="checkbox"> Pin 釘質心</label>
     <label><input id="t-box" type="checkbox"> 邊界方框</label>
     <label><input id="t-cam" type="checkbox" checked> 相機跟隨</label>
+    <label><input id="t-tapout" type="checkbox"> 輕拍向外(A)</label>
     <label><input id="t-mesh" type="checkbox"> 顯示網格</label>
     <label><input id="t-reg" type="checkbox"> 顯示 regions</label>
     <label><input id="t-pts" type="checkbox"> 顯示質點</label>
   </div>
+  <p class="lede" style="margin:2px 0 0">點一下放開＝在該處輕拍（脈衝響應）。預設凹陷回彈(B)，勾「向外」＝鼓包外擴(A)。</p>
 
   <h2>引導情境</h2>
   <div class="btns">
@@ -102,6 +106,7 @@
     <button class="run" data-sc="pinpull">釘質心 + 拉一角</button>
     <button class="run" data-sc="twist">雙手扭轉</button>
     <button class="run" data-sc="squash">壓扁後放開</button>
+    <button class="run" data-sc="tap">輕拍中央</button>
     <button data-sc="stop">停止腳本</button>
     <button data-sc="reset">重設果凍</button>
   </div>
@@ -263,6 +268,26 @@ class ShapeMatchingJelly {
   releaseAll() { this.grabs.clear(); }
   setPin(on) { this.params.pin = !!on; }
 
+  /**
+   * 輕拍（脈衝響應探針）：在 (x,y) 附近半徑 R 內的質點上加一次性速度脈衝。
+   * outward=true → 質點被踢離拍擊點（鼓包外擴，A）；false → 踢向拍擊點（凹陷回彈，B）。
+   * 大小按 (1 − d/R)² 衰減。R = 目前 bbox 對角線 × 0.2。
+   */
+  tap(x, y, strength, outward) {
+    const [a,b,c,d] = this.bbox();
+    const R = Math.hypot(c-a, d-b) * 0.2 || 1;
+    for (let i = 0; i < this.n; i++) {
+      const dx = this.pos[2*i] - x, dy = this.pos[2*i+1] - y;
+      const dist = Math.hypot(dx, dy);
+      if (dist >= R) continue;
+      const f = (1 - dist/R); const w = f*f;
+      const nx = dist < 1e-6 ? 0 : dx/dist, ny = dist < 1e-6 ? 0 : dy/dist;
+      const s = (outward ? 1 : -1) * strength * w;
+      this.vel[2*i]   += nx * s;
+      this.vel[2*i+1] += ny * s;
+    }
+  }
+
   /** 極端測試：壓成一條水平線再放開，看能不能乾淨恢復（防翻面）。 */
   squash() {
     for (let i = 0; i < this.n; i++) {
@@ -405,8 +430,8 @@ const ctx = canvas.getContext('2d');
 const stage = document.getElementById('stage');
 
 // ---- 參數綁定 --------------------------------------------------------------
-const P = { cellFrac:0.15, alphaSm:0.7, damping:0.02, substeps:4, gridN:20, grabR:34,
-            pin:false, boundary:'infinite', boxHalf:[380,300],
+const P = { cellFrac:0.15, alphaSm:0.7, damping:0.02, substeps:4, gridN:20, grabR:34, tapStrength:2800,
+            pin:false, boundary:'infinite', boxHalf:[380,300], tapOut:false,
             cam:true, showMesh:false, showReg:false, showPts:false };
 
 // 世界狀態（先宣告，滑桿 apply() 會在初始化前就跑一次）
@@ -429,6 +454,7 @@ bind('p-damp','damping', v=>v.toFixed(3), v=>{ if(jelly) jelly.params.damping=v;
 bind('p-sub','substeps', v=>v.toFixed(0), v=>{ if(jelly) jelly.params.substeps=v; });
 bind('p-grid','gridN', v=>v.toFixed(0), ()=>{ if (inited) rebuildJelly(); });
 bind('p-grab','grabR', v=>v.toFixed(0));
+bind('p-tap','tapStrength', v=>v.toFixed(0));
 const tog = (id, key, after) => {
   const el = document.getElementById(id);
   const apply = () => { P[key] = el.checked; if (after) after(el.checked); };
@@ -436,6 +462,7 @@ const tog = (id, key, after) => {
 };
 tog('t-pin','pin', v=>{ if(jelly) jelly.setPin(v); });
 tog('t-box','box', v=>{ if(jelly) jelly.params.boundary = v ? 'box' : 'infinite'; });
+tog('t-tapout','tapOut');
 tog('t-cam','cam'); tog('t-mesh','showMesh'); tog('t-reg','showReg'); tog('t-pts','showPts');
 
 // ---- 預設程序化貼圖（凹形 + 明顯方向）------------------------------------
@@ -716,9 +743,11 @@ function pointerWorld(ev) {
   const r = canvas.getBoundingClientRect();
   return screenToWorld(ev.clientX - r.left, ev.clientY - r.top);
 }
+const downInfo = new Map();   // pointerId -> { t, x, y }（判斷輕拍：快速按放、沒拖動）
 canvas.addEventListener('pointerdown', ev => {
   canvas.setPointerCapture(ev.pointerId);
   const [x,y] = pointerWorld(ev);
+  downInfo.set(ev.pointerId, { t: performance.now(), x, y });
   jelly.grab(ev.pointerId, x, y, P.grabR / cam.scale);
 });
 canvas.addEventListener('pointermove', ev => {
@@ -726,7 +755,18 @@ canvas.addEventListener('pointermove', ev => {
   const [x,y] = pointerWorld(ev);
   jelly.moveGrab(ev.pointerId, x, y);
 });
-const endPtr = ev => jelly && jelly.release(ev.pointerId);
+const endPtr = ev => {
+  if (!jelly) return;
+  const di = downInfo.get(ev.pointerId);
+  if (di) {
+    const [x,y] = pointerWorld(ev);
+    const moved = Math.hypot(x-di.x, y-di.y);          // 世界座標位移
+    if (performance.now() - di.t < 250 && moved < 6 / cam.scale)
+      jelly.tap(di.x, di.y, P.tapStrength, P.tapOut);  // 快速按放、幾乎沒動 → 輕拍
+    downInfo.delete(ev.pointerId);
+  }
+  jelly.release(ev.pointerId);
+};
 canvas.addEventListener('pointerup', endPtr);
 canvas.addEventListener('pointercancel', endPtr);
 
@@ -804,6 +844,11 @@ function startScenario(name) {
     S.events.push({ t:0,   fn:()=>jelly.squash() });
     S.events.push({ t:100, fn:()=>{} });
     S.events.push({ t:4500, fn:()=>stopScenario() });
+  } else if (name === 'tap') {
+    SCN.textContent = '在質心處輕拍一下（脈衝響應）。看它「叮」一聲晃回去的樣子——ring-down 由 Region 邊長／α_sm／阻尼決定。切「輕拍向外(A)」比較 A/B。';
+    const [cx, cy] = jelly.centroid();
+    S.events.push({ t:200,  fn:()=>jelly.tap(cx, cy, P.tapStrength, P.tapOut) });
+    S.events.push({ t:4000, fn:()=>stopScenario() });
   }
   S.events.sort((a,b)=>a.t-b.t);
   scenario = S;
