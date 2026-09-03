@@ -86,7 +86,7 @@
   <div class="row"><label>substep / 幀</label><input id="p-sub" type="range" min="1" max="8" step="1" value="4"><span class="val" id="v-sub"></span></div>
   <div class="row"><label>內部點密度</label><input id="p-grid" type="range" min="8" max="40" step="1" value="20"><span class="val" id="v-grid"></span></div>
   <div class="row"><label>抓取半徑（框外才用）</label><input id="p-grab" type="range" min="8" max="90" step="1" value="34"><span class="val" id="v-grab"></span></div>
-  <div class="row"><label>輕拍力道</label><input id="p-tap" type="range" min="0" max="6000" step="100" value="2800"><span class="val" id="v-tap"></span></div>
+  <div class="row"><label>輕拍力道</label><input id="p-tap" type="range" min="0" max="15000" step="250" value="6000"><span class="val" id="v-tap"></span></div>
 
   <div class="toggles">
     <label><input id="t-pin" type="checkbox"> Pin 釘質心</label>
@@ -430,7 +430,7 @@ const ctx = canvas.getContext('2d');
 const stage = document.getElementById('stage');
 
 // ---- 參數綁定 --------------------------------------------------------------
-const P = { cellFrac:0.15, alphaSm:0.7, damping:0.02, substeps:4, gridN:20, grabR:34, tapStrength:2800,
+const P = { cellFrac:0.15, alphaSm:0.7, damping:0.02, substeps:4, gridN:20, grabR:34, tapStrength:6000,
             pin:false, boundary:'infinite', boxHalf:[380,300], tapOut:false,
             cam:true, showMesh:false, showReg:false, showPts:false };
 
