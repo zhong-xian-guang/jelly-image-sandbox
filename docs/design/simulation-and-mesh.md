@@ -64,6 +64,13 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 - **Sim mesh 生成是一個模組**：`(Contour, 內部點參數) → (positions, indices, uv, restAreas)`。換掉三角化實作（如日後改 spade→wasm）只動這裡。
 - **Grab 是 `(世界座標點) → {三角形, 重心座標}` 的 picking + 一條軟約束**。輸入層負責 picking（射線／點擊命中哪個三角形），求解器只認 `{三角形, 重心座標, 目標點}`。
 
+## 輸入手勢
+
+每個指標／觸點各自判定為 Grab 或 Tap（多點觸控 = 各指獨立）。
+
+- **Grab（拖曳）**：`pointerdown` → picking（命中三角形 + 重心座標）→ 建立軟約束（見「每個 substep」步驟 4）。`pointermove` 更新目標點；`pointerup` 放開，Fling 由被抓頂點自身速度帶出。
+- **Tap（輕拍）**：`pointerdown` 後在 **≤ 250ms**、世界座標位移 **< 6px** 內 `pointerup` → 在按下點施加**一次性徑向脈衝**：半徑 `R = Jelly bbox 對角線 × 0.2` 內每個 Particle，`v += 正規化(拍擊點 − pos) · strength · (1 − d/R)²`（**向內**——凹陷後彈回；prototype 比過向外，向內較像戳果凍）。`strength` 初始 `6000`。ring-down 交給 shape matching + 阻尼，不需收尾邏輯。落在所有三角形外、附近無 Particle 時為 no-op。
+
 ## 算繪
 
 - WebGL 每頂點 UV 三角網格：PixiJS `Mesh` / `MeshSimple`，或自寫 shader。
@@ -86,5 +93,8 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 | Region 最小成員數 | 4 |
 | shape-matching α_sm | 0.7 |
 | Grab 硬度 β | 1.0（精準貼游標；調低＝彈性把手） |
+| Tap 脈衝 strength | 6000（向內；prototype 實測） |
+| Tap 影響半徑 | Jelly bbox 對角線 × 0.2 |
+| Tap 判定 | pointerdown→up ≤ 250ms 且位移 < 6px |
 | 全域速度阻尼 | 調到 1–2 秒靜止 |
 | accumulator clamp | 250 ms |

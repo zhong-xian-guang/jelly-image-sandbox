@@ -44,6 +44,10 @@ _Avoid_: 多點觸控抓取
 放開 Grab 時，帶著近期指標移動推算出的速度離手。
 _Avoid_: throw、toss、swipe、拋
 
+**Tap（輕拍）**：
+在 Jelly 表面某點快速按下即放開（不拖曳），對該處附近施加一次性向內徑向脈衝，讓 Jelly 凹一下再彈回。
+_Avoid_: poke、click、戳
+
 **Pin（釘選）**：
 一種模式，把 Jelly 的質心絕對錨定在原點；被錨定時抓取只拉動被抓的一角，質心不動。
 _Avoid_: lock、fix、錨定（一般動詞）
