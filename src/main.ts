@@ -1,7 +1,13 @@
 import './style.css';
 
+import { JellySandbox } from './app';
 import { createAppRoot } from './mount';
 
-// v1 骨架：只準備好掛載點，畫面維持空白。
-// 後續票（Mesh pipeline → Simulation core → Renderer → App shell）會往這裡接。
-createAppRoot(document);
+// First playable（issue #11 / T10）：預設 Jelly + 指標拖曳 + 固定步主迴圈。
+const root = createAppRoot(document);
+
+void JellySandbox.create(root).then((sandbox) => {
+  sandbox.start();
+  // 開發時方便從 console 抓來看狀態。
+  (globalThis as Record<string, unknown>).__jelly = sandbox;
+});

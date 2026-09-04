@@ -6,9 +6,8 @@
  * 看貼圖連續扭曲、三角形之間無縫。求解器沒有參與。
  */
 
-import { encode as encodePng } from 'fast-png';
-
-import { buildSimMesh, type SimMesh } from '../src/mesh';
+import { createDefaultJelly } from '../src/app';
+import type { SimMesh } from '../src/mesh';
 import { containerPosition, JellyRenderer } from '../src/render';
 
 const stage = document.getElementById('stage')!;
@@ -20,57 +19,6 @@ const backendEl = document.getElementById('s-backend')!;
 const resetBtn = document.getElementById('reset') as HTMLButtonElement;
 const wobbleBtn = document.getElementById('wobble') as HTMLButtonElement;
 const showWireEl = document.getElementById('showWire') as HTMLInputElement;
-
-// ---- 程序化貼圖：方向感強的凹形（吃豆人嘴 + 眼睛 + 字）------------------------
-function makeTexture(size = 512): HTMLCanvasElement {
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = size;
-  const g = cv.getContext('2d')!;
-  g.clearRect(0, 0, size, size);
-
-  g.save();
-  g.beginPath();
-  g.moveTo(size / 2, size / 2);
-  g.arc(size / 2, size / 2, size * 0.42, 0.42, Math.PI * 2 - 0.42, false);
-  g.closePath();
-  g.clip();
-
-  for (let y = 0; y < size; y += 32)
-    for (let x = 0; x < size; x += 32) {
-      g.fillStyle = ((x + y) / 32) % 2 ? '#2fae82' : '#7fd9b8';
-      g.fillRect(x, y, 32, 32);
-    }
-  g.strokeStyle = 'rgba(255,255,255,.35)';
-  g.lineWidth = 6;
-  for (let d = -size; d < size * 2; d += 46) {
-    g.beginPath();
-    g.moveTo(d, 0);
-    g.lineTo(d - size, size);
-    g.stroke();
-  }
-  g.fillStyle = '#10201a';
-  g.beginPath();
-  g.arc(size / 2 - 40, size / 2 - 70, 26, 0, 7);
-  g.fill();
-  g.beginPath();
-  g.arc(size / 2 + 70, size / 2 - 70, 26, 0, 7);
-  g.fill();
-  g.font = 'bold 92px system-ui, sans-serif';
-  g.textAlign = 'center';
-  g.save();
-  g.translate(size / 2 + 10, size / 2 + 90);
-  g.rotate(-0.08);
-  g.fillText('JELLY', 0, 0);
-  g.restore();
-  g.restore();
-  return cv;
-}
-
-function canvasToPng(cv: HTMLCanvasElement): Uint8Array {
-  const { width, height } = cv;
-  const data = cv.getContext('2d')!.getImageData(0, 0, width, height).data;
-  return encodePng({ width, height, data: new Uint8Array(data.buffer), channels: 4, depth: 8 });
-}
 
 function meshBBox(m: SimMesh) {
   let minX = Infinity;
@@ -87,12 +35,12 @@ function meshBBox(m: SimMesh) {
 }
 
 // ---- 狀態 -------------------------------------------------------------------
-const texture = makeTexture();
+let texture: HTMLCanvasElement;
 let mesh: SimMesh;
 try {
-  mesh = buildSimMesh(canvasToPng(texture));
+  ({ texture, mesh } = createDefaultJelly());
 } catch (e) {
-  errEl.innerHTML = `<span class="err">buildSimMesh 失敗：${(e as Error).message}</span>`;
+  errEl.innerHTML = `<span class="err">createDefaultJelly 失敗：${(e as Error).message}</span>`;
   throw e;
 }
 
