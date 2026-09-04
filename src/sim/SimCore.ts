@@ -81,6 +81,8 @@ function signedArea(
 export class SimCore {
   /** signed-area 約束／`areaStats` 都跳過 `|靜止有號面積|` 小於此值的退化三角形。 */
   private static readonly MIN_REST_AREA = 1;
+  /** Tap 影響半徑 = 目前 bbox 對角線 × 此係數（設計文件參數表，待實測）。 */
+  private static readonly TAP_RADIUS_FRAC = 0.2;
 
   /**
    * 手感參數。可直接改欄位；改 `cellFrac` 後須呼叫 `rebuildRegions()`，
@@ -122,9 +124,13 @@ export class SimCore {
     this.goalX = new Float64Array(this.n);
     this.goalY = new Float64Array(this.n);
     this.goalCount = new Float64Array(this.n);
-    const rb = this.bounds(this.rest);
-    this.restDiag = Math.hypot(rb.maxX - rb.minX, rb.maxY - rb.minY) || 1;
+    this.restDiag = this.diag(this.bounds(this.rest));
     this.rebuildRegions();
+  }
+
+  /** bbox 對角線長，永遠 ≥ 1（避免退化尺度讓半徑歸零）。 */
+  private diag(bb: Bbox): number {
+    return Math.hypot(bb.maxX - bb.minX, bb.maxY - bb.minY) || 1;
   }
 
   // ---- setup ---------------------------------------------------------------
@@ -196,9 +202,9 @@ export class SimCore {
    * 含 ≥ 4 個 Particle 的 cell 才是一個 Region。改 `params.cellFrac` 後呼叫。
    */
   rebuildRegions(): void {
-    const { minX, minY, maxX, maxY } = this.bounds(this.rest);
-    const diag = Math.hypot(maxX - minX, maxY - minY) || 1;
-    const L = Math.max(diag * this.params.cellFrac, 1e-3);
+    const bb = this.bounds(this.rest);
+    const { minX, minY, maxX, maxY } = bb;
+    const L = Math.max(this.diag(bb) * this.params.cellFrac, 1e-3);
     const stride = L / 2;
     const regions: Region[] = [];
     for (let gx = minX - stride; gx < maxX + stride; gx += stride) {
@@ -284,28 +290,6 @@ export class SimCore {
       case 'tap':
         this.doTap(event.x, event.y, event.strength ?? this.params.tapStrength);
         break;
-    }
-  }
-
-  /**
-   * Tap（輕拍）：一次性向內徑向脈衝，直接改速度、不進 substep 迴圈。半徑
-   * `R = 目前 bbox 對角線 × 0.2` 內每個 Particle：
-   * `v += 正規化(tapPoint − pos) · strength · (1 − d/R)²`。向內 → 凹陷後彈回；
-   * ring-down 交給 shape matching + 阻尼。半徑內無 Particle 時整體 no-op。
-   */
-  private doTap(x: number, y: number, strength: number): void {
-    const bb = this.bounds(this.pos);
-    const r = Math.hypot(bb.maxX - bb.minX, bb.maxY - bb.minY) * 0.2 || 1;
-    for (let i = 0; i < this.n; i++) {
-      const dx = x - this.pos[2 * i]!;
-      const dy = y - this.pos[2 * i + 1]!;
-      const dist = Math.hypot(dx, dy);
-      if (dist >= r) continue;
-      const f = 1 - dist / r;
-      // (dx, dy)/dist · strength · f²；dist → 0 時 (dx, dy) → 0，貢獻自然歸零。
-      const s = (strength * f * f) / (dist || 1);
-      this.vel[2 * i] = this.vel[2 * i]! + dx * s;
-      this.vel[2 * i + 1] = this.vel[2 * i + 1]! + dy * s;
     }
   }
 
@@ -400,6 +384,26 @@ export class SimCore {
       x: w0 * this.pos[2 * i0]! + w1 * this.pos[2 * i1]! + w2 * this.pos[2 * i2]!,
       y: w0 * this.pos[2 * i0 + 1]! + w1 * this.pos[2 * i1 + 1]! + w2 * this.pos[2 * i2 + 1]!,
     };
+  }
+
+  /**
+   * Tap（輕拍）：一次性向內徑向脈衝，直接改速度、不進 substep 迴圈。半徑
+   * `R = 目前 bbox 對角線 × TAP_RADIUS_FRAC` 內每個 Particle：
+   * `v += 正規化(tapPoint − pos) · strength · (1 − d/R)²`。向內 → 凹陷後彈回；
+   * ring-down 交給 shape matching + 阻尼。半徑內無 Particle 時整體 no-op。
+   */
+  private doTap(x: number, y: number, strength: number): void {
+    const r = this.diag(this.bounds(this.pos)) * SimCore.TAP_RADIUS_FRAC;
+    for (let i = 0; i < this.n; i++) {
+      const dx = x - this.pos[2 * i]!;
+      const dy = y - this.pos[2 * i + 1]!;
+      const dist = Math.hypot(dx, dy);
+      if (dist >= r || dist < 1e-6) continue; // 圈外／正中心（無方向）→ 不施力
+      const f = 1 - dist / r;
+      const s = (strength * f * f) / dist; // (dx, dy)/dist · strength · (1 − d/R)²
+      this.vel[2 * i] = this.vel[2 * i]! + dx * s;
+      this.vel[2 * i + 1] = this.vel[2 * i + 1]! + dy * s;
+    }
   }
 
   // ---- step ----------------------------------------------------------------
