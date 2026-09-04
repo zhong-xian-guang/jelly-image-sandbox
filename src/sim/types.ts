@@ -54,7 +54,7 @@ export interface SimParams {
   grabBeta: number;
   /**
    * XPBD 細節層開關（shape-matching 之後、Grab/Pin 之前疊加）：每條邊一條 distance
-   * 約束、每個三角形一條 signed-area 約束。補脊椎缺的局部 Q 彈 + 第二道防翻面。
+   * 約束、每個三角形一條 signed-area 約束。補脊椎缺的局部拉伸擠壓彈性 + 第二道防翻面。
    * 預設 true。
    */
   xpbd: boolean;

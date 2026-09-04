@@ -65,7 +65,22 @@ interface Edge {
   restLen: number;
 }
 
+/** 三角形有號面積（shoelace／2）。CCW（y 向下）為負、CW 為正；翻面時號變。 */
+function signedArea(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+): number {
+  return 0.5 * ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
+}
+
 export class SimCore {
+  /** signed-area 約束／`areaStats` 都跳過 `|靜止有號面積|` 小於此值的退化三角形。 */
+  private static readonly MIN_REST_AREA = 1;
+
   /**
    * 手感參數。可直接改欄位；改 `cellFrac` 後須呼叫 `rebuildRegions()`，
    * 其餘欄位下一次 `step` 即生效。
@@ -138,18 +153,21 @@ export class SimCore {
     return edges;
   }
 
-  /** 每個三角形在 `buf` 座標下的有號面積（shoelace／2）。順序對齊 `tris`。 */
+  /** 每個三角形在 `buf` 座標下的有號面積。順序對齊 `tris`。建構時算一次靜止面積。 */
   private computeAreas(buf: Float64Array): Float64Array {
     const areas = new Float64Array(this.tris.length / 3);
     for (let t = 0; t < this.tris.length; t += 3) {
       const a = this.tris[t]!;
       const b = this.tris[t + 1]!;
       const c = this.tris[t + 2]!;
-      const ax = buf[2 * a]!;
-      const ay = buf[2 * a + 1]!;
-      areas[t / 3] =
-        0.5 *
-        ((buf[2 * b]! - ax) * (buf[2 * c + 1]! - ay) - (buf[2 * b + 1]! - ay) * (buf[2 * c]! - ax));
+      areas[t / 3] = signedArea(
+        buf[2 * a]!,
+        buf[2 * a + 1]!,
+        buf[2 * b]!,
+        buf[2 * b + 1]!,
+        buf[2 * c]!,
+        buf[2 * c + 1]!,
+      );
     }
     return areas;
   }
@@ -381,7 +399,7 @@ export class SimCore {
       }
       // 2. shape-matching 脊椎。
       this.solveShapeMatching(alphaSm);
-      // 3. XPBD 細節層（疊加；補局部 Q 彈 + 第二道防翻面）。
+      // 3. XPBD 細節層（疊加；補局部拉伸擠壓的彈性 + 第二道防翻面）。
       if (this.params.xpbd) this.solveXpbd(h);
       // 4. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
       this.solveConstraints();
@@ -488,7 +506,7 @@ export class SimCore {
     const alphaArea = this.params.areaCompliance / h2;
     for (let t = 0; t < this.tris.length; t += 3) {
       const a0 = this.restAreas[t / 3]!;
-      if (Math.abs(a0) < 1) continue; // 退化三角形：無可用梯度
+      if (Math.abs(a0) < SimCore.MIN_REST_AREA) continue; // 退化三角形：無可用梯度
       const ai = this.tris[t]!;
       const bi = this.tris[t + 1]!;
       const ci = this.tris[t + 2]!;
@@ -498,15 +516,16 @@ export class SimCore {
       const by = this.pos[2 * bi + 1]!;
       const cx = this.pos[2 * ci]!;
       const cy = this.pos[2 * ci + 1]!;
-      const cVal = 0.5 * ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) - a0;
+      const cVal = signedArea(ax, ay, bx, by, cx, cy) - a0;
       const gax = 0.5 * (by - cy);
       const gay = 0.5 * (cx - bx);
       const gbx = 0.5 * (cy - ay);
       const gby = 0.5 * (ax - cx);
       const gcx = 0.5 * (ay - by);
       const gcy = 0.5 * (bx - ax);
+      // `|| 1e-12`：呼叫端可能把 areaCompliance 設成 0，加上三角形完全塌陷時分母會 → 0。
       const denom =
-        gax * gax + gay * gay + gbx * gbx + gby * gby + gcx * gcx + gcy * gcy + alphaArea;
+        gax * gax + gay * gay + gbx * gbx + gby * gby + gcx * gcx + gcy * gcy + alphaArea || 1e-12;
       const dl = -cVal / denom;
       this.pos[2 * ai] = ax + gax * dl;
       this.pos[2 * ai + 1] = ay + gay * dl;
@@ -588,11 +607,21 @@ export class SimCore {
   areaStats(): AreaStats {
     let min = Infinity;
     let max = -Infinity;
-    const now = this.computeAreas(this.pos);
-    for (let t = 0; t < now.length; t++) {
-      const a0 = this.restAreas[t]!;
-      if (Math.abs(a0) < 1) continue;
-      const r = now[t]! / a0;
+    for (let t = 0; t < this.tris.length; t += 3) {
+      const a0 = this.restAreas[t / 3]!;
+      if (Math.abs(a0) < SimCore.MIN_REST_AREA) continue;
+      const ai = this.tris[t]!;
+      const bi = this.tris[t + 1]!;
+      const ci = this.tris[t + 2]!;
+      const r =
+        signedArea(
+          this.pos[2 * ai]!,
+          this.pos[2 * ai + 1]!,
+          this.pos[2 * bi]!,
+          this.pos[2 * bi + 1]!,
+          this.pos[2 * ci]!,
+          this.pos[2 * ci + 1]!,
+        ) / a0;
       if (r < min) min = r;
       if (r > max) max = r;
     }
