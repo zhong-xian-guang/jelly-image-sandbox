@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 目前狀態
 
-截至 2026-09-04：技術棧與物理／網格架構已定案（見下方「技術棧」與 `docs/adr/`）。專案骨架（Vite + TypeScript + Vitest，Issue #2 / T1）已建立——`npm run dev` / `build` / `test` 可用，實際指令見下方「技術棧」節。`src/` 目前只有掛載點（`src/mount.ts`）與一支 placeholder 測試；模擬核心、網格管線、算繪等模組尚未動工（見 Issue #3 起）。本檔記錄產品構想與設計限制。
+截至 2026-09-04：技術棧與物理／網格架構已定案（見下方「技術棧」與 `docs/adr/`）。專案骨架（Vite + TypeScript + Vitest，Issue #2 / T1）已建立——`npm run dev` / `build` / `test` 可用，實際指令見下方「技術棧」節。**Mesh pipeline 核心（Issue #3 / T2）已完成**：`src/mesh/` 提供純函式、決定性的 `buildSimMesh(pngBytes, params) → SimMesh`（PNG 解碼 → alpha 降採樣二值化 → 最大連通元件 → 手刻 marching squares → `simplify-js` → `cdt2d` → 有種子 PRNG 撒內部點 → 粗 sliver 清理 → UV → 凍結拓撲）；尚不含 Ruppert 品質細化（Issue #4 / T3）。模擬核心、算繪、App shell 等模組尚未動工（見 Issue #4 起）。本檔記錄產品構想與設計限制。
 
 ## 產品概念
 
@@ -39,7 +39,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **建置／語言** — Vite + TypeScript。輸出為靜態包，直接打包 itch.io zip。
 - **柔體物理方法** — 完全手寫的 2D 求解器，**不用物理引擎**。骨幹 = region-based shape matching（重疊方格 lattice）；細節層 = XPBD 的 distance + signed-area 約束。俯視、無重力。固定 60 Hz 幀、每幀 4 substep。
-- **網格生成** — 手刻 marching squares 描 Contour → `simplify-js`（MIT）→ `cdt2d`（MIT）CDT + 手刻 Ruppert 細化。**不可**用 Shewchuk Triangle／JIGSAW（禁付費商業散布）、CGAL Mesh_2（GPL）、`MarchingSquares.js`（AGPL）。
+- **網格生成** — PNG 解碼用 `fast-png`（MIT，純 JS、免 canvas，測試可決定性重現）→ 手刻 marching squares 描 Contour → `simplify-js`（BSD-2-Clause）→ `cdt2d`（MIT）CDT + 手刻 Ruppert 細化。**不可**用 Shewchuk Triangle／JIGSAW（禁付費商業散布）、CGAL Mesh_2（GPL）、`MarchingSquares.js`（AGPL）。
 - **算繪** — WebGL 每頂點 UV 三角網格（PixiJS `Mesh` 或自寫 shader）。不用 Canvas 2D 逐三角 `drawImage`。
 
 指令（骨架見 `package.json`）：

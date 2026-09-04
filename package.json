@@ -24,5 +24,10 @@
     "vite": "^7.0.6",
     "vite-plugin-singlefile": "^2.3.3",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "cdt2d": "^1.0.0",
+    "fast-png": "^8.0.0",
+    "simplify-js": "^1.2.4"
   }
 }
