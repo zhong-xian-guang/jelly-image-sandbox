@@ -94,6 +94,27 @@ describe('GestureTracker', () => {
     ]);
   });
 
+  it('hitTest 回 false（背景）→ 不追這個指標、不 emit', () => {
+    const events: InputEvent[] = [];
+    const tracker = new GestureTracker({
+      screenToWorld: (x, y) => ({ x, y }),
+      emit: (e) => events.push(e),
+      hitTest: (w) => w.x < 100, // x ≥ 100 視為背景
+    });
+    tracker.down(1, 5, 0, 0); // 命中
+    tracker.down(2, 500, 0, 0); // 背景
+    tracker.move(2, 520, 0);
+    tracker.up(2, 520, 0, 10);
+    expect(events).toEqual([{ type: 'grab', id: 1, x: 5, y: 0 }]);
+    expect(tracker.activeCount).toBe(1);
+  });
+
+  it('沒給 hitTest → 一律當命中（T10 行為）', () => {
+    const { tracker, events } = makeTracker();
+    tracker.down(1, 9999, 9999, 0);
+    expect(events).toEqual([{ type: 'grab', id: 1, x: 10999, y: 10999 }]);
+  });
+
   it('只 emit InputEvent，不碰求解器內部（型別上就是 applyInput 的參數）', () => {
     const { tracker, events } = makeTracker();
     tracker.down('p', 0, 0, 0);

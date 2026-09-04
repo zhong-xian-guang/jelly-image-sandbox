@@ -4,7 +4,10 @@
  * typed array，並提供 Camera 變換的正／逆換算。無 DOM、無 WebGL——可 headless 測試。
  */
 
+import type { CameraTransform } from '../camera/types';
 import type { SimMesh } from '../mesh';
+
+export type { CameraTransform };
 
 /** Renderer 只需要 `SimMesh` 的這一部分——不碰 `positions` / `restAreas`。 */
 export type TextureMesh = Pick<SimMesh, 'uv' | 'indices'>;
@@ -17,13 +20,6 @@ export interface TextureBuffers {
   uvs: Float32Array;
   /** 三角形頂點索引，靜態，= `SimMesh.indices`。 */
   indices: Uint32Array;
-}
-
-/** Camera 吐出的世界→螢幕變換（見 `docs/design/simulation-and-mesh.md` 模組邊界）。 */
-export interface CameraTransform {
-  x: number;
-  y: number;
-  scale: number;
 }
 
 /**
