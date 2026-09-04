@@ -14,8 +14,12 @@
  *   2. shape-matching 脊椎：重疊方格 lattice 的每個 Region 做 2×2 polar
  *      decomposition 取旋轉 → goal → `x += α_sm·(g − x)`。
  *   3. Grab 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心權重
- *      分回三頂點（ADR-0003）。放在 shape matching 之後。
- *   4. 回推速度（被抓頂點也照推 → 放開即 Fling）→ 全域阻尼。
+ *      分回三個 Particle（ADR-0003）。放在 shape matching 之後。
+ *   4. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
+ *
+ * picking（世界座標 → 三角形 + 重心座標）暫時放在這裡（藍本 jelly-core 也是），
+ * 未來 Input layer（issue #11）接手後改由它命中、只餵求解器 `{三角形, 重心座標,
+ * 目標點}`——見 `docs/design/simulation-and-mesh.md` 模組邊界。
  */
 
 import type { SimMesh } from '../mesh';
@@ -29,12 +33,11 @@ import {
   type StretchStats,
 } from './types';
 
-/** 一條作用中的 Grab 軟約束。附著點 = 三角形 `tri` 上的重心座標 `w`，追向 `(tx, ty)`。 */
+/** 一條作用中的 Grab 軟約束。附著點 = 三角形 `tri` 上的重心座標 `w`，追向 `target`。 */
 interface Grab {
   tri: readonly [number, number, number];
   w: readonly [number, number, number];
-  tx: number;
-  ty: number;
+  target: Point;
 }
 
 /** 一個 shape-matching Region：成員 Particle 索引 + 其相對 Region 靜止質心的座標。 */
@@ -65,6 +68,8 @@ export class SimCore {
   private readonly vel: Float64Array;
   private readonly tris: Uint32Array;
   private readonly edges: Edge[];
+  /** 靜止 bbox 對角線長。Grab 框外退路的預設吸附半徑由它導出。 */
+  private readonly restDiag: number;
 
   private readonly grabs = new Map<PointerId, Grab>();
   private regions: Region[] = [];
@@ -86,6 +91,8 @@ export class SimCore {
     this.goalX = new Float64Array(this.n);
     this.goalY = new Float64Array(this.n);
     this.goalCount = new Float64Array(this.n);
+    const rb = this.bounds(this.rest);
+    this.restDiag = Math.hypot(rb.maxX - rb.minX, rb.maxY - rb.minY) || 1;
     this.rebuildRegions();
   }
 
@@ -116,24 +123,30 @@ export class SimCore {
     return edges;
   }
 
+  /** `buf`（攤平 `[x0,y0,...]`）中所有 Particle 的軸對齊包圍盒。 */
+  private bounds(buf: Float64Array): Bbox {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < this.n; i++) {
+      const x = buf[2 * i]!;
+      const y = buf[2 * i + 1]!;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    return { minX, minY, maxX, maxY };
+  }
+
   /**
    * 在 Sim mesh 靜止 bbox 上鋪重疊方格 lattice，重建 Region 清單。
    * cell 邊長 `L = 對角線 × cellFrac`，每軸以 `L / 2` 的 stride 重疊 2×。
    * 含 ≥ 4 個 Particle 的 cell 才是一個 Region。改 `params.cellFrac` 後呼叫。
    */
   rebuildRegions(): void {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (let i = 0; i < this.n; i++) {
-      const x = this.rest[2 * i]!;
-      const y = this.rest[2 * i + 1]!;
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    }
+    const { minX, minY, maxX, maxY } = this.bounds(this.rest);
     const diag = Math.hypot(maxX - minX, maxY - minY) || 1;
     const L = Math.max(diag * this.params.cellFrac, 1e-3);
     const stride = L / 2;
@@ -172,13 +185,13 @@ export class SimCore {
   applyInput(event: InputEvent): void {
     switch (event.type) {
       case 'grab':
-        this.doGrab(event.id, event.x, event.y, event.radius ?? Number.POSITIVE_INFINITY);
+        this.doGrab(event.id, event.x, event.y, event.radius ?? this.restDiag * 0.1);
         break;
       case 'moveGrab': {
         const g = this.grabs.get(event.id);
         if (g) {
-          g.tx = event.x;
-          g.ty = event.y;
+          g.target.x = event.x;
+          g.target.y = event.y;
         }
         break;
       }
@@ -225,7 +238,7 @@ export class SimCore {
       const w1 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / det;
       const w2 = 1 - w0 - w1;
       if (w0 >= -0.02 && w1 >= -0.02 && w2 >= -0.02) {
-        this.grabs.set(id, { tri: [a, b, c], w: [w0, w1, w2], tx: x, ty: y });
+        this.grabs.set(id, { tri: [a, b, c], w: [w0, w1, w2], target: { x, y } });
         return;
       }
     }
@@ -240,7 +253,7 @@ export class SimCore {
         best = i;
       }
     }
-    if (best >= 0) this.grabs.set(id, { tri: [best, best, best], w: [1, 0, 0], tx: x, ty: y });
+    if (best >= 0) this.grabs.set(id, { tri: [best, best, best], w: [1, 0, 0], target: { x, y } });
   }
 
   private weightedPoint(g: Grab): Point {
@@ -288,7 +301,8 @@ export class SimCore {
   /**
    * 每 Region：目前質心 vs 靜止質心 → 最佳線性變換 `A_pq` → 2×2 polar
    * decomposition 取旋轉 `R` → 成員 goal `g = R·q + c`。Particle 最終 goal =
-   * 所屬各 Region goal 的平均。位置朝 goal 拉 `x += α_sm·(g − x)`。
+   * 所屬各 Region goal 的等權平均（藍本 jelly-core 即如此；設計文件寫「加權」但
+   * 未定義權重，待實測有需要再加）。位置朝 goal 拉 `x += α_sm·(g − x)`。
    */
   private solveShapeMatching(alphaSm: number): void {
     this.goalX.fill(0);
@@ -352,8 +366,8 @@ export class SimCore {
 
   /**
    * 每個 Grab：附著點目前位置 `p = Σ wₖ·xₖ`，誤差 `e = β·(目標 − p)`，位置修正
-   * 按權重分回三頂點 `xₖ += wₖ·e / Σwⱼ²`（β = 1 時一步剛好命中）。Multi-grab =
-   * 依序解，天然共存。
+   * 按權重分回三個 Particle `xₖ += wₖ·e / Σwⱼ²`（β = 1 時一步剛好命中）。
+   * Multi-grab = 依序解，天然共存。
    */
   private solveGrabs(): void {
     const beta = this.params.grabBeta;
@@ -361,8 +375,8 @@ export class SimCore {
       const [i0, i1, i2] = g.tri;
       const [w0, w1, w2] = g.w;
       const p = this.weightedPoint(g);
-      const ex = (g.tx - p.x) * beta;
-      const ey = (g.ty - p.y) * beta;
+      const ex = (g.target.x - p.x) * beta;
+      const ey = (g.target.y - p.y) * beta;
       const s2 = w0 * w0 + w1 * w1 + w2 * w2 || 1;
       this.pos[2 * i0] = this.pos[2 * i0]! + (w0 * ex) / s2;
       this.pos[2 * i0 + 1] = this.pos[2 * i0 + 1]! + (w0 * ey) / s2;
@@ -394,20 +408,9 @@ export class SimCore {
     return { x: mx / this.n, y: my / this.n };
   }
 
+  /** 目前 Particle 位置的軸對齊包圍盒（世界座標）。 */
   bbox(): Bbox {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (let i = 0; i < this.n; i++) {
-      const x = this.pos[2 * i]!;
-      const y = this.pos[2 * i + 1]!;
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    }
-    return { minX, minY, maxX, maxY };
+    return this.bounds(this.pos);
   }
 
   stretchStats(): StretchStats {

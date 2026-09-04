@@ -16,10 +16,10 @@ export type PointerId = number | string;
 /**
  * `applyInput` 接受的事件。T4 範圍：
  * - `grab`：在世界座標 `(x, y)` 抓住 Jelly 表面那一點（picking → 三角形 + 重心座標）。
- *   `radius` 是「點落在所有三角形外」時退回吸附最近 Particle 的搜尋半徑；預設無限大
- *   （呼叫端通常已自行命中測試，故一定抓得到東西）。
+ *   `radius` 是「點落在所有三角形外」時退回吸附最近 Particle 的搜尋半徑；預設 =
+ *   靜止 bbox 對角線 × 0.1。半徑內沒有 Particle → 整個 grab 為 no-op（ADR-0003）。
  * - `moveGrab`：更新既有 Grab 的目標點。找不到該 `id` 時 no-op。
- * - `release`：解除該 `id` 的 Grab。被抓頂點本身帶著拖曳速度 → 放開即是 Fling。
+ * - `release`：解除該 `id` 的 Grab。被抓的 Particle 本身帶著拖曳速度 → 放開即是 Fling。
  */
 export type InputEvent =
   | { type: 'grab'; id: PointerId; x: number; y: number; radius?: number }
