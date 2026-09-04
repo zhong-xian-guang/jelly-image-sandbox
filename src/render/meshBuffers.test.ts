@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   containerPosition,
   createTextureBuffers,
-  screenToWorld,
   type TextureMesh,
   validateTextureMesh,
   writePositions,
@@ -80,7 +79,9 @@ describe('writePositions', () => {
   });
 });
 
-describe('containerPosition / screenToWorld', () => {
+// 投影公式本身（worldToScreen / screenToWorld）測在 src/camera/project.test.ts；
+// 這裡只驗 containerPosition 是它在世界原點的特例。
+describe('containerPosition', () => {
   it('camera 在原點、scale 1 → container 位在畫布中心', () => {
     expect(containerPosition({ x: 0, y: 0, scale: 1 }, 800, 600)).toEqual({ x: 400, y: 300 });
   });
@@ -90,23 +91,5 @@ describe('containerPosition / screenToWorld', () => {
       x: 400 - 200,
       y: 300 - 100,
     });
-  });
-
-  it('screenToWorld 是 containerPosition 的逆：畫布中心 ↔ camera 焦點', () => {
-    const camera = { x: 30, y: -20, scale: 1.5 };
-    const w = screenToWorld(camera, 640, 480, 320, 240);
-    expect(w.x).toBeCloseTo(camera.x, 9);
-    expect(w.y).toBeCloseTo(camera.y, 9);
-  });
-
-  it('screenToWorld ∘ (worldToScreen) 往返還原', () => {
-    const camera = { x: 12, y: 34, scale: 0.8 };
-    const p = containerPosition(camera, 1000, 700);
-    const world = { x: 55, y: -18 };
-    const screenX = p.x + world.x * camera.scale;
-    const screenY = p.y + world.y * camera.scale;
-    const back = screenToWorld(camera, 1000, 700, screenX, screenY);
-    expect(back.x).toBeCloseTo(world.x, 9);
-    expect(back.y).toBeCloseTo(world.y, 9);
   });
 });

@@ -7,6 +7,5 @@ export {
   validateTextureMesh,
   writePositions,
   containerPosition,
-  screenToWorld,
 } from './meshBuffers';
 export type { TextureBuffers, TextureMesh, CameraTransform } from './meshBuffers';

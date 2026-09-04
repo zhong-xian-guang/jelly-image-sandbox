@@ -17,10 +17,11 @@ import {
   type CameraCommand,
   type CameraState,
   createCameraState,
+  screenToWorld,
   updateCamera,
 } from '../camera';
 import { PointerInput } from '../input';
-import { JellyRenderer, screenToWorld } from '../render';
+import { JellyRenderer } from '../render';
 import { SimCore } from '../sim';
 import { createDefaultJelly } from './defaultJelly';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
@@ -56,13 +57,7 @@ export class JellySandbox {
     this.cameraState = cameraState;
 
     const project = (sx: number, sy: number) =>
-      screenToWorld(
-        this.cameraState.transform,
-        this.root.clientWidth,
-        this.root.clientHeight,
-        sx,
-        sy,
-      );
+      screenToWorld(this.cameraState.transform, this.canvasSize(), sx, sy);
     const hitTest = (world: { x: number; y: number }) => this.sim.pick(world.x, world.y) != null;
 
     this.input = new PointerInput(renderer.canvas, {
@@ -97,7 +92,10 @@ export class JellySandbox {
 
     const cameraState = createCameraState(
       { centroid: sim.centroid(), bbox: sim.bbox() },
-      { width: root.clientWidth, height: root.clientHeight },
+      {
+        width: root.clientWidth,
+        height: root.clientHeight,
+      },
     );
     return new JellySandbox(root, sim, renderer, cameraState);
   }
@@ -143,7 +141,7 @@ export class JellySandbox {
     this.cameraState = updateCamera(
       this.cameraState,
       { centroid: this.sim.centroid(), bbox: this.sim.bbox() },
-      { width: this.root.clientWidth, height: this.root.clientHeight },
+      this.canvasSize(),
       cmds,
       Math.min(Math.max(elapsed, 0), CAMERA_MAX_DT),
     );
@@ -156,7 +154,11 @@ export class JellySandbox {
   };
 
   private onResize = (): void => {
-    // 畫布尺寸交給 Renderer；相機下一幀的 `updateCamera` 會用新 viewport 重新 fit。
+    // 畫布尺寸交給 Renderer；相機下一幀的 `updateCamera` 會用新畫布尺寸重新 fit。
     this.renderer.resize(this.root.clientWidth, this.root.clientHeight);
   };
+
+  private canvasSize(): { width: number; height: number } {
+    return { width: this.root.clientWidth, height: this.root.clientHeight };
+  }
 }

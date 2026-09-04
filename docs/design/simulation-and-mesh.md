@@ -83,15 +83,18 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 
 ## Camera
 
-實作見 `src/camera/`：純函式 `updateCamera(state, target, viewport, commands, dt) → state'`
+實作見 `src/camera/`：純函式 `updateCamera(state, target, canvasSize, commands, dt) → state'`
 （決定性、無 DOM，同 ADR-0005）＋ `CameraGestures`/`CameraInput`（DOM 手勢 → 指令）。
 `state.transform`（`{ x, y, scale }`）給算繪與 picking 用。
 
 - **自動跟隨**：平移分量對 Jelly 質心、縮放對 bounding box 的 zoom-to-fit（帶邊距），
-  各做 frame-rate 無關的指數平滑（`α = 1 − e^(−λ·dt)`）。λ 是參數。
+  各做 frame-rate 無關的指數平滑（`α = 1 − e^(−λ·dt)`）。λ 是參數（`CameraFollowConfig`，
+  有預設值 `DEFAULT_CAMERA_FOLLOW_CONFIG`，同求解器的 `SimParams`）。追不上時（用力甩
+  遠、bbox 突然變大）有硬上限頂住：質心離畫面中心的距離不超過短邊 × `keepInFrameFrac`、
+  縮放需要「縮小才塞得下」時立即到位——保證 Jelly 不會跑出畫面／被裁掉。
 - **手動平移／縮放**：滾輪／pinch → `zoomBy`（對準指標處）、拖背景／雙指拖 → `panBy`
   （螢幕像素）。手動輸入期間 `sinceManualSeconds` 歸零 → **暫停自動跟隨**；閒置 **~2s**
-  （`RESUME_DELAY_SECONDS`）後緩動回歸。「背景」＝ `pointerdown` 時 `sim.pick()` 沒命中。
+  （`resumeDelaySeconds`）後緩動回歸。「背景」＝ `pointerdown` 時 `sim.pick()` 沒命中。
 - **鎖定跟隨**開關：`setFollow { enabled: false }`——自動跟隨關，相機定住，手動仍可動。
 - **框住果凍**按鈕：`frame`——忽略暫停與鎖定，一次性緩動到當前 bbox + 邊距，到位後恢復跟隨。
 - 所有繪製與 picking 都經過 `state.transform`。相機狀態不進求解器；相機指令是與
