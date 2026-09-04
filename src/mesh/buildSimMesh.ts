@@ -4,11 +4,11 @@
  * `buildSimMesh(pngBytes, params)` 是純函式、決定性的：
  * 解碼 PNG → alpha 二值化 + 降採樣 → 取最大不透明連通元件 → 手刻 marching squares
  * 描輪廓 → Douglas–Peucker 簡化 → 有種子 PRNG 撒內部點 → `cdt2d` constrained
- * Delaunay → 粗 sliver 清理 → 指定 UV → 凍結拓撲。
+ * Delaunay → 自寫 Ruppert 品質細化 → 粗 sliver 清理 → 指定 UV → 凍結拓撲。
  *
  * 整條管線不碰 `Math.random` 或 wall-clock。禁用 Shewchuk Triangle／JIGSAW／
  * CGAL Mesh_2／MarchingSquaresJS（授權不相容，見 ADR-0002 / ADR-0005）。
- * Ruppert 品質細化不在此票範圍（見 issue #4）。
+ * Ruppert 細化見 `refine.ts`（issue #4）。
  */
 
 import simplify from 'simplify-js';
@@ -16,12 +16,13 @@ import simplify from 'simplify-js';
 import { toDownsampledMask } from './alphaMask';
 import { largestOpaqueComponent } from './components';
 import { decodePngAlpha } from './decodeImage';
-import { signedPolygonArea, triangleSignedArea, triVerts } from './geometry';
+import { countBadTriangles, signedPolygonArea, triangleSignedArea, triVerts } from './geometry';
 import { traceContours } from './marchingSquares';
 import { deriveSeed, mulberry32 } from './prng';
+import { refineRuppert } from './refine';
 import { removeSlivers } from './slivers';
-import { scatterInteriorPoints } from './steiner';
-import { triangulate, type MeshBuffers } from './triangulate';
+import { interiorSpacing, scatterInteriorPoints } from './steiner';
+import { triangulate, type MeshBuffers, type RawMesh } from './triangulate';
 import { DEFAULT_PARAMS, type BuildSimMeshParams, type Point, type SimMesh } from './types';
 
 export class MeshPipelineError extends Error {
@@ -55,9 +56,29 @@ export function buildSimMesh(
   const rand = mulberry32(deriveSeed(mask.data, p));
   const interior = scatterInteriorPoints(rings, p.targetParticleCount, rand);
 
-  const raw = triangulate(rings, interior);
+  const spacing = interiorSpacing(rings, p.targetParticleCount);
+  const refineMaxArea =
+    p.refineMinAngleDeg > 0 ? p.refineMaxAreaFactor * spacing * spacing : Infinity;
+  const raw = triangulateAndRefine(rings, interior, p, refineMaxArea);
   const clean = removeSlivers(raw, p.minTriangleArea, p.minTriangleAngleDeg);
   if (clean.indices.length === 0) throw new MeshPipelineError('三角化後沒有有效三角形');
+
+  // 記錄（見 issue #4 驗收條件：少數貼著 constrained segment 的例外允許並記錄）：
+  // Ruppert + sliver 清理後仍未達品質門檻的三角形。
+  if (p.refineMinAngleDeg > 0) {
+    const residual = countBadTriangles(
+      clean.positions,
+      clean.indices,
+      p.refineMinAngleDeg,
+      refineMaxArea,
+    );
+    if (residual > 0) {
+      console.warn(
+        `buildSimMesh: 細化後仍有 ${residual} 個三角形未達品質門檻` +
+          `（最小角 ${p.refineMinAngleDeg}° / 最大面積 ${refineMaxArea.toFixed(1)}）——貼著剪影邊緣的例外`,
+      );
+    }
+  }
 
   const positions = new Float32Array(clean.positions);
   const indices = new Uint32Array(clean.indices);
@@ -90,6 +111,26 @@ function simplifyRings(
     tolerance *= 1.6;
   }
   return rings;
+}
+
+/**
+ * CDT，接著（`refineMinAngleDeg > 0` 時）Ruppert 品質細化。`refineMinAngleDeg <= 0`
+ * 走裸 CDT，讓呼叫端能關掉細化做對照。細化的頂點數封頂在目標數的 4 倍，避免尖銳
+ * 輸入角誘發的補點連鎖失控（殘餘壞三角形交給後面的 sliver 清理，見 issue #4）。
+ */
+function triangulateAndRefine(
+  rings: readonly Point[][],
+  interior: readonly Point[],
+  p: BuildSimMeshParams,
+  refineMaxArea: number,
+): RawMesh {
+  if (p.refineMinAngleDeg <= 0) return triangulate(rings, interior);
+  return refineRuppert(rings, interior, {
+    minAngleDeg: p.refineMinAngleDeg,
+    maxArea: refineMaxArea,
+    maxPasses: p.refineMaxPasses,
+    maxVertices: p.targetParticleCount * 4,
+  });
 }
 
 function normalizedUv(positions: readonly number[], width: number, height: number): Float32Array {

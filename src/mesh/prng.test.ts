@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { deriveSeed, fnv1a32, mulberry32 } from './prng';
-import type { BuildSimMeshParams } from './types';
+import { DEFAULT_PARAMS, type BuildSimMeshParams } from './types';
 
 describe('mulberry32', () => {
   it('同一種子產生同一串數列', () => {
@@ -47,14 +47,7 @@ describe('fnv1a32', () => {
 });
 
 describe('deriveSeed', () => {
-  const params: BuildSimMeshParams = {
-    maxMaskEdge: 1024,
-    alphaThreshold: 0.5,
-    simplifyTolerance: 1.5,
-    targetParticleCount: 350,
-    minTriangleArea: 0.5,
-    minTriangleAngleDeg: 15,
-  };
+  const params: BuildSimMeshParams = { ...DEFAULT_PARAMS };
 
   it('mask 或參數任一改變，種子就變', () => {
     const mask = new Uint8Array([0, 1, 1, 0, 1]);
@@ -66,14 +59,9 @@ describe('deriveSeed', () => {
 
   it('與呼叫端物件的鍵序無關', () => {
     const mask = new Uint8Array([2, 3, 5, 7]);
-    const reordered: BuildSimMeshParams = {
-      minTriangleAngleDeg: 15,
-      targetParticleCount: 350,
-      alphaThreshold: 0.5,
-      simplifyTolerance: 1.5,
-      maxMaskEdge: 1024,
-      minTriangleArea: 0.5,
-    };
+    const reordered = Object.fromEntries(
+      Object.entries(params).reverse(),
+    ) as unknown as BuildSimMeshParams;
     expect(deriveSeed(mask, reordered)).toBe(deriveSeed(mask, params));
   });
 });

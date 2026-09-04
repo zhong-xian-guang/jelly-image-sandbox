@@ -7,6 +7,19 @@ import { distanceToRings, pointInRings, signedPolygonArea } from './geometry';
 import type { Point } from './types';
 
 /**
+ * 內部 Steiner 點的目標間距：由輪廓淨面積（外環扣洞環）與剩餘 Particle 預算推得。
+ * Ruppert 細化的最大面積上界也以此為基準（`≈ 間距²`），兩邊用同一個數才一致。
+ */
+export function interiorSpacing(rings: readonly Point[][], targetCount: number): number {
+  if (rings.length === 0) return 1;
+  let area = Math.abs(signedPolygonArea(rings[0]!));
+  for (let i = 1; i < rings.length; i++) area -= Math.abs(signedPolygonArea(rings[i]!));
+  const contourVerts = rings.reduce((sum, r) => sum + r.length, 0);
+  const interiorBudget = Math.max(1, targetCount - contourVerts);
+  return Math.max(1, Math.sqrt(area / interiorBudget));
+}
+
+/**
  * @param rings 簡化後的輪廓環（外環 + 洞環），even-odd 內外。
  * @param targetCount 目標總 Particle 數（含輪廓頂點）。
  * @param rand `[0,1)` 的決定性亂數來源。
@@ -30,13 +43,7 @@ export function scatterInteriorPoints(
     if (p.y > maxY) maxY = p.y;
   }
 
-  // even-odd：外環面積扣掉洞環面積。
-  let area = Math.abs(signedPolygonArea(outer));
-  for (let i = 1; i < rings.length; i++) area -= Math.abs(signedPolygonArea(rings[i]!));
-
-  const contourVerts = rings.reduce((sum, r) => sum + r.length, 0);
-  const interiorBudget = Math.max(1, targetCount - contourVerts);
-  const spacing = Math.max(1, Math.sqrt(area / interiorBudget));
+  const spacing = interiorSpacing(rings, targetCount);
   const margin = 0.4 * spacing;
 
   const points: Point[] = [];

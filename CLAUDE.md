@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 目前狀態
 
-截至 2026-09-04：技術棧與物理／網格架構已定案（見下方「技術棧」與 `docs/adr/`）。專案骨架（Vite + TypeScript + Vitest，Issue #2 / T1）已建立——`npm run dev` / `build` / `test` 可用，實際指令見下方「技術棧」節。**Mesh pipeline 核心（Issue #3 / T2）已完成**：`src/mesh/` 提供純函式、決定性的 `buildSimMesh(pngBytes, params) → SimMesh`（PNG 解碼 → alpha 降採樣二值化 → 最大連通元件 → 手刻 marching squares → `simplify-js` → `cdt2d` → 有種子 PRNG 撒內部點 → 粗 sliver 清理 → UV → 凍結拓撲）；尚不含 Ruppert 品質細化（Issue #4 / T3）。模擬核心、算繪、App shell 等模組尚未動工（見 Issue #4 起）。本檔記錄產品構想與設計限制。
+截至 2026-09-04：技術棧與物理／網格架構已定案（見下方「技術棧」與 `docs/adr/`）。專案骨架（Vite + TypeScript + Vitest，Issue #2 / T1）已建立——`npm run dev` / `build` / `test` 可用，實際指令見下方「技術棧」節。**Mesh pipeline（Issue #3 / T2 + Issue #4 / T3）已完成**：`src/mesh/` 提供純函式、決定性的 `buildSimMesh(pngBytes, params) → SimMesh`（PNG 解碼 → alpha 降採樣二值化 → 最大連通元件 → 手刻 marching squares → `simplify-js` → 有種子 PRNG 撒內部點 → `cdt2d` constrained Delaunay → 自寫 Ruppert 品質細化（`refine.ts`：壞三角形補外心、encroach 到 constrained segment 改分裂中點、批次重跑 `cdt2d`）→ 粗 sliver 清理 → UV → 凍結拓撲）。模擬核心、算繪、App shell 等模組尚未動工（見 Issue #5 起）。本檔記錄產品構想與設計限制。
 
 ## 產品概念
 
