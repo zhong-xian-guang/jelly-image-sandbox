@@ -14,7 +14,7 @@
 2. **Alpha mask**：取 alpha 通道二值化（threshold 0.5）。**降採樣到最長邊 ≤ 1024px** 再往下，把網格成本與來源圖解析度脫鉤。貼圖本身維持全解析度上 GPU。
 3. **最大連通元件**：v1 只保留最大的不透明連通元件，其餘丟棄。連通元件內的洞（甜甜圈）保留，作為三角化的 hole。
 4. **描 Contour**：手刻 marching squares，alpha 當 scalar field。輸出封閉多邊形路徑（外環 + 洞環）。
-5. **簡化**：`simplify-js`（MIT）Douglas–Peucker。初始容差：mask 像素座標下 `1.5`px，之後調。
+5. **簡化**：`simplify-js`（BSD-2-Clause）Douglas–Peucker。初始容差：mask 像素座標下 `1.5`px，之後調。
 6. **三角化**：`cdt2d`（MIT）做 constrained Delaunay，約束邊 = 簡化後的 Contour 邊。
 7. **內部點**：在 Contour 內撒 jittered grid（或 blue-noise）當 Steiner points 一併餵入。初始間距：讓整塊 Jelly 約 200–500 個 Particle。**抖動用有種子的 PRNG**（種子 = hash(降採樣後 alpha mask 位元組 + 所有網格參數)），同一張圖 + 同參數永遠得到同一個 Sim mesh（見 [ADR-0005](../adr/0005-v1-keeps-sim-deterministic-and-input-recordable.md)）。整個管線不得用 `Math.random` 或 wall-clock。
 8. **Ruppert 品質細化**（自寫，見 ADR-0002）：最小角下界初始 `25°`、最大面積上界對應上一步的目標間距；circumcenter 插點；constrained／boundary segment 遇 encroachment 改分裂中點。
