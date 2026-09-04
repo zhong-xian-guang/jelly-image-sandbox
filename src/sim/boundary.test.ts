@@ -47,20 +47,23 @@ describe('WalledBoundary', () => {
     expect(vy).toBeCloseTo((30 - 10) / h, 9); // Y 分量原樣
   });
 
-  it('restitution：撞牆軸的回推速度變號並依 e 縮放', () => {
-    const e = 0.5;
-    const pos = flat(-130, 0);
-    const prev = flat(-90, 0);
-    walled({ ...box, restitution: e }).resolveBoundary(pos, prev, 1, 1 / 240);
+  it('restitution：回推速度 = −e · 入射速度（含 overshoot，e = 1 為真彈性）', () => {
     const h = 1 / 240;
-    const vIn = (-100 - -90) / h; // 入射（撞 -X 牆，往牆內 = 負）
-    const vOut = (pos[0]! - prev[0]!) / h;
-    expect(pos[0]).toBe(-100);
-    expect(vOut).toBeCloseTo(-e * vIn, 9); // 反向、乘 e
-    expect(vOut).toBeGreaterThan(0); // 往界內彈
+    const preX = -130; // clamp 前的位置（已 overshoot 到牆外）
+    const prevX = -90;
+    const vIn = (preX - prevX) / h; // 真入射速度（撞 −X 牆 → 負）
+
+    for (const e of [0, 0.5, 1]) {
+      const pos = flat(preX, 0);
+      const prev = flat(prevX, 0);
+      walled({ ...box, restitution: e }).resolveBoundary(pos, prev, 1, h);
+      const vOut = (pos[0]! - prev[0]!) / h;
+      expect(pos[0]).toBe(-100); // clamp 到牆
+      expect(vOut).toBeCloseTo(-e * vIn, 9); // e=0 → 0；e=1 → 完全反向等速
+    }
   });
 
-  it('上界同樣處理（maxX / maxY）', () => {
+  it('上界同樣處理（maxX / maxY），e = 0 → 回推速度歸零', () => {
     const pos = flat(140, 160);
     const prev = flat(90, 90);
     walled().resolveBoundary(pos, prev, 1, 1 / 240);
@@ -69,8 +72,10 @@ describe('WalledBoundary', () => {
     expect(pos[1]! - prev[1]!).toBe(0);
   });
 
-  it('box 公開唯讀，供算繪 / 相機取用', () => {
+  it('box 是純 Bbox、restitution 分開，公開唯讀供算繪 / 相機取用', () => {
     const b = new WalledBoundary({ ...box, restitution: 0.3 });
-    expect(b.box).toEqual({ ...box, restitution: 0.3 });
+    expect(b.box).toEqual(box);
+    expect(b.restitution).toBe(0.3);
+    expect(new WalledBoundary(box).restitution).toBe(0); // 預設
   });
 });
