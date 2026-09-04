@@ -15,7 +15,9 @@
  *      decomposition 取旋轉 → goal → `x += α_sm·(g − x)`。
  *   3. Grab / Pin 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心
  *      權重分回三個 Particle（ADR-0003）。Pin = 目標點凍結、β 恆 1 的 Grab
- *      （ADR-0004）。多條依序解，天然共存。放在 shape matching 之後。
+ *      （ADR-0004）。多條依序解、每 substep 一次；孤立 Pin 逐幀看幾乎不動，
+ *      共用 Particle 的密集 Pin 群仍會被下一 substep 的 shape matching 微擾。
+ *      放在 shape matching 之後。
  *   4. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
  *
  * picking（世界座標 → 三角形 + 重心座標）暫時放在這裡（藍本 jelly-core 也是），
@@ -35,15 +37,16 @@ import {
 } from './types';
 
 /**
- * 一條作用中的位置約束。附著點 = 三角形 `tri` 上的重心座標 `w`，追向 `target`。
- * `locked` = false 是 Grab（`target` 跟指標更新、硬度用 `params.grabBeta`）；
- * `locked` = true 是 Pin（`target` 凍結、β 恆為 1 絕對硬鎖，見 ADR-0004）。
+ * 一條作用中的位置約束（設計文件步驟 4：「Grab / Pin / Multi-grab 位置約束」）。
+ * 附著點 = 三角形 `tri` 上的重心座標 `w`，每 substep 拉向 `target`。
+ * `pinned` = false 是 Grab（`target` 跟指標更新、硬度用 `params.grabBeta`）；
+ * `pinned` = true 是 Pin（`target` 凍結、β 恆為 1，見 ADR-0004）。
  */
-interface Grab {
+interface Constraint {
   tri: readonly [number, number, number];
   w: readonly [number, number, number];
   target: Point;
-  locked: boolean;
+  pinned: boolean;
 }
 
 /** 一個 shape-matching Region：成員 Particle 索引 + 其相對 Region 靜止質心的座標。 */
@@ -77,7 +80,8 @@ export class SimCore {
   /** 靜止 bbox 對角線長。Grab 框外退路的預設吸附半徑由它導出。 */
   private readonly restDiag: number;
 
-  private readonly grabs = new Map<PointerId, Grab>();
+  /** 作用中的 Grab / Pin，鍵為輸入 `id`（Grab 與 Pin 共用命名空間）。 */
+  private readonly constraints = new Map<PointerId, Constraint>();
   private regions: Region[] = [];
 
   // shape-matching goal 累加器（每 substep 重用，免得每步配置）。
@@ -189,55 +193,51 @@ export class SimCore {
 
   /**
    * 唯一的輸入介面（ADR-0005）。支援 `grab` / `moveGrab` / `release`（T4）與
-   * `pin` / `unpin` / `movePin`（T5）。
-   *
-   * - `pin` 帶 `(x, y)`：在該世界座標 picking 出附著點、直接建立硬鎖約束。
-   * - `pin` 不帶座標：把該 `id` 既有的 Grab 就地凍結成 Pin（目標點移到目前附著點
-   *   → 不跳動）。該 `id` 沒有 Grab 時 no-op。
-   * - `release` 只解除未鎖的 Grab；Pin 要用 `unpin`（用力甩、Tap 都拔不掉）。
-   * - `moveGrab` 不影響已鎖的 Pin。
+   * `pin` / `unpin` / `movePin`（T5）。詳細語意見 `InputEvent` 的說明。
    */
   applyInput(event: InputEvent): void {
     switch (event.type) {
       case 'grab':
-        this.doGrab(event.id, event.x, event.y, event.radius ?? this.restDiag * 0.1);
+        this.doGrab(event.id, event.x, event.y, this.grabRadius(event.radius));
         break;
       case 'moveGrab': {
-        const g = this.grabs.get(event.id);
-        if (g && !g.locked) {
-          g.target.x = event.x;
-          g.target.y = event.y;
+        const c = this.constraints.get(event.id);
+        if (c && !c.pinned) {
+          c.target.x = event.x;
+          c.target.y = event.y;
         }
         break;
       }
       case 'release': {
-        const g = this.grabs.get(event.id);
-        if (g && !g.locked) this.grabs.delete(event.id);
+        const c = this.constraints.get(event.id);
+        if (c && !c.pinned) this.constraints.delete(event.id);
         break;
       }
       case 'pin': {
         if (event.x !== undefined && event.y !== undefined) {
-          this.doGrab(event.id, event.x, event.y, event.radius ?? this.restDiag * 0.1);
+          // Pin-at-coordinates：picking 沒命中就是 no-op，不去動同 id 的既有約束。
+          if (!this.doGrab(event.id, event.x, event.y, this.grabRadius(event.radius))) break;
         }
-        const g = this.grabs.get(event.id);
-        if (g) {
-          const a = this.weightedPoint(g);
-          g.target.x = a.x;
-          g.target.y = a.y;
-          g.locked = true;
+        const c = this.constraints.get(event.id);
+        if (c && !c.pinned) {
+          // 就地凍結：目標點移到目前附著點 → 不跳動。已是 Pin 則不動它。
+          const a = this.weightedPoint(c);
+          c.target.x = a.x;
+          c.target.y = a.y;
+          c.pinned = true;
         }
         break;
       }
       case 'unpin': {
-        const g = this.grabs.get(event.id);
-        if (g?.locked) this.grabs.delete(event.id);
+        const c = this.constraints.get(event.id);
+        if (c?.pinned) this.constraints.delete(event.id);
         break;
       }
       case 'movePin': {
-        const g = this.grabs.get(event.id);
-        if (g?.locked) {
-          g.target.x = event.x;
-          g.target.y = event.y;
+        const c = this.constraints.get(event.id);
+        if (c?.pinned) {
+          c.target.x = event.x;
+          c.target.y = event.y;
         }
         break;
       }
@@ -246,15 +246,17 @@ export class SimCore {
 
   /** 目前作用中、未鎖定的 Grab 數。 */
   get grabCount(): number {
-    let count = 0;
-    for (const g of this.grabs.values()) if (!g.locked) count++;
-    return count;
+    return this.countConstraints(false);
   }
 
-  /** 目前作用中的 Pin（已鎖定 Grab）數。 */
+  /** 目前作用中的 Pin 數。 */
   get pinCount(): number {
+    return this.countConstraints(true);
+  }
+
+  private countConstraints(pinned: boolean): number {
     let count = 0;
-    for (const g of this.grabs.values()) if (g.locked) count++;
+    for (const c of this.constraints.values()) if (c.pinned === pinned) count++;
     return count;
   }
 
@@ -263,18 +265,23 @@ export class SimCore {
    * 斷言收斂用。該 `id` 沒有作用中的約束時回傳 `null`。
    */
   attachPoint(id: PointerId): Point | null {
-    const g = this.grabs.get(id);
-    if (!g) return null;
-    return this.weightedPoint(g);
+    const c = this.constraints.get(id);
+    if (!c) return null;
+    return this.weightedPoint(c);
+  }
+
+  /** Grab／Pin 框外退路的吸附半徑：呼叫端指定值，否則靜止 bbox 對角線 × 0.1。 */
+  private grabRadius(explicit?: number): number {
+    return explicit ?? this.restDiag * 0.1;
   }
 
   /**
    * Picking：找出包含 `(x, y)` 的三角形，記重心座標當附著點，建立一條未鎖的
    * Grab。按下當下 目標點 = 附著點 → 誤差 0 → 不會一按就動（ADR-0003）。點落在
    * 所有三角形外時，退回 `radius` 內最近的 Particle（重心權重 `(1, 0, 0)`）。
-   * 都沒有則 no-op。`pin` 事件借用它建點、再把 `locked` 翻成 true。
+   * 回傳是否建立了約束——`pin` 事件靠它判斷 pick 是否命中。
    */
-  private doGrab(id: PointerId, x: number, y: number, radius: number): void {
+  private doGrab(id: PointerId, x: number, y: number, radius: number): boolean {
     for (let t = 0; t < this.tris.length; t += 3) {
       const a = this.tris[t]!;
       const b = this.tris[t + 1]!;
@@ -291,8 +298,13 @@ export class SimCore {
       const w1 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / det;
       const w2 = 1 - w0 - w1;
       if (w0 >= -0.02 && w1 >= -0.02 && w2 >= -0.02) {
-        this.grabs.set(id, { tri: [a, b, c], w: [w0, w1, w2], target: { x, y }, locked: false });
-        return;
+        this.constraints.set(id, {
+          tri: [a, b, c],
+          w: [w0, w1, w2],
+          target: { x, y },
+          pinned: false,
+        });
+        return true;
       }
     }
     let best = -1;
@@ -306,17 +318,17 @@ export class SimCore {
         best = i;
       }
     }
-    if (best >= 0) {
-      this.grabs.set(id, {
-        tri: [best, best, best],
-        w: [1, 0, 0],
-        target: { x, y },
-        locked: false,
-      });
-    }
+    if (best < 0) return false;
+    this.constraints.set(id, {
+      tri: [best, best, best],
+      w: [1, 0, 0],
+      target: { x, y },
+      pinned: false,
+    });
+    return true;
   }
 
-  private weightedPoint(g: Grab): Point {
+  private weightedPoint(g: Constraint): Point {
     const [i0, i1, i2] = g.tri;
     const [w0, w1, w2] = g.w;
     return {
@@ -348,8 +360,8 @@ export class SimCore {
       }
       // 2. shape-matching 脊椎。
       this.solveShapeMatching(alphaSm);
-      // 3. Grab 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
-      this.solveGrabs();
+      // 3. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
+      this.solveConstraints();
       // 4. 回推速度 + 全域阻尼。
       for (let i = 0; i < this.n; i++) {
         this.vel[2 * i] = ((this.pos[2 * i]! - this.prev[2 * i]!) / h) * keep;
@@ -427,12 +439,13 @@ export class SimCore {
   /**
    * 每條 Grab／Pin：附著點目前位置 `p = Σ wₖ·xₖ`，誤差 `e = β·(目標 − p)`，位置
    * 修正按權重分回三個 Particle `xₖ += wₖ·e / Σwⱼ²`（β = 1 時一步剛好命中）。
-   * Pin（`locked`）β 恆為 1（絕對硬鎖，ADR-0004），Grab 用 `params.grabBeta`。
-   * Multi-grab / 多 Pin = 依序解，天然共存。
+   * Pin（`pinned`）β 恆為 1（ADR-0004），Grab 用 `params.grabBeta`。
+   * Multi-grab / 多 Pin = 依序解，天然共存（共用 Particle 的密集約束不會同一
+   * substep 全部精確滿足，靠逐 substep 迭代收斂）。
    */
-  private solveGrabs(): void {
-    for (const g of this.grabs.values()) {
-      const beta = g.locked ? 1 : this.params.grabBeta;
+  private solveConstraints(): void {
+    for (const g of this.constraints.values()) {
+      const beta = g.pinned ? 1 : this.params.grabBeta;
       const [i0, i1, i2] = g.tri;
       const [w0, w1, w2] = g.w;
       const p = this.weightedPoint(g);

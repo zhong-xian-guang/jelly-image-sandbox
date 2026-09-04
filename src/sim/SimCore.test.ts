@@ -346,6 +346,25 @@ describe('SimCore — Pin', () => {
     expect(sim.attachPoint('p')).not.toBeNull();
   });
 
+  it('pin 帶座標但 picking 沒命中 → no-op，不會把同 id 的既有 Grab 就地凍結', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'grab', id: 'x', x: 0, y: 0 });
+    sim.applyInput({ type: 'moveGrab', id: 'x', x: -20, y: -20 });
+    run(sim, 20);
+
+    // 座標遠在網格外、半徑極小 → picking 必落空
+    sim.applyInput({ type: 'pin', id: 'x', x: 10_000, y: 10_000, radius: 1e-3 });
+    expect(sim.pinCount).toBe(0);
+    expect(sim.grabCount).toBe(1);
+
+    // 仍是活的 Grab：moveGrab 照常生效
+    sim.applyInput({ type: 'moveGrab', id: 'x', x: 30, y: 25 });
+    run(sim, 90);
+    const a = sim.attachPoint('x')!;
+    expect(a.x).toBeCloseTo(30, 2);
+    expect(a.y).toBeCloseTo(25, 2);
+  });
+
   it('決定性：含 pin / movePin / unpin 的事件流兩次跑結果完全相等', () => {
     const play = (): number[] => {
       const sim = new SimCore(MESH());
