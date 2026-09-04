@@ -49,8 +49,12 @@ _Avoid_: throw、toss、swipe、拋
 _Avoid_: poke、click、戳
 
 **Pin（釘選）**：
-一種模式，把 Jelly 的質心絕對錨定在原點；被錨定時抓取只拉動被抓的一角，質心不動。
-_Avoid_: lock、fix、錨定（一般動詞）
+把 Jelly 表面某一點絕對鎖定在某個世界座標的約束——就是「目標點被凍結、不再跟指標」的 Grab。數量不限；用力甩、Tap 都拔不掉；可拖到新位置重新鎖定。沒有「鎖定質心」的獨立模式，要固定中心就在附近放幾個 Pin（見 ADR-0004）。
+_Avoid_: lock、fix、錨定（一般動詞）、centroid lock
+
+**Camera follow（相機跟隨）**：
+Camera 由 Jelly 的質心／bounding box 自動平移縮放的行為。使用者手動平移／縮放時暫停，閒置後緩動回歸；「鎖定跟隨」開關可完全關閉。
+_Avoid_: auto-cam、tracking
 
 **Boundary（邊界）**：
 求解器所對的可替換碰撞環境。兩種：**Walled**（有限桌面，牆壁擋住 Jelly）與 **Infinite**（無牆、無限延伸）。
@@ -67,3 +71,11 @@ _Avoid_: silhouette、stencil、剪影
 **Contour（輪廓）**：
 從 Alpha mask 描出的多邊形外框，是三角化的輸入。
 _Avoid_: outline、boundary（已被 Boundary 佔用）、edge loop、剪影
+
+**Track（軌）**：
+一段錄下的輸入事件流——通常是一次「按下到放開」的抓取（加可選的結尾 Pin），或一次 Tap，或一段相機操作。多條 Track 各設起始時間、疊加播放，組成一段素材。屬 v2 素材工具（見 ADR-0005）。
+_Avoid_: recording、clip、layer、圖層
+
+**Demo（內建示範）**：
+專案內建、以程式碼寫成的預設操作序列，透過與即時輸入相同的介面驅動 Jelly。用來教學或展示。
+_Avoid_: tutorial、scenario、範例
