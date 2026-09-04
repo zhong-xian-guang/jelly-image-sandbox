@@ -118,7 +118,7 @@ function fitView(): void {
     (w - margin) / Math.max(bb.maxX - bb.minX, 1),
     (h - margin) / Math.max(bb.maxY - bb.minY, 1),
   );
-  renderer.setView(view);
+  renderer.setCamera(view);
 }
 
 function resize(): void {

@@ -3,9 +3,10 @@
 export { JellyRenderer } from './JellyRenderer';
 export type { JellyRendererOptions } from './JellyRenderer';
 export {
-  createRenderBuffers,
-  validateRenderMesh,
+  createTextureBuffers,
+  validateTextureMesh,
   writePositions,
   containerPosition,
+  screenToWorld,
 } from './meshBuffers';
-export type { RenderBuffers, RenderMesh } from './meshBuffers';
+export type { TextureBuffers, TextureMesh, CameraTransform } from './meshBuffers';
