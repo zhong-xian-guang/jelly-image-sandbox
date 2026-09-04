@@ -28,6 +28,7 @@
   "dependencies": {
     "cdt2d": "^1.0.0",
     "fast-png": "^8.0.0",
+    "pixi.js": "^8.20.1",
     "simplify-js": "^1.2.4"
   }
 }

@@ -1,0 +1,677 @@
+/**
+ * 模擬核心（GitHub issue #5 起）——推進柔體的求解器。
+ *
+ * 建構時吃 `SimMesh` + 參數；對外只有 `applyInput(event)`、`step(dt)` 與讀出
+ * （`positions`、`centroid()`、`bbox()`、`stretchStats()`、`kineticEnergy()`）。
+ * 無 DOM、與算繪無關、決定性（不碰 `Math.random` 或 wall-clock，見 ADR-0005）。
+ * 固定時間步：accumulator 累積與 clamp 由呼叫端負責，`step(dt)` 只把 `dt` 切成
+ * `substeps` 個 substep 往前推。
+ *
+ * `tap` 是一次性向內脈衝（不進 substep 迴圈，直接改速度）。每個 substep（藍本：
+ * `prototypes/shape-matching-feel.prototype.html` 的 `<script id="jelly-core">`）：
+ *   1. 預測：symplectic Euler、無重力、無外力（所有 Particle 一視同仁）。
+ *   2. shape-matching 脊椎：重疊方格 lattice 的每個 Region 做 2×2 polar
+ *      decomposition 取旋轉 → goal → `x += α_sm·(g − x)`。
+ *   3. XPBD 細節層（`params.xpbd`，可關）：每條邊一條 distance 約束、每個三角形
+ *      一條 signed-area 約束（`C = 有號面積 − 靜止有號面積`，翻面時號變、梯度
+ *      翻正——不取絕對值）。compliant projection、1 iteration、`α̃ = compliance/h²`。
+ *   4. Grab / Pin 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心
+ *      權重分回三個 Particle（ADR-0003）。Pin = 目標點凍結、β 恆 1 的 Grab
+ *      （ADR-0004）。多條依序解、每 substep 一次；孤立 Pin 逐幀看幾乎不動，
+ *      共用 Particle 的密集 Pin 群仍會被下一 substep 的 shape matching 微擾。
+ *   5. Boundary（`setBoundary`，可換）：clamp 進 Walled AABB／Infinite no-op。
+ *   6. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
+ *
+ * picking（世界座標 → 三角形 + 重心座標）暫時放在這裡（藍本 jelly-core 也是），
+ * 未來 Input layer（issue #11）接手後改由它命中、只餵求解器 `{三角形, 重心座標,
+ * 目標點}`——見 `docs/design/simulation-and-mesh.md` 模組邊界。
+ */
+
+import type { SimMesh } from '../mesh';
+import { type Boundary, InfiniteBoundary } from './boundary';
+import {
+  DEFAULT_SIM_PARAMS,
+  type AreaStats,
+  type Bbox,
+  type InputEvent,
+  type Point,
+  type PointerId,
+  type SimParams,
+  type StretchStats,
+} from './types';
+
+/**
+ * 一條作用中的位置約束（設計文件步驟 4：「Grab / Pin / Multi-grab 位置約束」）。
+ * 附著點 = 三角形 `tri` 上的重心座標 `w`，每 substep 拉向 `target`。
+ * `pinned` = false 是 Grab（`target` 跟指標更新、硬度用 `params.grabBeta`）；
+ * `pinned` = true 是 Pin（`target` 凍結、β 恆為 1，見 ADR-0004）。
+ */
+interface Constraint {
+  tri: readonly [number, number, number];
+  w: readonly [number, number, number];
+  target: Point;
+  pinned: boolean;
+}
+
+/** 一個 shape-matching Region：成員 Particle 索引 + 其相對 Region 靜止質心的座標。 */
+interface Region {
+  members: number[];
+  /** `[x0, y0, x1, y1, ...]`，相對 Region 靜止質心。長度 = 2 × members.length。 */
+  q: Float64Array;
+}
+
+/** Sim mesh 的一條無向邊 + 靜止長度（`stretchStats` 用）。 */
+interface Edge {
+  p: number;
+  q: number;
+  restLen: number;
+}
+
+/** 三角形有號面積（shoelace／2）。CCW（y 向下）為負、CW 為正；翻面時號變。 */
+function signedArea(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+): number {
+  return 0.5 * ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
+}
+
+export class SimCore {
+  /** signed-area 約束／`areaStats` 都跳過 `|靜止有號面積|` 小於此值的退化三角形。 */
+  private static readonly MIN_REST_AREA = 1;
+  /** Tap 影響半徑 = 目前 bbox 對角線 × 此係數（設計文件參數表，待實測）。 */
+  private static readonly TAP_RADIUS_FRAC = 0.2;
+
+  /**
+   * 手感參數。可直接改欄位；改 `cellFrac` 後須呼叫 `rebuildRegions()`，
+   * 其餘欄位下一次 `step` 即生效。
+   */
+  params: SimParams;
+
+  private readonly n: number;
+  private readonly rest: Float64Array;
+  private readonly pos: Float64Array;
+  private readonly prev: Float64Array;
+  private readonly vel: Float64Array;
+  private readonly tris: Uint32Array;
+  private readonly edges: Edge[];
+  /** 每個三角形的靜止有號面積（從 `rest` 座標重算，不信任呼叫端的 `mesh.restAreas`）。 */
+  private readonly restAreas: Float64Array;
+  /** 靜止 bbox 對角線長。Grab 框外退路的預設吸附半徑由它導出。 */
+  private readonly restDiag: number;
+
+  /** 作用中的 Grab / Pin，鍵為輸入 `id`（Grab 與 Pin 共用命名空間）。 */
+  private readonly constraints = new Map<PointerId, Constraint>();
+  private regions: Region[] = [];
+  /** 可替換的碰撞環境。預設無牆；`setBoundary` 可執行期替換，不需重建求解器。 */
+  private boundary: Boundary = new InfiniteBoundary();
+
+  // shape-matching goal 累加器（每 substep 重用，免得每步配置）。
+  private readonly goalX: Float64Array;
+  private readonly goalY: Float64Array;
+  private readonly goalCount: Float64Array;
+
+  constructor(mesh: SimMesh, params: Partial<SimParams> = {}) {
+    this.params = { ...DEFAULT_SIM_PARAMS, ...params };
+    this.n = mesh.positions.length / 2;
+    this.rest = Float64Array.from(mesh.positions);
+    this.pos = this.rest.slice();
+    this.prev = this.rest.slice();
+    this.vel = new Float64Array(this.rest.length);
+    this.tris = Uint32Array.from(mesh.indices);
+    this.edges = this.collectEdges();
+    this.restAreas = this.computeAreas(this.rest);
+    this.goalX = new Float64Array(this.n);
+    this.goalY = new Float64Array(this.n);
+    this.goalCount = new Float64Array(this.n);
+    this.restDiag = this.diag(this.bounds(this.rest));
+    this.rebuildRegions();
+  }
+
+  /** bbox 對角線長，永遠 ≥ 1（避免退化尺度讓半徑歸零）。 */
+  private diag(bb: Bbox): number {
+    return Math.hypot(bb.maxX - bb.minX, bb.maxY - bb.minY) || 1;
+  }
+
+  // ---- setup ---------------------------------------------------------------
+
+  /** 每條 Sim mesh 邊收一次（無向、去重），記靜止長度。 */
+  private collectEdges(): Edge[] {
+    const seen = new Set<number>();
+    const edges: Edge[] = [];
+    const key = (a: number, b: number) => (a < b ? a * this.n + b : b * this.n + a);
+    for (let t = 0; t < this.tris.length; t += 3) {
+      const a = this.tris[t]!;
+      const b = this.tris[t + 1]!;
+      const c = this.tris[t + 2]!;
+      for (const [p, q] of [
+        [a, b],
+        [b, c],
+        [c, a],
+      ] as const) {
+        const k = key(p, q);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const dx = this.rest[2 * p]! - this.rest[2 * q]!;
+        const dy = this.rest[2 * p + 1]! - this.rest[2 * q + 1]!;
+        edges.push({ p, q, restLen: Math.hypot(dx, dy) || 1e-6 });
+      }
+    }
+    return edges;
+  }
+
+  /** 每個三角形在 `buf` 座標下的有號面積。順序對齊 `tris`。建構時算一次靜止面積。 */
+  private computeAreas(buf: Float64Array): Float64Array {
+    const areas = new Float64Array(this.tris.length / 3);
+    for (let t = 0; t < this.tris.length; t += 3) {
+      const a = this.tris[t]!;
+      const b = this.tris[t + 1]!;
+      const c = this.tris[t + 2]!;
+      areas[t / 3] = signedArea(
+        buf[2 * a]!,
+        buf[2 * a + 1]!,
+        buf[2 * b]!,
+        buf[2 * b + 1]!,
+        buf[2 * c]!,
+        buf[2 * c + 1]!,
+      );
+    }
+    return areas;
+  }
+
+  /** `buf`（攤平 `[x0,y0,...]`）中所有 Particle 的軸對齊包圍盒。 */
+  private bounds(buf: Float64Array): Bbox {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < this.n; i++) {
+      const x = buf[2 * i]!;
+      const y = buf[2 * i + 1]!;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    return { minX, minY, maxX, maxY };
+  }
+
+  /**
+   * 在 Sim mesh 靜止 bbox 上鋪重疊方格 lattice，重建 Region 清單。
+   * cell 邊長 `L = 對角線 × cellFrac`，每軸以 `L / 2` 的 stride 重疊 2×。
+   * 含 ≥ 4 個 Particle 的 cell 才是一個 Region。改 `params.cellFrac` 後呼叫。
+   */
+  rebuildRegions(): void {
+    const bb = this.bounds(this.rest);
+    const { minX, minY, maxX, maxY } = bb;
+    const L = Math.max(this.diag(bb) * this.params.cellFrac, 1e-3);
+    const stride = L / 2;
+    const regions: Region[] = [];
+    for (let gx = minX - stride; gx < maxX + stride; gx += stride) {
+      for (let gy = minY - stride; gy < maxY + stride; gy += stride) {
+        const members: number[] = [];
+        for (let i = 0; i < this.n; i++) {
+          const x = this.rest[2 * i]!;
+          const y = this.rest[2 * i + 1]!;
+          if (x >= gx && x < gx + L && y >= gy && y < gy + L) members.push(i);
+        }
+        if (members.length < 4) continue;
+        let cx = 0;
+        let cy = 0;
+        for (const i of members) {
+          cx += this.rest[2 * i]!;
+          cy += this.rest[2 * i + 1]!;
+        }
+        cx /= members.length;
+        cy /= members.length;
+        const q = new Float64Array(members.length * 2);
+        for (let m = 0; m < members.length; m++) {
+          q[2 * m] = this.rest[2 * members[m]!]! - cx;
+          q[2 * m + 1] = this.rest[2 * members[m]! + 1]! - cy;
+        }
+        regions.push({ members, q });
+      }
+    }
+    this.regions = regions;
+  }
+
+  /** 替換碰撞環境（`WalledBoundary` / `InfiniteBoundary`）。執行期可隨時呼叫。 */
+  setBoundary(boundary: Boundary): void {
+    this.boundary = boundary;
+  }
+
+  // ---- input ------------------------------------------------------------------
+
+  /**
+   * 唯一的輸入介面（ADR-0005）。支援 `grab` / `moveGrab` / `release`（T4）、
+   * `pin` / `unpin` / `movePin`（T5）、`tap`（T7）。詳細語意見 `InputEvent`。
+   */
+  applyInput(event: InputEvent): void {
+    switch (event.type) {
+      case 'grab':
+        this.doGrab(event.id, event.x, event.y, this.grabRadius(event.radius));
+        break;
+      case 'moveGrab': {
+        const c = this.constraints.get(event.id);
+        if (c && !c.pinned) {
+          c.target.x = event.x;
+          c.target.y = event.y;
+        }
+        break;
+      }
+      case 'release': {
+        const c = this.constraints.get(event.id);
+        if (c && !c.pinned) this.constraints.delete(event.id);
+        break;
+      }
+      case 'pin': {
+        if (event.x !== undefined && event.y !== undefined) {
+          // Pin-at-coordinates：picking 沒命中就是 no-op，不去動同 id 的既有約束。
+          if (!this.doGrab(event.id, event.x, event.y, this.grabRadius(event.radius))) break;
+        }
+        const c = this.constraints.get(event.id);
+        if (c && !c.pinned) {
+          // 就地凍結：目標點移到目前附著點 → 不跳動。已是 Pin 則不動它。
+          const a = this.weightedPoint(c);
+          c.target.x = a.x;
+          c.target.y = a.y;
+          c.pinned = true;
+        }
+        break;
+      }
+      case 'unpin': {
+        const c = this.constraints.get(event.id);
+        if (c?.pinned) this.constraints.delete(event.id);
+        break;
+      }
+      case 'movePin': {
+        const c = this.constraints.get(event.id);
+        if (c?.pinned) {
+          c.target.x = event.x;
+          c.target.y = event.y;
+        }
+        break;
+      }
+      case 'tap':
+        this.doTap(event.x, event.y, event.strength ?? this.params.tapStrength);
+        break;
+    }
+  }
+
+  /** 目前作用中、未鎖定的 Grab 數。 */
+  get grabCount(): number {
+    return this.countConstraints(false);
+  }
+
+  /** 目前作用中的 Pin 數。 */
+  get pinCount(): number {
+    return this.countConstraints(true);
+  }
+
+  private countConstraints(pinned: boolean): number {
+    let count = 0;
+    for (const c of this.constraints.values()) if (c.pinned === pinned) count++;
+    return count;
+  }
+
+  /**
+   * 某個 Grab／Pin 附著點目前的世界座標（隨網格變形移動），供算繪畫把手、或測試
+   * 斷言收斂用。該 `id` 沒有作用中的約束時回傳 `null`。
+   */
+  attachPoint(id: PointerId): Point | null {
+    const c = this.constraints.get(id);
+    if (!c) return null;
+    return this.weightedPoint(c);
+  }
+
+  /** Grab／Pin 框外退路的吸附半徑：呼叫端指定值，否則靜止 bbox 對角線 × 0.1。 */
+  private grabRadius(explicit?: number): number {
+    return explicit ?? this.restDiag * 0.1;
+  }
+
+  /**
+   * Picking：找出包含 `(x, y)` 的三角形，記重心座標當附著點，建立一條未鎖的
+   * Grab。按下當下 目標點 = 附著點 → 誤差 0 → 不會一按就動（ADR-0003）。點落在
+   * 所有三角形外時，退回 `radius` 內最近的 Particle（重心權重 `(1, 0, 0)`）。
+   * 回傳是否建立了約束——`pin` 事件靠它判斷 pick 是否命中。
+   */
+  private doGrab(id: PointerId, x: number, y: number, radius: number): boolean {
+    for (let t = 0; t < this.tris.length; t += 3) {
+      const a = this.tris[t]!;
+      const b = this.tris[t + 1]!;
+      const c = this.tris[t + 2]!;
+      const ax = this.pos[2 * a]!;
+      const ay = this.pos[2 * a + 1]!;
+      const bx = this.pos[2 * b]!;
+      const by = this.pos[2 * b + 1]!;
+      const cx = this.pos[2 * c]!;
+      const cy = this.pos[2 * c + 1]!;
+      const det = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+      if (Math.abs(det) < 1e-9) continue;
+      const w0 = ((by - cy) * (x - cx) + (cx - bx) * (y - cy)) / det;
+      const w1 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / det;
+      const w2 = 1 - w0 - w1;
+      if (w0 >= -0.02 && w1 >= -0.02 && w2 >= -0.02) {
+        this.constraints.set(id, {
+          tri: [a, b, c],
+          w: [w0, w1, w2],
+          target: { x, y },
+          pinned: false,
+        });
+        return true;
+      }
+    }
+    let best = -1;
+    let bestD = radius * radius;
+    for (let i = 0; i < this.n; i++) {
+      const dx = this.pos[2 * i]! - x;
+      const dy = this.pos[2 * i + 1]! - y;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (best < 0) return false;
+    this.constraints.set(id, {
+      tri: [best, best, best],
+      w: [1, 0, 0],
+      target: { x, y },
+      pinned: false,
+    });
+    return true;
+  }
+
+  private weightedPoint(g: Constraint): Point {
+    const [i0, i1, i2] = g.tri;
+    const [w0, w1, w2] = g.w;
+    return {
+      x: w0 * this.pos[2 * i0]! + w1 * this.pos[2 * i1]! + w2 * this.pos[2 * i2]!,
+      y: w0 * this.pos[2 * i0 + 1]! + w1 * this.pos[2 * i1 + 1]! + w2 * this.pos[2 * i2 + 1]!,
+    };
+  }
+
+  /**
+   * Tap（輕拍）：一次性向內徑向脈衝，直接改速度、不進 substep 迴圈。半徑
+   * `R = 目前 bbox 對角線 × TAP_RADIUS_FRAC` 內每個 Particle：
+   * `v += 正規化(tapPoint − pos) · strength · (1 − d/R)²`。向內 → 凹陷後彈回；
+   * ring-down 交給 shape matching + 阻尼。半徑內無 Particle 時整體 no-op。
+   */
+  private doTap(x: number, y: number, strength: number): void {
+    const r = this.diag(this.bounds(this.pos)) * SimCore.TAP_RADIUS_FRAC;
+    for (let i = 0; i < this.n; i++) {
+      const dx = x - this.pos[2 * i]!;
+      const dy = y - this.pos[2 * i + 1]!;
+      const dist = Math.hypot(dx, dy);
+      if (dist >= r || dist < 1e-6) continue; // 圈外／正中心（無方向）→ 不施力
+      const f = 1 - dist / r;
+      const s = (strength * f * f) / dist; // (dx, dy)/dist · strength · (1 − d/R)²
+      this.vel[2 * i] = this.vel[2 * i]! + dx * s;
+      this.vel[2 * i + 1] = this.vel[2 * i + 1]! + dy * s;
+    }
+  }
+
+  // ---- step ----------------------------------------------------------------
+
+  /**
+   * 推進 `dt` 秒（切成 `params.substeps` 個 substep）。`dt <= 0` 為 no-op。
+   * accumulator 累積與上限 clamp 由呼叫端負責。
+   */
+  step(dt: number): void {
+    if (!(dt > 0)) return;
+    const subs = Math.max(1, Math.floor(this.params.substeps));
+    const h = dt / subs;
+    const alphaSm = this.params.alphaSm;
+    const keep = 1 - this.params.damping;
+
+    for (let s = 0; s < subs; s++) {
+      // 1. 預測（無重力、無外力）——被抓 Particle 也照常積分。
+      for (let i = 0; i < this.n; i++) {
+        this.prev[2 * i] = this.pos[2 * i]!;
+        this.prev[2 * i + 1] = this.pos[2 * i + 1]!;
+        this.pos[2 * i] = this.pos[2 * i]! + this.vel[2 * i]! * h;
+        this.pos[2 * i + 1] = this.pos[2 * i + 1]! + this.vel[2 * i + 1]! * h;
+      }
+      // 2. shape-matching 脊椎。
+      this.solveShapeMatching(alphaSm);
+      // 3. XPBD 細節層（疊加；補局部拉伸擠壓的彈性 + 第二道防翻面）。
+      if (this.params.xpbd) this.solveXpbd(h);
+      // 4. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
+      this.solveConstraints();
+      // 5. Boundary：clamp 進邊界、調 prev 讓回推速度不指向界外（Infinite 為 no-op）。
+      this.boundary.resolveBoundary(this.pos, this.prev, this.n, h);
+      // 6. 回推速度 + 全域阻尼。
+      for (let i = 0; i < this.n; i++) {
+        this.vel[2 * i] = ((this.pos[2 * i]! - this.prev[2 * i]!) / h) * keep;
+        this.vel[2 * i + 1] = ((this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h) * keep;
+      }
+    }
+  }
+
+  /**
+   * 每 Region：目前質心 vs 靜止質心 → 最佳線性變換 `A_pq` → 2×2 polar
+   * decomposition 取旋轉 `R` → 成員 goal `g = R·q + c`。Particle 最終 goal =
+   * 所屬各 Region goal 的等權平均（藍本 jelly-core 即如此；設計文件寫「加權」但
+   * 未定義權重，待實測有需要再加）。位置朝 goal 拉 `x += α_sm·(g − x)`。
+   */
+  private solveShapeMatching(alphaSm: number): void {
+    this.goalX.fill(0);
+    this.goalY.fill(0);
+    this.goalCount.fill(0);
+
+    for (const region of this.regions) {
+      const mem = region.members;
+      const q = region.q;
+      const k = mem.length;
+
+      let cx = 0;
+      let cy = 0;
+      for (let m = 0; m < k; m++) {
+        cx += this.pos[2 * mem[m]!]!;
+        cy += this.pos[2 * mem[m]! + 1]!;
+      }
+      cx /= k;
+      cy /= k;
+
+      // A_pq = Σ (p − c) ⊗ q
+      let a00 = 0;
+      let a01 = 0;
+      let a10 = 0;
+      let a11 = 0;
+      for (let m = 0; m < k; m++) {
+        const px = this.pos[2 * mem[m]!]! - cx;
+        const py = this.pos[2 * mem[m]! + 1]! - cy;
+        const qx = q[2 * m]!;
+        const qy = q[2 * m + 1]!;
+        a00 += px * qx;
+        a01 += px * qy;
+        a10 += py * qx;
+        a11 += py * qy;
+      }
+      // 2×2 polar decomposition → 最接近的旋轉。det < 0 也給正規旋轉，力會主動翻正。
+      const sx = a00 + a11;
+      const sy = a10 - a01;
+      const d = Math.hypot(sx, sy);
+      const ct = d < 1e-9 ? 1 : sx / d;
+      const st = d < 1e-9 ? 0 : sy / d;
+
+      for (let m = 0; m < k; m++) {
+        const i = mem[m]!;
+        const qx = q[2 * m]!;
+        const qy = q[2 * m + 1]!;
+        this.goalX[i] = this.goalX[i]! + (cx + ct * qx - st * qy);
+        this.goalY[i] = this.goalY[i]! + (cy + st * qx + ct * qy);
+        this.goalCount[i] = this.goalCount[i]! + 1;
+      }
+    }
+
+    for (let i = 0; i < this.n; i++) {
+      const count = this.goalCount[i]!;
+      if (count === 0) continue;
+      this.pos[2 * i] = this.pos[2 * i]! + alphaSm * (this.goalX[i]! / count - this.pos[2 * i]!);
+      this.pos[2 * i + 1] =
+        this.pos[2 * i + 1]! + alphaSm * (this.goalY[i]! / count - this.pos[2 * i + 1]!);
+    }
+  }
+
+  /**
+   * XPBD 細節層（藍本 jelly-core）：每條邊一條 distance 約束、每個三角形一條
+   * signed-area 約束。單一 iteration、λ 不累積（Small Steps：靠多 substep 收斂）。
+   * 所有 Particle 等質量（`w = 1`）。`α̃ = compliance / h²`。
+   *
+   * signed-area 用**有號**面積：`C = 有號面積 − 靜止有號面積`，翻面時 `C` 變號、
+   * 梯度把元素翻正——不可取絕對值。`|靜止面積| < 1` 的退化三角形跳過（無梯度可用）。
+   */
+  private solveXpbd(h: number): void {
+    const h2 = h * h;
+
+    const alphaDist = this.params.distCompliance / h2;
+    for (const e of this.edges) {
+      const dx = this.pos[2 * e.p]! - this.pos[2 * e.q]!;
+      const dy = this.pos[2 * e.p + 1]! - this.pos[2 * e.q + 1]!;
+      const len = Math.hypot(dx, dy) || 1e-9;
+      // ΔλdotN：C = len − L0，∇C = ±單位向量，w_p + w_q = 2。
+      const dl = -(len - e.restLen) / (2 + alphaDist);
+      const nx = (dx / len) * dl;
+      const ny = (dy / len) * dl;
+      this.pos[2 * e.p] = this.pos[2 * e.p]! + nx;
+      this.pos[2 * e.p + 1] = this.pos[2 * e.p + 1]! + ny;
+      this.pos[2 * e.q] = this.pos[2 * e.q]! - nx;
+      this.pos[2 * e.q + 1] = this.pos[2 * e.q + 1]! - ny;
+    }
+
+    const alphaArea = this.params.areaCompliance / h2;
+    for (let t = 0; t < this.tris.length; t += 3) {
+      const a0 = this.restAreas[t / 3]!;
+      if (Math.abs(a0) < SimCore.MIN_REST_AREA) continue; // 退化三角形：無可用梯度
+      const ai = this.tris[t]!;
+      const bi = this.tris[t + 1]!;
+      const ci = this.tris[t + 2]!;
+      const ax = this.pos[2 * ai]!;
+      const ay = this.pos[2 * ai + 1]!;
+      const bx = this.pos[2 * bi]!;
+      const by = this.pos[2 * bi + 1]!;
+      const cx = this.pos[2 * ci]!;
+      const cy = this.pos[2 * ci + 1]!;
+      const cVal = signedArea(ax, ay, bx, by, cx, cy) - a0;
+      const gax = 0.5 * (by - cy);
+      const gay = 0.5 * (cx - bx);
+      const gbx = 0.5 * (cy - ay);
+      const gby = 0.5 * (ax - cx);
+      const gcx = 0.5 * (ay - by);
+      const gcy = 0.5 * (bx - ax);
+      // `|| 1e-12`：呼叫端可能把 areaCompliance 設成 0，加上三角形完全塌陷時分母會 → 0。
+      const denom =
+        gax * gax + gay * gay + gbx * gbx + gby * gby + gcx * gcx + gcy * gcy + alphaArea || 1e-12;
+      const dl = -cVal / denom;
+      this.pos[2 * ai] = ax + gax * dl;
+      this.pos[2 * ai + 1] = ay + gay * dl;
+      this.pos[2 * bi] = bx + gbx * dl;
+      this.pos[2 * bi + 1] = by + gby * dl;
+      this.pos[2 * ci] = cx + gcx * dl;
+      this.pos[2 * ci + 1] = cy + gcy * dl;
+    }
+  }
+
+  /**
+   * 每條 Grab／Pin：附著點目前位置 `p = Σ wₖ·xₖ`，誤差 `e = β·(目標 − p)`，位置
+   * 修正按權重分回三個 Particle `xₖ += wₖ·e / Σwⱼ²`（β = 1 時一步剛好命中）。
+   * Pin（`pinned`）β 恆為 1（ADR-0004），Grab 用 `params.grabBeta`。
+   * Multi-grab / 多 Pin = 依序解，天然共存（共用 Particle 的密集約束不會同一
+   * substep 全部精確滿足，靠逐 substep 迭代收斂）。
+   */
+  private solveConstraints(): void {
+    for (const g of this.constraints.values()) {
+      const beta = g.pinned ? 1 : this.params.grabBeta;
+      const [i0, i1, i2] = g.tri;
+      const [w0, w1, w2] = g.w;
+      const p = this.weightedPoint(g);
+      const ex = (g.target.x - p.x) * beta;
+      const ey = (g.target.y - p.y) * beta;
+      const s2 = w0 * w0 + w1 * w1 + w2 * w2 || 1;
+      this.pos[2 * i0] = this.pos[2 * i0]! + (w0 * ex) / s2;
+      this.pos[2 * i0 + 1] = this.pos[2 * i0 + 1]! + (w0 * ey) / s2;
+      this.pos[2 * i1] = this.pos[2 * i1]! + (w1 * ex) / s2;
+      this.pos[2 * i1 + 1] = this.pos[2 * i1 + 1]! + (w1 * ey) / s2;
+      this.pos[2 * i2] = this.pos[2 * i2]! + (w2 * ex) / s2;
+      this.pos[2 * i2 + 1] = this.pos[2 * i2 + 1]! + (w2 * ey) / s2;
+    }
+  }
+
+  // ---- readouts ----------------------------------------------------------------
+
+  /**
+   * 目前 Particle 位置，`[x0, y0, x1, y1, ...]`。回傳的是求解器內部的活動緩衝區
+   * （零複製，供算繪每幀直接讀）——**不要改動**。
+   */
+  get positions(): Float64Array {
+    return this.pos;
+  }
+
+  /** 所有 Particle 位置的平均。 */
+  centroid(): Point {
+    let mx = 0;
+    let my = 0;
+    for (let i = 0; i < this.n; i++) {
+      mx += this.pos[2 * i]!;
+      my += this.pos[2 * i + 1]!;
+    }
+    return { x: mx / this.n, y: my / this.n };
+  }
+
+  /** 目前 Particle 位置的軸對齊包圍盒（世界座標）。 */
+  bbox(): Bbox {
+    return this.bounds(this.pos);
+  }
+
+  stretchStats(): StretchStats {
+    let max = 0;
+    let sum = 0;
+    for (const e of this.edges) {
+      const dx = this.pos[2 * e.p]! - this.pos[2 * e.q]!;
+      const dy = this.pos[2 * e.p + 1]! - this.pos[2 * e.q + 1]!;
+      const r = Math.hypot(dx, dy) / e.restLen;
+      if (r > max) max = r;
+      sum += r;
+    }
+    return { max, avg: this.edges.length ? sum / this.edges.length : 0 };
+  }
+
+  /**
+   * 三角形有號面積比（目前／靜止）的 min / max，掃過所有非退化三角形。
+   * `min ≤ 0` 代表有三角形翻面；靜置時 min = max = 1。
+   */
+  areaStats(): AreaStats {
+    let min = Infinity;
+    let max = -Infinity;
+    for (let t = 0; t < this.tris.length; t += 3) {
+      const a0 = this.restAreas[t / 3]!;
+      if (Math.abs(a0) < SimCore.MIN_REST_AREA) continue;
+      const ai = this.tris[t]!;
+      const bi = this.tris[t + 1]!;
+      const ci = this.tris[t + 2]!;
+      const r =
+        signedArea(
+          this.pos[2 * ai]!,
+          this.pos[2 * ai + 1]!,
+          this.pos[2 * bi]!,
+          this.pos[2 * bi + 1]!,
+          this.pos[2 * ci]!,
+          this.pos[2 * ci + 1]!,
+        ) / a0;
+      if (r < min) min = r;
+      if (r > max) max = r;
+    }
+    return min === Infinity ? { min: 1, max: 1 } : { min, max };
+  }
+
+  /** `0.5 · Σ |vᵢ|²`（單位質量）。收斂看這個 → 0。 */
+  kineticEnergy(): number {
+    let ke = 0;
+    for (let i = 0; i < this.vel.length; i++) ke += this.vel[i]! * this.vel[i]!;
+    return 0.5 * ke;
+  }
+}
