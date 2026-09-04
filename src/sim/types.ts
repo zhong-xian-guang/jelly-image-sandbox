@@ -28,6 +28,9 @@ export type PointerId = number | string;
  *   座標 picking 建立；不帶座標 = 把該 `id` 既有的 Grab 就地凍結（不跳動）。
  * - `unpin`：解除該 `id` 的 Pin（未鎖的 Grab 不受影響）。
  * - `movePin`：把該 `id` 的 Pin 鎖定點移到 `(x, y)` 並在該處重新硬鎖。
+ * - `tap`：在 `(x, y)` 施加一次性向內徑向脈衝（凹陷後彈回）。`strength` 預設
+ *   `params.tapStrength`。半徑（目前 bbox 對角線 × 0.2）內無 Particle → no-op。
+ *   無 `id`：Tap 不是持續狀態。
  */
 export type InputEvent =
   | { type: 'grab'; id: PointerId; x: number; y: number; radius?: number }
@@ -35,7 +38,8 @@ export type InputEvent =
   | { type: 'release'; id: PointerId }
   | { type: 'pin'; id: PointerId; x?: number; y?: number; radius?: number }
   | { type: 'unpin'; id: PointerId }
-  | { type: 'movePin'; id: PointerId; x: number; y: number };
+  | { type: 'movePin'; id: PointerId; x: number; y: number }
+  | { type: 'tap'; x: number; y: number; strength?: number };
 
 /** 求解器的手感參數。全部有預設值，建構時可只帶想改的欄位。 */
 export interface SimParams {
@@ -62,6 +66,8 @@ export interface SimParams {
   distCompliance: number;
   /** XPBD signed-area 約束的 compliance（越大越軟）。預設 3e-3（prototype）。 */
   areaCompliance: number;
+  /** `tap` 事件未帶 `strength` 時的預設脈衝強度。預設 6000（prototype 實測）。 */
+  tapStrength: number;
 }
 
 export const DEFAULT_SIM_PARAMS: SimParams = {
@@ -73,6 +79,7 @@ export const DEFAULT_SIM_PARAMS: SimParams = {
   xpbd: true,
   distCompliance: 1.5e-4,
   areaCompliance: 3e-3,
+  tapStrength: 6000,
 };
 
 /** 軸對齊包圍盒（世界座標）。 */

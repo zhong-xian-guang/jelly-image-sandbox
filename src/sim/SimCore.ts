@@ -7,8 +7,9 @@
  * 固定時間步：accumulator 累積與 clamp 由呼叫端負責，`step(dt)` 只把 `dt` 切成
  * `substeps` 個 substep 往前推。
  *
- * 每個 substep（藍本：`prototypes/shape-matching-feel.prototype.html` 的
- * `<script id="jelly-core">`；Tap 屬 issue #8、Boundary 屬 #9，尚未實作）：
+ * `tap` 是一次性向內脈衝（不進 substep 迴圈，直接改速度）。每個 substep（藍本：
+ * `prototypes/shape-matching-feel.prototype.html` 的 `<script id="jelly-core">`；
+ * Boundary 屬 issue #9，尚未實作）：
  *   1. 預測：symplectic Euler、無重力、無外力（所有 Particle 一視同仁）。
  *   2. shape-matching 脊椎：重疊方格 lattice 的每個 Region 做 2×2 polar
  *      decomposition 取旋轉 → goal → `x += α_sm·(g − x)`。
@@ -231,8 +232,8 @@ export class SimCore {
   // ---- input ------------------------------------------------------------------
 
   /**
-   * 唯一的輸入介面（ADR-0005）。支援 `grab` / `moveGrab` / `release`（T4）與
-   * `pin` / `unpin` / `movePin`（T5）。詳細語意見 `InputEvent` 的說明。
+   * 唯一的輸入介面（ADR-0005）。支援 `grab` / `moveGrab` / `release`（T4）、
+   * `pin` / `unpin` / `movePin`（T5）、`tap`（T7）。詳細語意見 `InputEvent`。
    */
   applyInput(event: InputEvent): void {
     switch (event.type) {
@@ -280,6 +281,31 @@ export class SimCore {
         }
         break;
       }
+      case 'tap':
+        this.doTap(event.x, event.y, event.strength ?? this.params.tapStrength);
+        break;
+    }
+  }
+
+  /**
+   * Tap（輕拍）：一次性向內徑向脈衝，直接改速度、不進 substep 迴圈。半徑
+   * `R = 目前 bbox 對角線 × 0.2` 內每個 Particle：
+   * `v += 正規化(tapPoint − pos) · strength · (1 − d/R)²`。向內 → 凹陷後彈回；
+   * ring-down 交給 shape matching + 阻尼。半徑內無 Particle 時整體 no-op。
+   */
+  private doTap(x: number, y: number, strength: number): void {
+    const bb = this.bounds(this.pos);
+    const r = Math.hypot(bb.maxX - bb.minX, bb.maxY - bb.minY) * 0.2 || 1;
+    for (let i = 0; i < this.n; i++) {
+      const dx = x - this.pos[2 * i]!;
+      const dy = y - this.pos[2 * i + 1]!;
+      const dist = Math.hypot(dx, dy);
+      if (dist >= r) continue;
+      const f = 1 - dist / r;
+      // (dx, dy)/dist · strength · f²；dist → 0 時 (dx, dy) → 0，貢獻自然歸零。
+      const s = (strength * f * f) / (dist || 1);
+      this.vel[2 * i] = this.vel[2 * i]! + dx * s;
+      this.vel[2 * i + 1] = this.vel[2 * i + 1]! + dy * s;
     }
   }
 

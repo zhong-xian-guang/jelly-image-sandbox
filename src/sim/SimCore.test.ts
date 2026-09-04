@@ -466,3 +466,59 @@ describe('SimCore — XPBD 細節層', () => {
     expect(sim.areaStats().max).toBeCloseTo(1, 6);
   });
 });
+
+describe('SimCore — Tap', () => {
+  it('tap → 動能出現有界尖峰、數秒內 ring-down 回 ~0', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'tap', x: 48, y: 48 });
+
+    const peak = sim.kineticEnergy();
+    expect(peak).toBeGreaterThan(0);
+    expect(Number.isFinite(peak)).toBe(true);
+
+    run(sim, 240); // 4 秒
+    expect(sim.kineticEnergy()).toBeLessThan(peak * 1e-3);
+    expect(sim.kineticEnergy()).toBeLessThan(1);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('tap 後最大邊拉伸比有界、無 NaN', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'tap', x: 48, y: 48, strength: 9000 });
+    for (let f = 0; f < 120; f++) {
+      sim.step(1 / 60);
+      expect(Number.isFinite(sim.stretchStats().max)).toBe(true);
+      expect(sim.stretchStats().max).toBeLessThan(6); // 有界，不發散
+    }
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('拍在 Jelly 外（附近無 Particle）→ 狀態完全不變', () => {
+    const sim = new SimCore(MESH());
+    const before = Array.from(sim.positions);
+    sim.applyInput({ type: 'tap', x: 100_000, y: 100_000 });
+    expect(sim.kineticEnergy()).toBe(0);
+    run(sim, 30);
+    expect(Array.from(sim.positions)).toEqual(before);
+  });
+
+  it('strength 加倍 → 動能尖峰約 4×（KE ∝ strength²）', () => {
+    const a = new SimCore(MESH());
+    a.applyInput({ type: 'tap', x: 48, y: 48, strength: 3000 });
+    const b = new SimCore(MESH());
+    b.applyInput({ type: 'tap', x: 48, y: 48, strength: 6000 });
+    expect(b.kineticEnergy() / a.kineticEnergy()).toBeCloseTo(4, 6);
+  });
+
+  it('決定性：相同 tap 事件流兩次跑結果完全相等', () => {
+    const play = (): number[] => {
+      const sim = new SimCore(MESH());
+      sim.applyInput({ type: 'tap', x: 40, y: 52 });
+      run(sim, 20);
+      sim.applyInput({ type: 'tap', x: 60, y: 44, strength: 9000 });
+      run(sim, 20);
+      return Array.from(sim.positions);
+    };
+    expect(play()).toEqual(play());
+  });
+});
