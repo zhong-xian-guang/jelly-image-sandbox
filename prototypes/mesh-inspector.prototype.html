@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mesh pipeline 檢視 · buildSimMesh</title>
+    <style>
+      :root {
+        --accent: #1f9d74;
+        --ink: #1b2320;
+        --muted: #6b7a74;
+        --line: #dfe6e2;
+        --bg: #f6f8f7;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        font: 14px/1.5 system-ui, "Segoe UI", Roboto, "Noto Sans TC", sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+        display: flex;
+        min-height: 100%;
+      }
+      #stage {
+        flex: 1 1 auto;
+        position: relative;
+        min-width: 0;
+        background: #0d1512;
+      }
+      #c {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      #dropHint {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        color: #7f9f95;
+        font-size: 13px;
+      }
+      #stage.drag::after {
+        content: "";
+        position: absolute;
+        inset: 8px;
+        border: 2px dashed var(--accent);
+        border-radius: 8px;
+      }
+      aside {
+        flex: 0 0 320px;
+        max-width: 320px;
+        padding: 18px 18px 40px;
+        overflow-y: auto;
+        background: #fff;
+        border-left: 1px solid var(--line);
+      }
+      h1 {
+        font-size: 15px;
+        margin: 0 0 2px;
+      }
+      p.lede {
+        margin: 0 0 14px;
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin: 20px 0 8px;
+        font-weight: 600;
+      }
+      label.row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        margin: 6px 0;
+        font-size: 12.5px;
+      }
+      label.row input[type="number"] {
+        width: 92px;
+        padding: 3px 6px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        font: inherit;
+      }
+      label.chk {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin: 6px 0;
+        font-size: 12.5px;
+      }
+      button {
+        margin-top: 10px;
+        padding: 7px 12px;
+        border: 1px solid var(--accent);
+        background: var(--accent);
+        color: #fff;
+        border-radius: 5px;
+        font: inherit;
+        cursor: pointer;
+      }
+      input[type="file"] {
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      #stats dl {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 3px 10px;
+        margin: 0;
+        font-size: 12.5px;
+      }
+      #stats dt {
+        color: var(--muted);
+      }
+      #stats dd {
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+      }
+      #stats .ok {
+        color: var(--accent);
+      }
+      #stats .warn {
+        color: #b8860b;
+      }
+      #stats .err {
+        color: #c0392b;
+      }
+      small {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <canvas id="c"></canvas>
+      <div id="dropHint">把帶 alpha 的 PNG 拖進來</div>
+    </div>
+    <aside>
+      <h1>Mesh pipeline 檢視</h1>
+      <p class="lede">
+        拖一張帶 alpha 的 PNG（或用下方選檔），即時呼叫
+        <code>buildSimMesh</code> 並疊在原圖上畫出三角網。非產品程式，只在
+        <code>npm run dev</code> 下跑。
+      </p>
+      <input type="file" id="file" accept="image/png" />
+
+      <h2>參數</h2>
+      <label class="row">maxMaskEdge<input type="number" id="maxMaskEdge" placeholder="1024" /></label>
+      <label class="row"
+        >alphaThreshold<input type="number" id="alphaThreshold" step="0.05" placeholder="0.5"
+      /></label>
+      <label class="row"
+        >simplifyTolerance<input type="number" id="simplifyTolerance" step="0.1" placeholder="1.5"
+      /></label>
+      <label class="row"
+        >targetParticleCount<input type="number" id="targetParticleCount" placeholder="350"
+      /></label>
+      <label class="row"
+        >minTriangleArea<input type="number" id="minTriangleArea" step="0.1" placeholder="0.5"
+      /></label>
+      <label class="row"
+        >minTriangleAngleDeg<input type="number" id="minTriangleAngleDeg" placeholder="15"
+      /></label>
+      <button id="rerun">重新產生</button>
+
+      <h2>圖層</h2>
+      <label class="chk"><input type="checkbox" id="showImage" checked />底圖（半透明）</label>
+      <label class="chk"><input type="checkbox" id="showMesh" checked />三角網</label>
+      <label class="chk"><input type="checkbox" id="showPoints" checked />頂點</label>
+
+      <h2>統計</h2>
+      <div id="stats"><small>尚未載入圖片</small></div>
+    </aside>
+    <script type="module" src="./mesh-inspector.prototype.ts"></script>
+  </body>
+</html>
