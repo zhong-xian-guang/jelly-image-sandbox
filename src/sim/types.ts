@@ -52,6 +52,16 @@ export interface SimParams {
   substeps: number;
   /** Grab 硬度 `β`：1 = 精準貼目標點、< 1 = 彈性把手。預設 1。 */
   grabBeta: number;
+  /**
+   * XPBD 細節層開關（shape-matching 之後、Grab/Pin 之前疊加）：每條邊一條 distance
+   * 約束、每個三角形一條 signed-area 約束。補脊椎缺的局部 Q 彈 + 第二道防翻面。
+   * 預設 true。
+   */
+  xpbd: boolean;
+  /** XPBD distance 約束的 compliance（越大越軟）。預設 1.5e-4（prototype）。 */
+  distCompliance: number;
+  /** XPBD signed-area 約束的 compliance（越大越軟）。預設 3e-3（prototype）。 */
+  areaCompliance: number;
 }
 
 export const DEFAULT_SIM_PARAMS: SimParams = {
@@ -60,6 +70,9 @@ export const DEFAULT_SIM_PARAMS: SimParams = {
   damping: 0.02,
   substeps: 4,
   grabBeta: 1,
+  xpbd: true,
+  distCompliance: 1.5e-4,
+  areaCompliance: 3e-3,
 };
 
 /** 軸對齊包圍盒（世界座標）。 */
@@ -76,4 +89,13 @@ export interface StretchStats {
   max: number;
   /** 平均拉伸比（靜置時為 1）。 */
   avg: number;
+}
+
+/**
+ * 三角形有號面積比統計：`目前有號面積 / 靜止有號面積`，掃過所有非退化三角形
+ * （|靜止面積| ≥ 1）。靜置時為 1；`min` ≤ 0 代表有三角形翻面。
+ */
+export interface AreaStats {
+  min: number;
+  max: number;
 }

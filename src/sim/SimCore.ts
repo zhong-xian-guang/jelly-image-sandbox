@@ -8,17 +8,18 @@
  * `substeps` 個 substep 往前推。
  *
  * 每個 substep（藍本：`prototypes/shape-matching-feel.prototype.html` 的
- * `<script id="jelly-core">`；XPBD 細節層屬 issue #7、Tap 屬 #8、Boundary 屬 #9，
- * 尚未實作）：
+ * `<script id="jelly-core">`；Tap 屬 issue #8、Boundary 屬 #9，尚未實作）：
  *   1. 預測：symplectic Euler、無重力、無外力（所有 Particle 一視同仁）。
  *   2. shape-matching 脊椎：重疊方格 lattice 的每個 Region 做 2×2 polar
  *      decomposition 取旋轉 → goal → `x += α_sm·(g − x)`。
- *   3. Grab / Pin 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心
+ *   3. XPBD 細節層（`params.xpbd`，可關）：每條邊一條 distance 約束、每個三角形
+ *      一條 signed-area 約束（`C = 有號面積 − 靜止有號面積`，翻面時號變、梯度
+ *      翻正——不取絕對值）。compliant projection、1 iteration、`α̃ = compliance/h²`。
+ *   4. Grab / Pin 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心
  *      權重分回三個 Particle（ADR-0003）。Pin = 目標點凍結、β 恆 1 的 Grab
  *      （ADR-0004）。多條依序解、每 substep 一次；孤立 Pin 逐幀看幾乎不動，
  *      共用 Particle 的密集 Pin 群仍會被下一 substep 的 shape matching 微擾。
- *      放在 shape matching 之後。
- *   4. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
+ *   5. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
  *
  * picking（世界座標 → 三角形 + 重心座標）暫時放在這裡（藍本 jelly-core 也是），
  * 未來 Input layer（issue #11）接手後改由它命中、只餵求解器 `{三角形, 重心座標,
@@ -28,6 +29,7 @@
 import type { SimMesh } from '../mesh';
 import {
   DEFAULT_SIM_PARAMS,
+  type AreaStats,
   type Bbox,
   type InputEvent,
   type Point,
@@ -77,6 +79,8 @@ export class SimCore {
   private readonly vel: Float64Array;
   private readonly tris: Uint32Array;
   private readonly edges: Edge[];
+  /** 每個三角形的靜止有號面積（從 `rest` 座標重算，不信任呼叫端的 `mesh.restAreas`）。 */
+  private readonly restAreas: Float64Array;
   /** 靜止 bbox 對角線長。Grab 框外退路的預設吸附半徑由它導出。 */
   private readonly restDiag: number;
 
@@ -98,6 +102,7 @@ export class SimCore {
     this.vel = new Float64Array(this.rest.length);
     this.tris = Uint32Array.from(mesh.indices);
     this.edges = this.collectEdges();
+    this.restAreas = this.computeAreas(this.rest);
     this.goalX = new Float64Array(this.n);
     this.goalY = new Float64Array(this.n);
     this.goalCount = new Float64Array(this.n);
@@ -131,6 +136,22 @@ export class SimCore {
       }
     }
     return edges;
+  }
+
+  /** 每個三角形在 `buf` 座標下的有號面積（shoelace／2）。順序對齊 `tris`。 */
+  private computeAreas(buf: Float64Array): Float64Array {
+    const areas = new Float64Array(this.tris.length / 3);
+    for (let t = 0; t < this.tris.length; t += 3) {
+      const a = this.tris[t]!;
+      const b = this.tris[t + 1]!;
+      const c = this.tris[t + 2]!;
+      const ax = buf[2 * a]!;
+      const ay = buf[2 * a + 1]!;
+      areas[t / 3] =
+        0.5 *
+        ((buf[2 * b]! - ax) * (buf[2 * c + 1]! - ay) - (buf[2 * b + 1]! - ay) * (buf[2 * c]! - ax));
+    }
+    return areas;
   }
 
   /** `buf`（攤平 `[x0,y0,...]`）中所有 Particle 的軸對齊包圍盒。 */
@@ -360,9 +381,11 @@ export class SimCore {
       }
       // 2. shape-matching 脊椎。
       this.solveShapeMatching(alphaSm);
-      // 3. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
+      // 3. XPBD 細節層（疊加；補局部 Q 彈 + 第二道防翻面）。
+      if (this.params.xpbd) this.solveXpbd(h);
+      // 4. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
       this.solveConstraints();
-      // 4. 回推速度 + 全域阻尼。
+      // 5. 回推速度 + 全域阻尼。
       for (let i = 0; i < this.n; i++) {
         this.vel[2 * i] = ((this.pos[2 * i]! - this.prev[2 * i]!) / h) * keep;
         this.vel[2 * i + 1] = ((this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h) * keep;
@@ -437,6 +460,64 @@ export class SimCore {
   }
 
   /**
+   * XPBD 細節層（藍本 jelly-core）：每條邊一條 distance 約束、每個三角形一條
+   * signed-area 約束。單一 iteration、λ 不累積（Small Steps：靠多 substep 收斂）。
+   * 所有 Particle 等質量（`w = 1`）。`α̃ = compliance / h²`。
+   *
+   * signed-area 用**有號**面積：`C = 有號面積 − 靜止有號面積`，翻面時 `C` 變號、
+   * 梯度把元素翻正——不可取絕對值。`|靜止面積| < 1` 的退化三角形跳過（無梯度可用）。
+   */
+  private solveXpbd(h: number): void {
+    const h2 = h * h;
+
+    const alphaDist = this.params.distCompliance / h2;
+    for (const e of this.edges) {
+      const dx = this.pos[2 * e.p]! - this.pos[2 * e.q]!;
+      const dy = this.pos[2 * e.p + 1]! - this.pos[2 * e.q + 1]!;
+      const len = Math.hypot(dx, dy) || 1e-9;
+      // ΔλdotN：C = len − L0，∇C = ±單位向量，w_p + w_q = 2。
+      const dl = -(len - e.restLen) / (2 + alphaDist);
+      const nx = (dx / len) * dl;
+      const ny = (dy / len) * dl;
+      this.pos[2 * e.p] = this.pos[2 * e.p]! + nx;
+      this.pos[2 * e.p + 1] = this.pos[2 * e.p + 1]! + ny;
+      this.pos[2 * e.q] = this.pos[2 * e.q]! - nx;
+      this.pos[2 * e.q + 1] = this.pos[2 * e.q + 1]! - ny;
+    }
+
+    const alphaArea = this.params.areaCompliance / h2;
+    for (let t = 0; t < this.tris.length; t += 3) {
+      const a0 = this.restAreas[t / 3]!;
+      if (Math.abs(a0) < 1) continue; // 退化三角形：無可用梯度
+      const ai = this.tris[t]!;
+      const bi = this.tris[t + 1]!;
+      const ci = this.tris[t + 2]!;
+      const ax = this.pos[2 * ai]!;
+      const ay = this.pos[2 * ai + 1]!;
+      const bx = this.pos[2 * bi]!;
+      const by = this.pos[2 * bi + 1]!;
+      const cx = this.pos[2 * ci]!;
+      const cy = this.pos[2 * ci + 1]!;
+      const cVal = 0.5 * ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) - a0;
+      const gax = 0.5 * (by - cy);
+      const gay = 0.5 * (cx - bx);
+      const gbx = 0.5 * (cy - ay);
+      const gby = 0.5 * (ax - cx);
+      const gcx = 0.5 * (ay - by);
+      const gcy = 0.5 * (bx - ax);
+      const denom =
+        gax * gax + gay * gay + gbx * gbx + gby * gby + gcx * gcx + gcy * gcy + alphaArea;
+      const dl = -cVal / denom;
+      this.pos[2 * ai] = ax + gax * dl;
+      this.pos[2 * ai + 1] = ay + gay * dl;
+      this.pos[2 * bi] = bx + gbx * dl;
+      this.pos[2 * bi + 1] = by + gby * dl;
+      this.pos[2 * ci] = cx + gcx * dl;
+      this.pos[2 * ci + 1] = cy + gcy * dl;
+    }
+  }
+
+  /**
    * 每條 Grab／Pin：附著點目前位置 `p = Σ wₖ·xₖ`，誤差 `e = β·(目標 − p)`，位置
    * 修正按權重分回三個 Particle `xₖ += wₖ·e / Σwⱼ²`（β = 1 時一步剛好命中）。
    * Pin（`pinned`）β 恆為 1（ADR-0004），Grab 用 `params.grabBeta`。
@@ -498,6 +579,24 @@ export class SimCore {
       sum += r;
     }
     return { max, avg: this.edges.length ? sum / this.edges.length : 0 };
+  }
+
+  /**
+   * 三角形有號面積比（目前／靜止）的 min / max，掃過所有非退化三角形。
+   * `min ≤ 0` 代表有三角形翻面；靜置時 min = max = 1。
+   */
+  areaStats(): AreaStats {
+    let min = Infinity;
+    let max = -Infinity;
+    const now = this.computeAreas(this.pos);
+    for (let t = 0; t < now.length; t++) {
+      const a0 = this.restAreas[t]!;
+      if (Math.abs(a0) < 1) continue;
+      const r = now[t]! / a0;
+      if (r < min) min = r;
+      if (r > max) max = r;
+    }
+    return min === Infinity ? { min: 1, max: 1 } : { min, max };
   }
 
   /** `0.5 · Σ |vᵢ|²`（單位質量）。收斂看這個 → 0。 */

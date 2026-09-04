@@ -385,3 +385,84 @@ describe('SimCore — Pin', () => {
     expect(allFinite(a)).toBe(true);
   });
 });
+
+/** 把所有 Particle 對質心 (48,48) 水平拉伸、垂直壓成一條近水平線。 */
+function squash(sim: SimCore): void {
+  const p = sim.positions; // 極端初始狀態：測試直接改動內部緩衝（非算繪端）
+  for (let i = 0; i < p.length / 2; i++) {
+    p[2 * i] = 48 + (p[2 * i]! - 48) * 1.5;
+    p[2 * i + 1] = 48 + (p[2 * i + 1]! - 48) * 0.03;
+  }
+}
+
+describe('SimCore — XPBD 細節層', () => {
+  it('開與關：長時間 step + 甩動皆不產生 NaN', () => {
+    for (const xpbd of [true, false]) {
+      const sim = new SimCore(MESH(), { xpbd });
+      fling(sim, 'f', 96, 96, 180, 140);
+      run(sim, 300);
+      expect(allFinite(sim.positions)).toBe(true);
+      expect(Number.isFinite(sim.stretchStats().max)).toBe(true);
+      expect(Number.isFinite(sim.areaStats().min)).toBe(true);
+      expect(Number.isFinite(sim.kineticEnergy())).toBe(true);
+    }
+  });
+
+  it('軟脊椎 + 大幅拖曳：開啟時最小三角面積比明顯高於關閉時', () => {
+    const soft = { alphaSm: 0.2, cellFrac: 0.15 } as const;
+    const drag = (sim: SimCore) => {
+      sim.applyInput({ type: 'grab', id: 'g', x: 0, y: 0 });
+      sim.applyInput({ type: 'moveGrab', id: 'g', x: -200, y: -160 });
+      run(sim, 150);
+    };
+    const on = new SimCore(MESH(), { ...soft, xpbd: true });
+    const off = new SimCore(MESH(), { ...soft, xpbd: false });
+    drag(on);
+    drag(off);
+
+    // 關閉時軟脊椎撐不住 → 靠近把手的三角形塌陷／翻面（min < 0）；
+    // 開啟時 signed-area 約束把它們撐住（min 明顯較高、無翻面）。
+    expect(off.areaStats().min).toBeLessThan(0);
+    expect(on.areaStats().min).toBeGreaterThan(off.areaStats().min + 0.5);
+    expect(on.areaStats().min).toBeGreaterThan(0);
+    expect(allFinite(on.positions)).toBe(true);
+    expect(allFinite(off.positions)).toBe(true);
+  });
+
+  it('壓扁成一條線再 step 數百次 → 邊拉伸比回到 ~1、無殘留翻面', () => {
+    const sim = new SimCore(MESH(), { xpbd: true });
+    squash(sim);
+    run(sim, 400);
+
+    const s = sim.stretchStats();
+    expect(s.avg).toBeGreaterThan(0.9);
+    expect(s.avg).toBeLessThan(1.1);
+    expect(s.max).toBeLessThan(1.5);
+    expect(sim.areaStats().min).toBeGreaterThan(0); // 無殘留翻面
+    expect(sim.kineticEnergy()).toBeLessThan(1e-3);
+  });
+
+  it('硬脊椎下開/關差異很小', () => {
+    const drag = (sim: SimCore) => {
+      sim.applyInput({ type: 'grab', id: 'g', x: 0, y: 0 });
+      sim.applyInput({ type: 'moveGrab', id: 'g', x: -40, y: -40 });
+      run(sim, 90);
+    };
+    const on = new SimCore(MESH(), { xpbd: true }); // 預設 α_sm 0.7、cellFrac 0.15（硬）
+    const off = new SimCore(MESH(), { xpbd: false });
+    drag(on);
+    drag(off);
+
+    expect(Math.abs(on.stretchStats().max - off.stretchStats().max)).toBeLessThan(0.15);
+    expect(Math.abs(on.areaStats().min - off.areaStats().min)).toBeLessThan(0.15);
+  });
+
+  it('靜置時 XPBD 為 no-op（位置不漂移）', () => {
+    const sim = new SimCore(MESH(), { xpbd: true });
+    const before = Float64Array.from(sim.positions);
+    run(sim, 120);
+    for (let i = 0; i < before.length; i++) expect(sim.positions[i]!).toBeCloseTo(before[i]!, 9);
+    expect(sim.areaStats().min).toBeCloseTo(1, 6);
+    expect(sim.areaStats().max).toBeCloseTo(1, 6);
+  });
+});
