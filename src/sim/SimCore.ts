@@ -1,5 +1,5 @@
 /**
- * 模擬核心（T4 / GitHub issue #5）——推進柔體的求解器。
+ * 模擬核心（GitHub issue #5 起）——推進柔體的求解器。
  *
  * 建構時吃 `SimMesh` + 參數；對外只有 `applyInput(event)`、`step(dt)` 與讀出
  * （`positions`、`centroid()`、`bbox()`、`stretchStats()`、`kineticEnergy()`）。
@@ -8,13 +8,14 @@
  * `substeps` 個 substep 往前推。
  *
  * 每個 substep（藍本：`prototypes/shape-matching-feel.prototype.html` 的
- * `<script id="jelly-core">`；XPBD 細節層屬 issue #7、Pin 屬 #6、Tap 屬 #8、
- * Boundary 屬 #9，都不在 T4）：
+ * `<script id="jelly-core">`；XPBD 細節層屬 issue #7、Tap 屬 #8、Boundary 屬 #9，
+ * 尚未實作）：
  *   1. 預測：symplectic Euler、無重力、無外力（所有 Particle 一視同仁）。
  *   2. shape-matching 脊椎：重疊方格 lattice 的每個 Region 做 2×2 polar
  *      decomposition 取旋轉 → goal → `x += α_sm·(g − x)`。
- *   3. Grab 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心權重
- *      分回三個 Particle（ADR-0003）。放在 shape matching 之後。
+ *   3. Grab / Pin 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心
+ *      權重分回三個 Particle（ADR-0003）。Pin = 目標點凍結、β 恆 1 的 Grab
+ *      （ADR-0004）。多條依序解，天然共存。放在 shape matching 之後。
  *   4. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
  *
  * picking（世界座標 → 三角形 + 重心座標）暫時放在這裡（藍本 jelly-core 也是），
@@ -33,11 +34,16 @@ import {
   type StretchStats,
 } from './types';
 
-/** 一條作用中的 Grab 軟約束。附著點 = 三角形 `tri` 上的重心座標 `w`，追向 `target`。 */
+/**
+ * 一條作用中的位置約束。附著點 = 三角形 `tri` 上的重心座標 `w`，追向 `target`。
+ * `locked` = false 是 Grab（`target` 跟指標更新、硬度用 `params.grabBeta`）；
+ * `locked` = true 是 Pin（`target` 凍結、β 恆為 1 絕對硬鎖，見 ADR-0004）。
+ */
 interface Grab {
   tri: readonly [number, number, number];
   w: readonly [number, number, number];
   target: Point;
+  locked: boolean;
 }
 
 /** 一個 shape-matching Region：成員 Particle 索引 + 其相對 Region 靜止質心的座標。 */
@@ -181,7 +187,16 @@ export class SimCore {
 
   // ---- input ------------------------------------------------------------------
 
-  /** 唯一的輸入介面（ADR-0005）。T4 支援 `grab` / `moveGrab` / `release`。 */
+  /**
+   * 唯一的輸入介面（ADR-0005）。支援 `grab` / `moveGrab` / `release`（T4）與
+   * `pin` / `unpin` / `movePin`（T5）。
+   *
+   * - `pin` 帶 `(x, y)`：在該世界座標 picking 出附著點、直接建立硬鎖約束。
+   * - `pin` 不帶座標：把該 `id` 既有的 Grab 就地凍結成 Pin（目標點移到目前附著點
+   *   → 不跳動）。該 `id` 沒有 Grab 時 no-op。
+   * - `release` 只解除未鎖的 Grab；Pin 要用 `unpin`（用力甩、Tap 都拔不掉）。
+   * - `moveGrab` 不影響已鎖的 Pin。
+   */
   applyInput(event: InputEvent): void {
     switch (event.type) {
       case 'grab':
@@ -189,26 +204,63 @@ export class SimCore {
         break;
       case 'moveGrab': {
         const g = this.grabs.get(event.id);
-        if (g) {
+        if (g && !g.locked) {
           g.target.x = event.x;
           g.target.y = event.y;
         }
         break;
       }
-      case 'release':
-        this.grabs.delete(event.id);
+      case 'release': {
+        const g = this.grabs.get(event.id);
+        if (g && !g.locked) this.grabs.delete(event.id);
         break;
+      }
+      case 'pin': {
+        if (event.x !== undefined && event.y !== undefined) {
+          this.doGrab(event.id, event.x, event.y, event.radius ?? this.restDiag * 0.1);
+        }
+        const g = this.grabs.get(event.id);
+        if (g) {
+          const a = this.weightedPoint(g);
+          g.target.x = a.x;
+          g.target.y = a.y;
+          g.locked = true;
+        }
+        break;
+      }
+      case 'unpin': {
+        const g = this.grabs.get(event.id);
+        if (g?.locked) this.grabs.delete(event.id);
+        break;
+      }
+      case 'movePin': {
+        const g = this.grabs.get(event.id);
+        if (g?.locked) {
+          g.target.x = event.x;
+          g.target.y = event.y;
+        }
+        break;
+      }
     }
   }
 
-  /** 目前作用中的 Grab 數。 */
+  /** 目前作用中、未鎖定的 Grab 數。 */
   get grabCount(): number {
-    return this.grabs.size;
+    let count = 0;
+    for (const g of this.grabs.values()) if (!g.locked) count++;
+    return count;
+  }
+
+  /** 目前作用中的 Pin（已鎖定 Grab）數。 */
+  get pinCount(): number {
+    let count = 0;
+    for (const g of this.grabs.values()) if (g.locked) count++;
+    return count;
   }
 
   /**
-   * 某個 Grab 附著點目前的世界座標（隨網格變形移動），供算繪畫把手、或測試斷言
-   * 收斂用。該 `id` 沒有作用中的 Grab 時回傳 `null`。
+   * 某個 Grab／Pin 附著點目前的世界座標（隨網格變形移動），供算繪畫把手、或測試
+   * 斷言收斂用。該 `id` 沒有作用中的約束時回傳 `null`。
    */
   attachPoint(id: PointerId): Point | null {
     const g = this.grabs.get(id);
@@ -217,9 +269,10 @@ export class SimCore {
   }
 
   /**
-   * Picking：找出包含 `(x, y)` 的三角形，記重心座標當附著點。按下當下
-   * 目標點 = 附著點 → 誤差 0 → 不會一按就動（ADR-0003）。點落在所有三角形外時，
-   * 退回 `radius` 內最近的 Particle（重心權重 `(1, 0, 0)`）。都沒有則 no-op。
+   * Picking：找出包含 `(x, y)` 的三角形，記重心座標當附著點，建立一條未鎖的
+   * Grab。按下當下 目標點 = 附著點 → 誤差 0 → 不會一按就動（ADR-0003）。點落在
+   * 所有三角形外時，退回 `radius` 內最近的 Particle（重心權重 `(1, 0, 0)`）。
+   * 都沒有則 no-op。`pin` 事件借用它建點、再把 `locked` 翻成 true。
    */
   private doGrab(id: PointerId, x: number, y: number, radius: number): void {
     for (let t = 0; t < this.tris.length; t += 3) {
@@ -238,7 +291,7 @@ export class SimCore {
       const w1 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / det;
       const w2 = 1 - w0 - w1;
       if (w0 >= -0.02 && w1 >= -0.02 && w2 >= -0.02) {
-        this.grabs.set(id, { tri: [a, b, c], w: [w0, w1, w2], target: { x, y } });
+        this.grabs.set(id, { tri: [a, b, c], w: [w0, w1, w2], target: { x, y }, locked: false });
         return;
       }
     }
@@ -253,7 +306,14 @@ export class SimCore {
         best = i;
       }
     }
-    if (best >= 0) this.grabs.set(id, { tri: [best, best, best], w: [1, 0, 0], target: { x, y } });
+    if (best >= 0) {
+      this.grabs.set(id, {
+        tri: [best, best, best],
+        w: [1, 0, 0],
+        target: { x, y },
+        locked: false,
+      });
+    }
   }
 
   private weightedPoint(g: Grab): Point {
@@ -365,13 +425,14 @@ export class SimCore {
   }
 
   /**
-   * 每個 Grab：附著點目前位置 `p = Σ wₖ·xₖ`，誤差 `e = β·(目標 − p)`，位置修正
-   * 按權重分回三個 Particle `xₖ += wₖ·e / Σwⱼ²`（β = 1 時一步剛好命中）。
-   * Multi-grab = 依序解，天然共存。
+   * 每條 Grab／Pin：附著點目前位置 `p = Σ wₖ·xₖ`，誤差 `e = β·(目標 − p)`，位置
+   * 修正按權重分回三個 Particle `xₖ += wₖ·e / Σwⱼ²`（β = 1 時一步剛好命中）。
+   * Pin（`locked`）β 恆為 1（絕對硬鎖，ADR-0004），Grab 用 `params.grabBeta`。
+   * Multi-grab / 多 Pin = 依序解，天然共存。
    */
   private solveGrabs(): void {
-    const beta = this.params.grabBeta;
     for (const g of this.grabs.values()) {
+      const beta = g.locked ? 1 : this.params.grabBeta;
       const [i0, i1, i2] = g.tri;
       const [w0, w1, w2] = g.w;
       const p = this.weightedPoint(g);

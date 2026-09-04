@@ -1,9 +1,10 @@
 /**
- * 模擬核心（T4 / GitHub issue #5）的型別。
+ * 模擬核心（issue #5 / #6…）的型別。
  *
  * 求解器與 DOM／算繪無關，只吃 `SimMesh` + 參數、吐 Particle 位置與少數統計讀出。
- * 所有會影響模擬的輸入都走單一窄介面 `applyInput(event)`（ADR-0005）；T4 只實作
- * `grab` / `moveGrab` / `release`，`pin` / `tap` / … 由後續 ticket 擴充這個聯集。
+ * 所有會影響模擬的輸入都走單一窄介面 `applyInput(event)`（ADR-0005）；T4 實作
+ * `grab` / `moveGrab` / `release`，T5 加 `pin` / `unpin` / `movePin`，`tap` /
+ * `cameraMove` 由後續 ticket 擴充這個聯集。
  */
 
 import type { Point } from '../mesh';
@@ -14,17 +15,27 @@ export type { Point };
 export type PointerId = number | string;
 
 /**
- * `applyInput` 接受的事件。T4 範圍：
+ * `applyInput` 接受的事件。`id` 是指標／約束識別碼；Grab 與 Pin 共用同一個 `id`
+ * 命名空間（一條約束在其生命期內 id 不變）。
+ *
  * - `grab`：在世界座標 `(x, y)` 抓住 Jelly 表面那一點（picking → 三角形 + 重心座標）。
  *   `radius` 是「點落在所有三角形外」時退回吸附最近 Particle 的搜尋半徑；預設 =
  *   靜止 bbox 對角線 × 0.1。半徑內沒有 Particle → 整個 grab 為 no-op（ADR-0003）。
- * - `moveGrab`：更新既有 Grab 的目標點。找不到該 `id` 時 no-op。
- * - `release`：解除該 `id` 的 Grab。被抓的 Particle 本身帶著拖曳速度 → 放開即是 Fling。
+ * - `moveGrab`：更新既有（未鎖）Grab 的目標點。找不到／已鎖時 no-op。
+ * - `release`：解除該 `id` 的 Grab。**不會**解除 Pin（要用 `unpin`）。被抓的
+ *   Particle 本身帶著拖曳速度 → 放開即是 Fling。
+ * - `pin`：建立／轉成 Pin（目標點凍結、絕對硬鎖，ADR-0004）。帶 `(x, y)` = 在該
+ *   座標 picking 建立；不帶座標 = 把該 `id` 既有的 Grab 就地凍結（不跳動）。
+ * - `unpin`：解除該 `id` 的 Pin（未鎖的 Grab 不受影響）。
+ * - `movePin`：把該 `id` 的 Pin 鎖定點移到 `(x, y)` 並在該處重新硬鎖。
  */
 export type InputEvent =
   | { type: 'grab'; id: PointerId; x: number; y: number; radius?: number }
   | { type: 'moveGrab'; id: PointerId; x: number; y: number }
-  | { type: 'release'; id: PointerId };
+  | { type: 'release'; id: PointerId }
+  | { type: 'pin'; id: PointerId; x?: number; y?: number; radius?: number }
+  | { type: 'unpin'; id: PointerId }
+  | { type: 'movePin'; id: PointerId; x: number; y: number };
 
 /** 求解器的手感參數。全部有預設值，建構時可只帶想改的欄位。 */
 export interface SimParams {
