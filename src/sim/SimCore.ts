@@ -8,8 +8,7 @@
  * `substeps` 個 substep 往前推。
  *
  * `tap` 是一次性向內脈衝（不進 substep 迴圈，直接改速度）。每個 substep（藍本：
- * `prototypes/shape-matching-feel.prototype.html` 的 `<script id="jelly-core">`；
- * Boundary 屬 issue #9，尚未實作）：
+ * `prototypes/shape-matching-feel.prototype.html` 的 `<script id="jelly-core">`）：
  *   1. 預測：symplectic Euler、無重力、無外力（所有 Particle 一視同仁）。
  *   2. shape-matching 脊椎：重疊方格 lattice 的每個 Region 做 2×2 polar
  *      decomposition 取旋轉 → goal → `x += α_sm·(g − x)`。
@@ -20,7 +19,8 @@
  *      權重分回三個 Particle（ADR-0003）。Pin = 目標點凍結、β 恆 1 的 Grab
  *      （ADR-0004）。多條依序解、每 substep 一次；孤立 Pin 逐幀看幾乎不動，
  *      共用 Particle 的密集 Pin 群仍會被下一 substep 的 shape matching 微擾。
- *   5. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
+ *   5. Boundary（`setBoundary`，可換）：clamp 進 Walled AABB／Infinite no-op。
+ *   6. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
  *
  * picking（世界座標 → 三角形 + 重心座標）暫時放在這裡（藍本 jelly-core 也是），
  * 未來 Input layer（issue #11）接手後改由它命中、只餵求解器 `{三角形, 重心座標,
@@ -28,6 +28,7 @@
  */
 
 import type { SimMesh } from '../mesh';
+import { type Boundary, InfiniteBoundary } from './boundary';
 import {
   DEFAULT_SIM_PARAMS,
   type AreaStats,
@@ -105,6 +106,8 @@ export class SimCore {
   /** 作用中的 Grab / Pin，鍵為輸入 `id`（Grab 與 Pin 共用命名空間）。 */
   private readonly constraints = new Map<PointerId, Constraint>();
   private regions: Region[] = [];
+  /** 可替換的碰撞環境。預設無牆；`setBoundary` 可執行期替換，不需重建求解器。 */
+  private boundary: Boundary = new InfiniteBoundary();
 
   // shape-matching goal 累加器（每 substep 重用，免得每步配置）。
   private readonly goalX: Float64Array;
@@ -233,6 +236,11 @@ export class SimCore {
       }
     }
     this.regions = regions;
+  }
+
+  /** 替換碰撞環境（`WalledBoundary` / `InfiniteBoundary`）。執行期可隨時呼叫。 */
+  setBoundary(boundary: Boundary): void {
+    this.boundary = boundary;
   }
 
   // ---- input ------------------------------------------------------------------
@@ -433,7 +441,9 @@ export class SimCore {
       if (this.params.xpbd) this.solveXpbd(h);
       // 4. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
       this.solveConstraints();
-      // 5. 回推速度 + 全域阻尼。
+      // 5. Boundary：clamp 進邊界、調 prev 讓回推速度不指向界外（Infinite 為 no-op）。
+      this.boundary.resolveBoundary(this.pos, this.prev, this.n, h);
+      // 6. 回推速度 + 全域阻尼。
       for (let i = 0; i < this.n; i++) {
         this.vel[2 * i] = ((this.pos[2 * i]! - this.prev[2 * i]!) / h) * keep;
         this.vel[2 * i + 1] = ((this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h) * keep;

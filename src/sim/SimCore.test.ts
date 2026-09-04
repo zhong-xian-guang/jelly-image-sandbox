@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SimMesh } from '../mesh';
+import { InfiniteBoundary, WalledBoundary } from './boundary';
 import { SimCore } from './SimCore';
 import type { InputEvent } from './types';
 
@@ -517,6 +518,100 @@ describe('SimCore — Tap', () => {
       run(sim, 20);
       sim.applyInput({ type: 'tap', x: 60, y: 44, strength: 9000 });
       run(sim, 20);
+      return Array.from(sim.positions);
+    };
+    expect(play()).toEqual(play());
+  });
+});
+
+describe('SimCore — Boundary', () => {
+  /** 抓右緣一點把整塊 Jelly 甩向 −X（`reach` = 每幀左移量），然後放開。 */
+  function flingLeft(sim: SimCore, reach = 90): void {
+    sim.applyInput({ type: 'grab', id: 'f', x: 96, y: 48 });
+    for (let step = 1; step <= 8; step++) {
+      sim.applyInput({ type: 'moveGrab', id: 'f', x: 96 - reach * step, y: 48 });
+      sim.step(1 / 60);
+    }
+    sim.applyInput({ type: 'release', id: 'f' });
+  }
+
+  const minX = (sim: SimCore) => sim.bbox().minX;
+  const minParticleX = (sim: SimCore) => {
+    let m = Infinity;
+    for (let i = 0; i < sim.positions.length; i += 2)
+      if (sim.positions[i]! < m) m = sim.positions[i]!;
+    return m;
+  };
+
+  it('Walled：甩向牆 → Particle 全程不越界、撞到牆、收斂', () => {
+    const wall = -20;
+    const sim = new SimCore(MESH());
+    sim.setBoundary(new WalledBoundary({ minX: wall, minY: -400, maxX: 400, maxY: 400 }));
+
+    flingLeft(sim, 22); // 較溫和：確保撞牆而非把約束撐爆
+    let reachedWall = false;
+    for (let f = 0; f < 240; f++) {
+      sim.step(1 / 60);
+      expect(minParticleX(sim)).toBeGreaterThanOrEqual(wall - 1e-6); // 全程不滲牆
+      if (minParticleX(sim) <= wall + 1) reachedWall = true;
+    }
+    expect(reachedWall).toBe(true); // 確實有甩到牆
+    expect(sim.kineticEnergy()).toBeLessThan(1); // 向外動量被牆吸收 → 收斂
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('Walled：桌面比 Jelly 窄 → Jelly 被擠壓進盒內', () => {
+    const sim = new SimCore(MESH()); // rest x ∈ [0, 96]
+    const restWidth = sim.bbox().maxX - sim.bbox().minX;
+    const boxW = 60;
+    sim.setBoundary(new WalledBoundary({ minX: 10, minY: -400, maxX: 10 + boxW, maxY: 400 }));
+    run(sim, 180);
+
+    const width = sim.bbox().maxX - sim.bbox().minX;
+    expect(width).toBeLessThanOrEqual(boxW + 1e-6); // 塞得進盒子
+    expect(width).toBeLessThan(restWidth * 0.9); // 明顯被擠壓
+    for (let i = 0; i < sim.positions.length; i += 2) {
+      const x = sim.positions[i]!;
+      expect(x).toBeGreaterThanOrEqual(10 - 1e-6);
+      expect(x).toBeLessThanOrEqual(10 + boxW + 1e-6);
+    }
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('Infinite：Jelly 可被甩到任意遠、位置不受限', () => {
+    const sim = new SimCore(MESH()); // 預設 Infinite
+    flingLeft(sim);
+    run(sim, 120);
+    expect(minX(sim)).toBeLessThan(-300); // 飛出去很遠，沒有牆擋
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('執行期切換 Walled ⇄ Infinite：不重建求解器、不爆炸', () => {
+    const sim = new SimCore(MESH());
+    sim.setBoundary(new WalledBoundary({ minX: -30, minY: -300, maxX: 300, maxY: 300 }));
+    flingLeft(sim);
+    run(sim, 60);
+    expect(minX(sim)).toBeGreaterThanOrEqual(-30 - 1e-6);
+
+    sim.setBoundary(new InfiniteBoundary()); // 切成無牆
+    flingLeft(sim);
+    run(sim, 120);
+    expect(minX(sim)).toBeLessThan(-200); // 現在飛得出去
+
+    sim.setBoundary(new WalledBoundary({ minX: -30, minY: -300, maxX: 300, maxY: 300 }));
+    run(sim, 120); // 已在界外 → 被拉回牆內，無 NaN
+    expect(minX(sim)).toBeGreaterThanOrEqual(-30 - 1e-6);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('決定性：含 setBoundary 的事件流兩次跑結果完全相等', () => {
+    const play = (): number[] => {
+      const sim = new SimCore(MESH());
+      sim.setBoundary(new WalledBoundary({ minX: -40, minY: -200, maxX: 200, maxY: 200 }));
+      flingLeft(sim);
+      run(sim, 40);
+      sim.setBoundary(new InfiniteBoundary());
+      run(sim, 40);
       return Array.from(sim.positions);
     };
     expect(play()).toEqual(play());
