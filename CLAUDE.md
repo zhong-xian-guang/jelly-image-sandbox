@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 目前狀態
 
-截至 2026-09-02：技術棧與物理／網格架構已定案（見下方「技術棧」與 `docs/adr/`），但 `src/` 尚無程式碼、專案骨架（`package.json`、Vite 設定）尚未建立。**目前沒有可運作的 build / lint / test 指令，請勿自行杜撰**；骨架建立後把實際指令補到「技術棧」節。本檔記錄產品構想與設計限制。
+截至 2026-09-04：技術棧與物理／網格架構已定案（見下方「技術棧」與 `docs/adr/`）。專案骨架（Vite + TypeScript + Vitest，Issue #2 / T1）已建立——`npm run dev` / `build` / `test` 可用，實際指令見下方「技術棧」節。`src/` 目前只有掛載點（`src/mount.ts`）與一支 placeholder 測試；模擬核心、網格管線、算繪等模組尚未動工（見 Issue #3 起）。本檔記錄產品構想與設計限制。
 
 ## 產品概念
 
@@ -42,7 +42,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **網格生成** — 手刻 marching squares 描 Contour → `simplify-js`（MIT）→ `cdt2d`（MIT）CDT + 手刻 Ruppert 細化。**不可**用 Shewchuk Triangle／JIGSAW（禁付費商業散布）、CGAL Mesh_2（GPL）、`MarchingSquares.js`（AGPL）。
 - **算繪** — WebGL 每頂點 UV 三角網格（PixiJS `Mesh` 或自寫 shader）。不用 Canvas 2D 逐三角 `drawImage`。
 
-build / dev / test 指令：待專案骨架建立後補上。
+指令（骨架見 `package.json`）：
+
+- `npm run dev` — Vite 開發伺服器（目前是空白掛載頁）。
+- `npm run build` — 先 `tsc --noEmit`（strict）再 `vite build`，產出自包含的 `dist/index.html`（JS/CSS 全部內聯，可直接用 `file://` 開，避開瀏覽器對 module script 的 CORS 限制）。
+- `npm run preview` — 本機預覽 `dist/`。
+- `npm test` — Vitest 一次性跑；`npm run test:watch` 為 watch 模式。
+- `npm run typecheck` — 只做 `tsc --noEmit`。
+- `npm run format` / `npm run format:check` — Prettier。
+
+沒有 lint 步驟（`tsc` strict + Prettier 已涵蓋）。發佈：把 `dist/` 打包成 zip 上傳 itch.io。
 
 ## 給第一位實作者的架構筆記
 

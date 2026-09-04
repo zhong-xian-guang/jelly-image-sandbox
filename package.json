@@ -1,0 +1,28 @@
+{
+  "name": "jelly-image-sandbox",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "物理模擬的網頁果凍沙盒，發佈為 itch.io 靜態包。",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3",
+    "vite": "^7.0.6",
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^3.2.4"
+  }
+}

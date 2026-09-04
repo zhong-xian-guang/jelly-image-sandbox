@@ -1,0 +1,8 @@
+dist
+node_modules
+prototypes
+
+# 既有的說明文件與 ADR 走人工排版，不交給 Prettier。
+docs
+CLAUDE.md
+CONTEXT.md
