@@ -1,56 +1,77 @@
 /**
- * `JellySandbox`（issue #11 / T10）——第一個能玩的組裝：
- * `SimCore`（模擬）+ `JellyRenderer`（算繪）+ `PointerInput`（輸入）+ 固定步主迴圈。
+ * `JellySandbox`（issue #11 / T10，issue #13 / T12 接入 Camera）——第一個能玩的組裝：
+ * `SimCore`（模擬）+ `JellyRenderer`（算繪）+ `PointerInput`（輸入）+ `CameraInput`
+ * （相機手動輸入）+ 固定步主迴圈。
  *
  * 主迴圈用 `FixedStepAccumulator`（+ 250ms clamp）把真實時間切成 60Hz 固定步推進
- * 求解器，每幀從求解器讀 `positions` 交給 Renderer 重繪。所有影響模擬的輸入都經
- * `PointerInput` → `sim.applyInput`，這裡不繞過（ADR-0005）。
+ * 求解器；每幀再用**真實**幀時距（clamp 到 100ms）呼叫純函式 `updateCamera` 推進
+ * 相機（平滑是視覺的、不進物理）。所有影響模擬的輸入都經 `PointerInput` →
+ * `sim.applyInput`；所有相機手動輸入都經 `CameraInput` → 收集成 `CameraCommand[]`
+ * 每幀餵給 `updateCamera`（ADR-0005：兩條輸入流都不繞過各自的窄介面）。
  *
- * Camera 尚未實作（T12）——暫用「一次性 fit 到 Jelly 靜止 bbox」的固定變換，
- * resize 時重算。
+ * picking／算繪都吃 `cameraState.transform`——相機平移／縮放後仍命中正確的表面點。
  */
 
+import {
+  CameraInput,
+  type CameraCommand,
+  type CameraState,
+  createCameraState,
+  screenToWorld,
+  updateCamera,
+} from '../camera';
 import { PointerInput } from '../input';
-import { JellyRenderer, type CameraTransform, screenToWorld } from '../render';
-import { type Bbox, SimCore } from '../sim';
+import { JellyRenderer } from '../render';
+import { SimCore } from '../sim';
 import { createDefaultJelly } from './defaultJelly';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 
 const STEP_SECONDS = 1 / 60;
-const FIT_MARGIN_PX = 80;
+/** 相機平滑用的單幀時距上限（分頁切回來不會讓相機瞬移）。 */
+const CAMERA_MAX_DT = 0.1;
 
 export class JellySandbox {
   private readonly sim: SimCore;
   private readonly renderer: JellyRenderer;
   private readonly input: PointerInput;
+  private readonly cameraInput: CameraInput;
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
   private readonly root: HTMLElement;
-  /** Jelly 靜止 bbox（fit 用）。 */
-  private readonly restBounds: Bbox;
-  /** T12 Camera 之前的暫代變換；`fit()` 會改 `scale`。 */
-  private readonly camera: CameraTransform;
+
+  private cameraState: CameraState;
+  /** `CameraInput` 逐事件塞入，主迴圈每幀取出餵 `updateCamera` 後清空。 */
+  private cameraCommands: CameraCommand[] = [];
 
   private rafId = 0;
   private lastFrameMs = 0;
 
-  private constructor(root: HTMLElement, sim: SimCore, renderer: JellyRenderer, restBounds: Bbox) {
+  private constructor(
+    root: HTMLElement,
+    sim: SimCore,
+    renderer: JellyRenderer,
+    cameraState: CameraState,
+  ) {
     this.root = root;
     this.sim = sim;
     this.renderer = renderer;
-    this.restBounds = restBounds;
-    this.camera = {
-      x: (restBounds.minX + restBounds.maxX) / 2,
-      y: (restBounds.minY + restBounds.maxY) / 2,
-      scale: 1,
-    };
+    this.cameraState = cameraState;
+
+    const project = (sx: number, sy: number) =>
+      screenToWorld(this.cameraState.transform, this.canvasSize(), sx, sy);
+    const hitTest = (world: { x: number; y: number }) => this.sim.pick(world.x, world.y) != null;
 
     this.input = new PointerInput(renderer.canvas, {
-      screenToWorld: (sx, sy) =>
-        screenToWorld(this.camera, this.root.clientWidth, this.root.clientHeight, sx, sy),
+      screenToWorld: project,
+      hitTest,
       applyInput: (event) => this.sim.applyInput(event),
     });
+    this.cameraInput = new CameraInput(renderer.canvas, {
+      screenToWorld: project,
+      hitTest,
+      emit: (cmd) => this.cameraCommands.push(cmd),
+    });
 
-    this.fit();
+    this.renderer.setCamera(this.cameraState.transform);
     window.addEventListener('resize', this.onResize);
   }
 
@@ -58,7 +79,6 @@ export class JellySandbox {
   static async create(root: HTMLElement): Promise<JellySandbox> {
     const { mesh, texture } = createDefaultJelly();
     const sim = new SimCore(mesh);
-    const restBounds = sim.bbox(); // 建構當下 current == rest
 
     const renderer = await JellyRenderer.create({
       width: root.clientWidth,
@@ -70,7 +90,14 @@ export class JellySandbox {
     });
     root.appendChild(renderer.canvas);
 
-    return new JellySandbox(root, sim, renderer, restBounds);
+    const cameraState = createCameraState(
+      { centroid: sim.centroid(), bbox: sim.bbox() },
+      {
+        width: root.clientWidth,
+        height: root.clientHeight,
+      },
+    );
+    return new JellySandbox(root, sim, renderer, cameraState);
   }
 
   start(): void {
@@ -88,32 +115,50 @@ export class JellySandbox {
     this.stop();
     window.removeEventListener('resize', this.onResize);
     this.input.destroy();
+    this.cameraInput.destroy();
     this.renderer.destroy();
   }
 
+  /** 「鎖定跟隨」開關（issue #14 控制面板接這裡）——關掉自動跟隨，手動仍可動。 */
+  setFollowLock(locked: boolean): void {
+    this.cameraCommands.push({ type: 'setFollow', enabled: !locked });
+  }
+
+  /** 「框住果凍」按鈕（issue #14）——一次性緩動 fit 當前 bbox 後恢復跟隨。 */
+  frameJelly(): void {
+    this.cameraCommands.push({ type: 'frame' });
+  }
+
   private frame = (nowMs: number): void => {
-    const steps = this.accumulator.advance((nowMs - this.lastFrameMs) / 1000);
+    const elapsed = (nowMs - this.lastFrameMs) / 1000;
     this.lastFrameMs = nowMs;
+
+    const steps = this.accumulator.advance(elapsed);
     for (let i = 0; i < steps; i++) this.sim.step(STEP_SECONDS);
 
+    const cmds = this.cameraCommands;
+    this.cameraCommands = [];
+    this.cameraState = updateCamera(
+      this.cameraState,
+      { centroid: this.sim.centroid(), bbox: this.sim.bbox() },
+      this.canvasSize(),
+      cmds,
+      Math.min(Math.max(elapsed, 0), CAMERA_MAX_DT),
+    );
+
     this.renderer.setPositions(this.sim.positions);
+    this.renderer.setCamera(this.cameraState.transform);
     this.renderer.render();
 
     this.rafId = requestAnimationFrame(this.frame);
   };
 
-  private onResize = (): void => this.fit();
+  private onResize = (): void => {
+    // 畫布尺寸交給 Renderer；相機下一幀的 `updateCamera` 會用新畫布尺寸重新 fit。
+    this.renderer.resize(this.root.clientWidth, this.root.clientHeight);
+  };
 
-  /** 把 Jelly 靜止 bbox 縮放置中進畫布（T12 Camera 之前的暫代）。 */
-  private fit(): void {
-    const w = this.root.clientWidth;
-    const h = this.root.clientHeight;
-    this.renderer.resize(w, h);
-    const { minX, minY, maxX, maxY } = this.restBounds;
-    this.camera.scale = Math.min(
-      (w - FIT_MARGIN_PX) / Math.max(maxX - minX, 1),
-      (h - FIT_MARGIN_PX) / Math.max(maxY - minY, 1),
-    );
-    this.renderer.setCamera(this.camera);
+  private canvasSize(): { width: number; height: number } {
+    return { width: this.root.clientWidth, height: this.root.clientHeight };
   }
 }

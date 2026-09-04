@@ -38,6 +38,7 @@ import {
   type PointerId,
   type SimParams,
   type StretchStats,
+  type SurfacePoint,
 } from './types';
 
 /**
@@ -333,12 +334,13 @@ export class SimCore {
   }
 
   /**
-   * Picking：找出包含 `(x, y)` 的三角形，記重心座標當附著點，建立一條未鎖的
-   * Grab。按下當下 目標點 = 附著點 → 誤差 0 → 不會一按就動（ADR-0003）。點落在
-   * 所有三角形外時，退回 `radius` 內最近的 Particle（重心權重 `(1, 0, 0)`）。
-   * 回傳是否建立了約束——`pin` 事件靠它判斷 pick 是否命中。
+   * 嚴格 picking：回傳包含世界座標 `(x, y)` 的三角形 + 重心座標（第一個命中的）。
+   * 落在所有三角形外回 `null`。**不含**「退回最近 Particle」的吸附——那是 Grab
+   * 專屬的退路。輸入層用它判定「指標是否落在 Jelly 上」（見 `docs/design/`
+   * 模組邊界）。讀的是目前變形後的位置，所以相機平移／縮放不影響命中（換算在
+   * 輸入層做）。
    */
-  private doGrab(id: PointerId, x: number, y: number, radius: number): boolean {
+  pick(x: number, y: number): SurfacePoint | null {
     for (let t = 0; t < this.tris.length; t += 3) {
       const a = this.tris[t]!;
       const b = this.tris[t + 1]!;
@@ -355,14 +357,28 @@ export class SimCore {
       const w1 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / det;
       const w2 = 1 - w0 - w1;
       if (w0 >= -0.02 && w1 >= -0.02 && w2 >= -0.02) {
-        this.constraints.set(id, {
-          tri: [a, b, c],
-          w: [w0, w1, w2],
-          target: { x, y },
-          pinned: false,
-        });
-        return true;
+        return { tri: [a, b, c], w: [w0, w1, w2] };
       }
+    }
+    return null;
+  }
+
+  /**
+   * Picking → 建立一條未鎖的 Grab。命中三角形就用它的重心座標當附著點；按下當下
+   * 目標點 = 附著點 → 誤差 0 → 不會一按就動（ADR-0003）。點落在所有三角形外時，
+   * 退回 `radius` 內最近的 Particle（重心權重 `(1, 0, 0)`）。回傳是否建立了約束
+   * ——`pin` 事件靠它判斷 pick 是否命中。
+   */
+  private doGrab(id: PointerId, x: number, y: number, radius: number): boolean {
+    const hit = this.pick(x, y);
+    if (hit) {
+      this.constraints.set(id, {
+        tri: [hit.tri[0], hit.tri[1], hit.tri[2]],
+        w: [hit.w[0], hit.w[1], hit.w[2]],
+        target: { x, y },
+        pinned: false,
+      });
+      return true;
     }
     let best = -1;
     let bestD = radius * radius;

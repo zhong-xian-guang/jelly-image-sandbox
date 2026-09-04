@@ -2,9 +2,10 @@
  * 模擬核心（issue #5 / #6…）的型別。
  *
  * 求解器與 DOM／算繪無關，只吃 `SimMesh` + 參數、吐 Particle 位置與少數統計讀出。
- * 所有會影響模擬的輸入都走單一窄介面 `applyInput(event)`（ADR-0005）；T4 實作
- * `grab` / `moveGrab` / `release`，T5 加 `pin` / `unpin` / `movePin`，`tap` /
- * `cameraMove` 由後續 ticket 擴充這個聯集。
+ * 所有會影響模擬的輸入都走單一窄介面 `applyInput(event)`（ADR-0005）：T4 實作
+ * `grab` / `moveGrab` / `release`，T5 加 `pin` / `unpin` / `movePin`，T7 加 `tap`。
+ * 相機**不**進求解器——手動相機輸入是另一條獨立的流（`CameraCommand`，見
+ * `src/camera/`）；v2 錄製器在外層把兩條流併起來錄放。
  */
 
 import type { Point } from '../mesh';
@@ -81,6 +82,15 @@ export const DEFAULT_SIM_PARAMS: SimParams = {
   areaCompliance: 3e-3,
   tapStrength: 6000,
 };
+
+/**
+ * Jelly 表面上的一點：`tri`（三個 Particle 索引）+ 重心座標 `w`（和為 1）。
+ * `pick(x, y)` 的回傳；輸入層拿它去建 Grab／Pin，或當作「指標是否落在 Jelly 上」的判定。
+ */
+export interface SurfacePoint {
+  tri: readonly [number, number, number];
+  w: readonly [number, number, number];
+}
 
 /** 軸對齊包圍盒（世界座標）。 */
 export interface Bbox {

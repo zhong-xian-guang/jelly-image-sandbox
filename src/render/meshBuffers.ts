@@ -1,10 +1,16 @@
 /**
  * Renderer 的純資料層（issue #10 / T9）。把 Texture mesh 的靜態拓撲（`uv`、
  * `indices`）與每幀變動的頂點 `positions` 轉成 PixiJS `MeshGeometry` 需要的三個
- * typed array，並提供 Camera 變換的正／逆換算。無 DOM、無 WebGL——可 headless 測試。
+ * typed array，並把 Camera 變換換成 Pixi container 的 position。無 DOM、無
+ * WebGL——可 headless 測試。世界↔螢幕的投影公式本身歸 `src/camera/project.ts`
+ * 管（全專案只此一份），這裡只是 Pixi 特定的薄轉接。
  */
 
+import { worldToScreen } from '../camera/project';
+import type { CameraTransform } from '../camera/types';
 import type { SimMesh } from '../mesh';
+
+export type { CameraTransform };
 
 /** Renderer 只需要 `SimMesh` 的這一部分——不碰 `positions` / `restAreas`。 */
 export type TextureMesh = Pick<SimMesh, 'uv' | 'indices'>;
@@ -17,13 +23,6 @@ export interface TextureBuffers {
   uvs: Float32Array;
   /** 三角形頂點索引，靜態，= `SimMesh.indices`。 */
   indices: Uint32Array;
-}
-
-/** Camera 吐出的世界→螢幕變換（見 `docs/design/simulation-and-mesh.md` 模組邊界）。 */
-export interface CameraTransform {
-  x: number;
-  y: number;
-  scale: number;
 }
 
 /**
@@ -82,31 +81,13 @@ export function writePositions(target: Float32Array, positions: ArrayLike<number
 }
 
 /**
- * PixiJS 容器變換：世界→螢幕為 `screen = (world − camera) · scale + 畫布中心`。
- * 換算成 container 的 `position`（scale 直接用 `camera.scale`）。
+ * PixiJS 容器的 `position`：世界原點投影到螢幕的位置（scale 直接用 `camera.scale`，
+ * Pixi container 自己的 `scale` 屬性設那個）。就是 `worldToScreen(camera, …, 0, 0)`。
  */
 export function containerPosition(
   camera: CameraTransform,
   width: number,
   height: number,
 ): { x: number; y: number } {
-  return {
-    x: width / 2 - camera.x * camera.scale,
-    y: height / 2 - camera.y * camera.scale,
-  };
-}
-
-/** 上式的逆：畫布局部座標（左上為原點）→ 世界座標。picking / 拖曳用。 */
-export function screenToWorld(
-  camera: CameraTransform,
-  width: number,
-  height: number,
-  screenX: number,
-  screenY: number,
-): { x: number; y: number } {
-  const p = containerPosition(camera, width, height);
-  return {
-    x: (screenX - p.x) / camera.scale,
-    y: (screenY - p.y) / camera.scale,
-  };
+  return worldToScreen(camera, { width, height }, 0, 0);
 }

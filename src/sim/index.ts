@@ -12,4 +12,5 @@ export type {
   StretchStats,
   AreaStats,
   Point,
+  SurfacePoint,
 } from './types';

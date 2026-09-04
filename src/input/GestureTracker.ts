@@ -31,6 +31,12 @@ export interface GestureTrackerOptions {
   screenToWorld: (screenX: number, screenY: number) => Point;
   /** 判定結果往這裡送——接 `sim.applyInput`。 */
   emit: (event: InputEvent) => void;
+  /**
+   * 該世界座標是否落在 Jelly 上（`sim.pick(...) != null`）。給了才判：`pointerdown`
+   * 沒命中 Jelly → 不追這個指標、不 emit（那是背景拖曳，歸相機層處理）。不給則
+   * 一律當成命中（T10 行為）。
+   */
+  hitTest?: (world: Point) => boolean;
   config?: Partial<GestureConfig>;
 }
 
@@ -44,17 +50,20 @@ interface Track {
 export class GestureTracker {
   private readonly screenToWorld: (x: number, y: number) => Point;
   private readonly emit: (event: InputEvent) => void;
+  private readonly hitTest?: (world: Point) => boolean;
   private readonly config: GestureConfig;
   private readonly tracks = new Map<PointerId, Track>();
 
   constructor(opts: GestureTrackerOptions) {
     this.screenToWorld = opts.screenToWorld;
     this.emit = opts.emit;
+    this.hitTest = opts.hitTest;
     this.config = { ...DEFAULT_GESTURE_CONFIG, ...opts.config };
   }
 
   down(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
     const startWorld = this.screenToWorld(screenX, screenY);
+    if (this.hitTest && !this.hitTest(startWorld)) return; // 背景拖曳 → 不歸求解器
     this.tracks.set(id, { startX: screenX, startY: screenY, startT: timeMs, startWorld });
     this.emit({ type: 'grab', id, x: startWorld.x, y: startWorld.y });
   }

@@ -79,6 +79,44 @@ describe('SimCore — grab 按下不動', () => {
   });
 });
 
+describe('SimCore — pick', () => {
+  it('網格內的點 → 回傳含它的三角形 + 和為 1 的重心座標', () => {
+    const sim = new SimCore(gridMesh(5, 5, 10)); // 40×40
+    const hit = sim.pick(15, 12);
+    expect(hit).not.toBeNull();
+    const [w0, w1, w2] = hit!.w;
+    expect(w0 + w1 + w2).toBeCloseTo(1, 9);
+    for (const w of hit!.w) expect(w).toBeGreaterThanOrEqual(-0.02);
+    // 重心座標重建該世界座標
+    const [i0, i1, i2] = hit!.tri;
+    const rx =
+      w0 * sim.positions[2 * i0]! + w1 * sim.positions[2 * i1]! + w2 * sim.positions[2 * i2]!;
+    const ry =
+      w0 * sim.positions[2 * i0 + 1]! +
+      w1 * sim.positions[2 * i1 + 1]! +
+      w2 * sim.positions[2 * i2 + 1]!;
+    expect(rx).toBeCloseTo(15, 6);
+    expect(ry).toBeCloseTo(12, 6);
+  });
+
+  it('網格外的點 → null（不做最近 Particle 吸附）', () => {
+    const sim = new SimCore(gridMesh(5, 5, 10));
+    expect(sim.pick(-50, -50)).toBeNull();
+    expect(sim.pick(500, 5)).toBeNull();
+  });
+
+  it('跟著變形移動：讀的是目前位置，被抓角落拉走後 pick 跟到新位置', () => {
+    const sim = new SimCore(gridMesh(6, 6, 10));
+    expect(sim.pick(0, 0)).not.toBeNull();
+    sim.applyInput({ type: 'grab', id: 'g', x: 0, y: 0 });
+    sim.applyInput({ type: 'moveGrab', id: 'g', x: -40, y: -40 });
+    run(sim, 120);
+    const now = sim.attachPoint('g')!;
+    expect(Math.hypot(now.x - 0, now.y - 0)).toBeGreaterThan(10); // 角落確實移動了
+    expect(sim.pick(now.x, now.y)).not.toBeNull(); // pick 命中它的新位置
+  });
+});
+
 describe('SimCore — grab + moveGrab 收斂到目標', () => {
   it('附著點世界座標收斂到 moveGrab 的 target', () => {
     const sim = new SimCore(MESH());

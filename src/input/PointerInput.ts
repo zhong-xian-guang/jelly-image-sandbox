@@ -12,6 +12,8 @@ import { type GestureConfig, GestureTracker } from './GestureTracker';
 export interface PointerInputOptions {
   screenToWorld: (screenX: number, screenY: number) => Point;
   applyInput: (event: InputEvent) => void;
+  /** 世界座標是否落在 Jelly 上；沒命中的 `pointerdown` 不當 Grab（交給相機層）。 */
+  hitTest?: (world: Point) => boolean;
   config?: Partial<GestureConfig>;
   /** 時鐘來源（測試可注入）。預設 `performance.now`。 */
   now?: () => number;
@@ -28,6 +30,7 @@ export class PointerInput {
     this.tracker = new GestureTracker({
       screenToWorld: opts.screenToWorld,
       emit: opts.applyInput,
+      hitTest: opts.hitTest,
       config: opts.config,
     });
 
