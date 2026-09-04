@@ -18,9 +18,25 @@ export interface BuildSimMeshParams {
   /**
    * 粗 sliver 清理：最小內角小於此值（度）的三角形丟棄，但只在丟掉它不會讓任一
    * 頂點變孤點時（見 `slivers.ts`）。預設 15（對齊設計文件步驟 9）；設 0 可完全關閉。
-   * 凹角尖端那種無鄰可併的 sliver 會留到 T3（Ruppert，issue #4）補點細化。
+   * Ruppert 細化（見下）跑在 sliver 清理之前，貼著 constrained segment 而無鄰可併的
+   * 少數殘餘 sliver 由這一步收掉。
    */
   minTriangleAngleDeg: number;
+  /**
+   * Ruppert 品質細化的最小內角下界（度）。三角形最小角低於此值就補外心。
+   * 預設 25（設計文件步驟 8 / ADR-0002）。設 0 可完全關閉細化。
+   */
+  refineMinAngleDeg: number;
+  /**
+   * Ruppert 品質細化的最大面積上界 = 此係數 × 內部點目標間距²。三角形面積超過就補外心。
+   * 預設 2。設 `Infinity` 只留最小角準則。
+   */
+  refineMaxAreaFactor: number;
+  /**
+   * Ruppert 細化的回合數上限（終止保險）。尖銳的凹形輸入角可能讓細化無法完全收斂，
+   * 撞到此上限就停，殘餘交給 sliver 清理。預設 30。
+   */
+  refineMaxPasses: number;
 }
 
 export const DEFAULT_PARAMS: BuildSimMeshParams = {
@@ -30,6 +46,9 @@ export const DEFAULT_PARAMS: BuildSimMeshParams = {
   targetParticleCount: 350,
   minTriangleArea: 0.5,
   minTriangleAngleDeg: 15,
+  refineMinAngleDeg: 25,
+  refineMaxAreaFactor: 2,
+  refineMaxPasses: 30,
 };
 
 /**

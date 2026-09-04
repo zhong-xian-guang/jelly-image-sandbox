@@ -2,7 +2,7 @@ import { encode } from 'fast-png';
 import { describe, expect, it } from 'vitest';
 
 import { buildSimMesh, MeshPipelineError } from './buildSimMesh';
-import { triangleSignedArea } from './geometry';
+import { triangleMinAngleDeg, triangleSignedArea, triVerts } from './geometry';
 import type { SimMesh } from './types';
 
 /** 用 predicate（不透明與否）畫一張 RGBA PNG。 */
@@ -44,6 +44,24 @@ function vertexBBox(mesh: SimMesh) {
     if (y > maxY) maxY = y;
   }
   return { minX, minY, maxX, maxY };
+}
+
+/** 每個三角形的最小內角（度）。 */
+function triangleAngles(mesh: SimMesh): number[] {
+  const out: number[] = [];
+  for (let t = 0; t < mesh.indices.length / 3; t++) {
+    out.push(triangleMinAngleDeg(...triVerts(mesh.positions, mesh.indices, t)));
+  }
+  return out;
+}
+
+/** 每個三角形的 |有號面積|。 */
+function triangleAreas(mesh: SimMesh): number[] {
+  const out: number[] = [];
+  for (let t = 0; t < mesh.indices.length / 3; t++) {
+    out.push(Math.abs(triangleSignedArea(...triVerts(mesh.positions, mesh.indices, t))));
+  }
+  return out;
 }
 
 function triangleCentroids(mesh: SimMesh): Array<{ x: number; y: number }> {
@@ -226,5 +244,58 @@ describe('buildSimMesh', () => {
     const fine = buildSimMesh(png, { targetParticleCount: 480 });
     expect(fine.positions.length).toBeGreaterThan(coarse.positions.length);
     expect(buildSimMesh(png, { targetParticleCount: 220 }).positions).toEqual(coarse.positions);
+  });
+
+  it('Ruppert 細化：圓盤所有三角形最小角 ≥ 25°、面積無巨大離群（無 sliver、無大洞）', () => {
+    const png = pngFrom(240, 240, disc(120, 120, 100));
+    const mesh = buildSimMesh(png);
+    const angles = triangleAngles(mesh);
+    expect(angles.length).toBeGreaterThan(0);
+    expect(Math.min(...angles)).toBeGreaterThanOrEqual(25 - 1e-6);
+    // 最大面積準則有生效：最大三角形不應是中位數的一個數量級以上
+    const areas = triangleAreas(mesh).sort((x, y) => x - y);
+    const median = areas[Math.floor(areas.length / 2)]!;
+    expect(Math.max(...areas)).toBeLessThan(median * 6);
+  });
+
+  it('Ruppert 細化：凹形（L 形）尖角區也達品質下界，殘餘 sliver 為個位數', () => {
+    const png = pngFrom(240, 240, (x, y) => x < 120 || y > 120);
+    const angles = triangleAngles(buildSimMesh(png));
+    const bad = angles.filter((a) => a < 25 - 1e-6);
+    // 驗收條件：少數貼著 constrained segment 的例外允許
+    expect(bad.length).toBeLessThanOrEqual(5);
+    // 且沒有真正的針狀 sliver
+    expect(Math.min(...angles)).toBeGreaterThan(10);
+  });
+
+  it('未細化（refineMinAngleDeg=0）對照組確實有一堆 sliver', () => {
+    const png = pngFrom(240, 240, disc(120, 120, 100));
+    const raw = triangleAngles(buildSimMesh(png, { refineMinAngleDeg: 0 }));
+    const refined = triangleAngles(buildSimMesh(png));
+    expect(raw.filter((a) => a < 25).length).toBeGreaterThan(20);
+    expect(refined.filter((a) => a < 25).length).toBe(0);
+  });
+
+  it('尖銳凹形（星形）誘發 encroachment 連鎖 → 仍終止、決定性、凹口未被橋接', () => {
+    // 8 芒星：半徑在內外之間跳動，芒尖是尖銳凸角、芒谷是尖銳凹角
+    const star = (x: number, y: number): boolean => {
+      const dx = x - 130;
+      const dy = y - 130;
+      const ang = Math.atan2(dy, dx);
+      const r = 45 + 55 * Math.abs(Math.cos(4 * ang));
+      return dx * dx + dy * dy <= r * r;
+    };
+    const png = pngFrom(260, 260, star);
+    const a = buildSimMesh(png);
+    const b = buildSimMesh(png);
+    expect(a.indices.length).toBeGreaterThan(0);
+    expect(a.positions).toEqual(b.positions);
+    expect(a.indices).toEqual(b.indices);
+    for (let i = 0; i < a.positions.length; i++) expect(Number.isFinite(a.positions[i])).toBe(true);
+    // 芒谷方向（ang = π/8，cos(4·ang)=0 → r 最小 45）；半徑 70 的點深陷兩芒之間，
+    // 應在剪影外、也不被跨越凹角的三角形橋接
+    const px = 130 + 70 * Math.cos(Math.PI / 8);
+    const py = 130 + 70 * Math.sin(Math.PI / 8);
+    expect(pointInAnyTriangle(a, px, py)).toBe(false);
   });
 });

@@ -126,6 +126,68 @@ export function distanceToRings(
   return Math.sqrt(best);
 }
 
+/**
+ * 攤平網格裡「壞」三角形的數量：最小內角 `< minAngleDeg` 或 |面積| `> maxArea`。
+ * Ruppert 細化收斂後用它記錄殘餘（貼著 constrained segment、無法再補的少數例外）。
+ */
+export function countBadTriangles(
+  positions: ArrayLike<number>,
+  indices: ArrayLike<number>,
+  minAngleDeg: number,
+  maxArea: number,
+): number {
+  let bad = 0;
+  for (let t = 0; t < indices.length / 3; t++) {
+    const v = triVerts(positions, indices, t);
+    if (
+      triangleMinAngleDeg(...v) < minAngleDeg - 1e-6 ||
+      Math.abs(triangleSignedArea(...v)) > maxArea + 1e-6
+    ) {
+      bad++;
+    }
+  }
+  return bad;
+}
+
+/**
+ * 三角形外心（外接圓圓心）。三頂點近共線（外接圓半徑發散）時回傳 `null`。
+ * Ruppert 細化把「壞」三角形的外心當 Steiner 點插入。
+ */
+export function circumcenter(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+): Point | null {
+  const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+  if (Math.abs(d) < 1e-9) return null;
+  const a2 = ax * ax + ay * ay;
+  const b2 = bx * bx + by * by;
+  const c2 = cx * cx + cy * cy;
+  const ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
+  const uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
+  if (!Number.isFinite(ux) || !Number.isFinite(uy)) return null;
+  return { x: ux, y: uy };
+}
+
+/**
+ * 點 `p` 是否落在線段 `ab` 的直徑圓（以 `ab` 為直徑）內——即 Ruppert 的
+ * encroachment 判定。等價於 `∠apb > 90°`，也就是 `(a−p)·(b−p) < 0`。
+ * 端點本身（`p == a` 或 `p == b`）不算。
+ */
+export function encroachesSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): boolean {
+  return (ax - px) * (bx - px) + (ay - py) * (by - py) < -1e-9;
+}
+
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
