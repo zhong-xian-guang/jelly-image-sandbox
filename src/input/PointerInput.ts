@@ -68,9 +68,15 @@ export class PointerInput {
   private onUp = (ev: PointerEvent): void => {
     const [x, y] = this.localXY(ev);
     this.tracker.up(ev.pointerId, x, y, this.now());
+    this.releaseCapture(ev.pointerId);
   };
 
   private onCancel = (ev: PointerEvent): void => {
     this.tracker.cancel(ev.pointerId);
+    this.releaseCapture(ev.pointerId);
   };
+
+  private releaseCapture(pointerId: number): void {
+    if (this.target.hasPointerCapture(pointerId)) this.target.releasePointerCapture(pointerId);
+  }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { FixedStepAccumulator } from './fixedStep';
+import { FixedStepAccumulator } from './FixedStepAccumulator';
 
 const STEP = 1 / 60;
 

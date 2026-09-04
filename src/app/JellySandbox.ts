@@ -12,19 +12,12 @@
 
 import { PointerInput } from '../input';
 import { JellyRenderer, type CameraTransform, screenToWorld } from '../render';
-import { SimCore } from '../sim';
+import { type Bbox, SimCore } from '../sim';
 import { createDefaultJelly } from './defaultJelly';
-import { FixedStepAccumulator } from './fixedStep';
+import { FixedStepAccumulator } from './FixedStepAccumulator';
 
 const STEP_SECONDS = 1 / 60;
 const FIT_MARGIN_PX = 80;
-
-interface RestBounds {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-}
 
 export class JellySandbox {
   private readonly sim: SimCore;
@@ -32,18 +25,15 @@ export class JellySandbox {
   private readonly input: PointerInput;
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
   private readonly root: HTMLElement;
-  private readonly restBounds: RestBounds;
+  /** Jelly 靜止 bbox（fit 用）。 */
+  private readonly restBounds: Bbox;
+  /** T12 Camera 之前的暫代變換；`fit()` 會改 `scale`。 */
   private readonly camera: CameraTransform;
 
   private rafId = 0;
   private lastFrameMs = 0;
 
-  private constructor(
-    root: HTMLElement,
-    sim: SimCore,
-    renderer: JellyRenderer,
-    restBounds: RestBounds,
-  ) {
+  private constructor(root: HTMLElement, sim: SimCore, renderer: JellyRenderer, restBounds: Bbox) {
     this.root = root;
     this.sim = sim;
     this.renderer = renderer;
@@ -68,7 +58,7 @@ export class JellySandbox {
   static async create(root: HTMLElement): Promise<JellySandbox> {
     const { mesh, texture } = createDefaultJelly();
     const sim = new SimCore(mesh);
-    const restBounds = boundsOf(mesh.positions);
+    const restBounds = sim.bbox(); // 建構當下 current == rest
 
     const renderer = await JellyRenderer.create({
       width: root.clientWidth,
@@ -126,20 +116,4 @@ export class JellySandbox {
     );
     this.renderer.setCamera(this.camera);
   }
-}
-
-function boundsOf(positions: ArrayLike<number>): RestBounds {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (let i = 0; i < positions.length; i += 2) {
-    const x = positions[i]!;
-    const y = positions[i + 1]!;
-    if (x < minX) minX = x;
-    if (y < minY) minY = y;
-    if (x > maxX) maxX = x;
-    if (y > maxY) maxY = y;
-  }
-  return { minX, minY, maxX, maxY };
 }

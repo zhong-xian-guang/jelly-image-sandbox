@@ -16,7 +16,11 @@ import type { InputEvent, Point, PointerId } from '../sim';
 export interface GestureConfig {
   /** down→up 在此毫秒內（且位移夠小）→ 判為 Tap。預設 250。 */
   tapMaxMs: number;
-  /** Tap 允許的最大螢幕位移（CSS px）。預設 6。 */
+  /**
+   * Tap 允許的最大位移，量的是**螢幕 CSS px**（指標在畫面上幾乎沒動）。
+   * 設計文件寫「世界座標位移 < 6px」——這裡刻意用螢幕空間，才不會因縮放倍率改變
+   * Tap 的靈敏度。預設 6。
+   */
   tapMaxDist: number;
 }
 

@@ -79,7 +79,7 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 
 - **Grab（拖曳）**：`pointerdown` 在 Jelly 上 → picking（命中三角形 + 重心座標）→ `grab` event → 位置約束（見「每個 substep」步驟 4）。`pointermove` → `moveGrab`；`pointerup` → `release`，Fling 由被抓頂點自身速度帶出。
 - **Pin（釘選）**（見 [ADR-0004](../adr/0004-pin-is-a-lockable-multi-point-grab.md)）：兩種放置——(a) 拖曳中按鍵／按鈕 → `pin` event 把當前 Grab 就地鎖定並放開指標；(b) pin 模式下 `pointerdown` 在 Jelly 上 → 直接 `pin`。點一個 Pin → `unpin`。抓住 Pin 拖曳 → `movePin`（放開重新鎖定）。「清除所有 Pin」= 對每個 Pin 送 `unpin`。
-- **Tap（輕拍）**：`pointerdown` 後在 **≤ 250ms**、世界座標位移 **< 6px** 內 `pointerup` → `tap` event。在按下點施加**一次性徑向脈衝**：半徑 `R = Jelly bbox 對角線 × 0.2` 內每個 Particle，`v += 正規化(拍擊點 − pos) · strength · (1 − d/R)²`（**向內**——凹陷後彈回）。`strength` 初始 `6000`。ring-down 交給 shape matching + 阻尼。落在所有三角形外、附近無 Particle 時 no-op。
+- **Tap（輕拍）**：`pointerdown` 後在 **≤ 250ms**、位移 **≤ 6px** 內 `pointerup` → `tap` event。（T10 實作把 6px 量在**螢幕空間**——指標在畫面上沒動——而非世界座標，才不會因相機縮放改變 Tap 靈敏度。）在按下點施加**一次性徑向脈衝**：半徑 `R = Jelly bbox 對角線 × 0.2` 內每個 Particle，`v += 正規化(拍擊點 − pos) · strength · (1 − d/R)²`（**向內**——凹陷後彈回）。`strength` 初始 `6000`。ring-down 交給 shape matching + 阻尼。落在所有三角形外、附近無 Particle 時 no-op。
 
 ## Camera
 

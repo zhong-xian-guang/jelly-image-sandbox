@@ -9,17 +9,26 @@ import { encode as encodePng } from 'fast-png';
 
 import { buildSimMesh, type SimMesh } from '../mesh';
 
+/** 預設貼圖尺寸（正方形邊長，px）。 */
+const DEFAULT_TEXTURE_SIZE = 512;
+
 export interface DefaultJelly {
   mesh: SimMesh;
   /** 原圖，交給 Renderer 當貼圖。 */
   texture: HTMLCanvasElement;
 }
 
+function ctx2d(cv: HTMLCanvasElement): CanvasRenderingContext2D {
+  const g = cv.getContext('2d');
+  if (!g) throw new Error('取不到 2D canvas context');
+  return g;
+}
+
 /** 程序化貼圖：棋盤底 + 斜紋 + 兩眼 + 「JELLY」字，輪廓是朝右開口的凹形。 */
-export function drawDefaultTexture(size = 512): HTMLCanvasElement {
+export function drawDefaultTexture(size = DEFAULT_TEXTURE_SIZE): HTMLCanvasElement {
   const cv = document.createElement('canvas');
   cv.width = cv.height = size;
-  const g = cv.getContext('2d')!;
+  const g = ctx2d(cv);
   g.clearRect(0, 0, size, size);
 
   g.save();
@@ -64,12 +73,12 @@ export function drawDefaultTexture(size = 512): HTMLCanvasElement {
 /** `<canvas>` → PNG 位元組（`buildSimMesh` 的輸入）。 */
 export function canvasToPng(cv: HTMLCanvasElement): Uint8Array {
   const { width, height } = cv;
-  const data = cv.getContext('2d')!.getImageData(0, 0, width, height).data;
+  const data = ctx2d(cv).getImageData(0, 0, width, height).data;
   return encodePng({ width, height, data: new Uint8Array(data.buffer), channels: 4, depth: 8 });
 }
 
 /** 預設 Jelly：程序化貼圖 → `buildSimMesh`。 */
-export function createDefaultJelly(size = 512): DefaultJelly {
+export function createDefaultJelly(size = DEFAULT_TEXTURE_SIZE): DefaultJelly {
   const texture = drawDefaultTexture(size);
   const mesh = buildSimMesh(canvasToPng(texture));
   return { mesh, texture };
