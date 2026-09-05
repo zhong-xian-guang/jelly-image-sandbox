@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
+import type { CameraCommand } from '../../camera';
 import type { InputEvent } from '../../sim';
 import { DemoRunner } from './DemoRunner';
 import type { DemoStep } from './types';
 
+/**
+ * 只收集 `InputEvent`；`applyCamera` 回呼故意在被呼叫時丟例外，讓既有
+ * （只用 `InputEvent` 的）測試案例順便斷言「這些排程不會誤觸發相機回呼」。
+ * `CameraCommand` 分流本身另有專門測試（見下方）。
+ */
 function collect(runner: DemoRunner, ticks: number): InputEvent[] {
   const log: InputEvent[] = [];
-  for (let i = 0; i < ticks; i++) runner.advance((event) => log.push(event));
+  for (let i = 0; i < ticks; i++) {
+    runner.advance(
+      (event) => log.push(event),
+      () => {
+        throw new Error('未預期收到 CameraCommand');
+      },
+    );
+  }
   return log;
 }
 
@@ -84,5 +97,34 @@ describe('DemoRunner', () => {
     runner.start([{ atStep: 0, event: { type: 'tap', x: 9, y: 9 } }]);
     const log = collect(runner, 1);
     expect(log).toEqual([{ type: 'tap', x: 9, y: 9 }]);
+  });
+
+  it('CameraCommand 事件派送到相機回呼，InputEvent 派送到 applyInput，互不混淆（issue #29）', () => {
+    const schedule: DemoStep[] = [
+      { atStep: 0, event: { type: 'grab', id: 'a', x: 0, y: 0 } },
+      { atStep: 0, event: { type: 'panBy', dxScreen: 10, dyScreen: -5 } },
+      { atStep: 1, event: { type: 'zoomBy', factor: 1.2, pivotScreen: { x: 1, y: 2 } } },
+      { atStep: 1, event: { type: 'release', id: 'a' } },
+    ];
+    const runner = new DemoRunner();
+    runner.start(schedule);
+
+    const inputs: InputEvent[] = [];
+    const cameraCommands: CameraCommand[] = [];
+    for (let i = 0; i < 2; i++) {
+      runner.advance(
+        (event) => inputs.push(event),
+        (cmd) => cameraCommands.push(cmd),
+      );
+    }
+
+    expect(inputs).toEqual([
+      { type: 'grab', id: 'a', x: 0, y: 0 },
+      { type: 'release', id: 'a' },
+    ]);
+    expect(cameraCommands).toEqual([
+      { type: 'panBy', dxScreen: 10, dyScreen: -5 },
+      { type: 'zoomBy', factor: 1.2, pivotScreen: { x: 1, y: 2 } },
+    ]);
   });
 });

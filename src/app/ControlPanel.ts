@@ -18,8 +18,14 @@
  *
  * 「顯示網格」是純 debug 用的三角化線框開關，接 `JellyRenderer.setWireframeVisible`。
  *
- * 「Demo」按鈕（issue #15）播放中會被 `JellySandbox` 呼叫 `setDemoButtonsEnabled(false)`
+ * 「Demo」按鈕（issue #15）播放中會被 `JellySandbox` 呼叫 `setPlaybackControlsEnabled(false)`
  * 全部鎖住，理由同上——避免疊加播放兩個 Demo 留下沒人清的殘留 Pin/Grab。
+ *
+ * 「Track」錄製（issue #29 / V2 T1a）：一顆「開始錄製／停止錄製」切換鈕，錄製中
+ * 比照 Pin 模式的手法——文字變色＋脈動（`.jelly-recording-active`，樣式見
+ * `style.css`）——低頭一眼就知道現在正在錄。停止後解鎖「播放 Track」按鈕重播剛
+ * 錄好的那條。`setPlaybackControlsEnabled(false)` 也會一併鎖住這兩顆鈕：Track
+ * 重播跟 Demo 播放共用同一個 `DemoRunner`，播放中不能再錄一次或重疊播放。
  *
  * 「Substep」是 issue #16 追加的唯讀 debug 讀出，`JellySandbox` 每幀呼叫
  * `setPerfStatus` 同步目前的 `PerfMonitor.substeps` / `degraded`——手動測試「節流
@@ -65,12 +71,22 @@ export interface ControlPanelOptions {
   onRunDemo: (id: string) => void;
   onReset: () => void;
   onWireframeChange: (visible: boolean) => void;
+  /** 「開始錄製／停止錄製」切換鈕（issue #29）。 */
+  onToggleRecording: () => void;
+  /** 「播放 Track」按鈕（issue #29）——只在錄過至少一次、且沒有播放中鎖住時可按。 */
+  onPlayTrack: () => void;
 }
 
 export class ControlPanel {
   readonly element: HTMLElement;
-  /** 播放中鎖住，避免疊加播放兩個 Demo（issue #15）——見 `setDemoButtonsEnabled`。 */
+  /** 播放中鎖住，避免疊加播放兩個 Demo（issue #15）——見 `setPlaybackControlsEnabled`。 */
   private readonly demoButtons: HTMLButtonElement[] = [];
+  private readonly recordButton: HTMLButtonElement;
+  private readonly playTrackButton: HTMLButtonElement;
+  /** 是否已經錄過至少一次（哪怕是空 Track）——`setTrackPlaybackEnabled` 維護。 */
+  private trackReady = false;
+  /** Demo／Track 播放中鎖住——`setPlaybackControlsEnabled` 維護，跟 `trackReady` 一起決定播放鈕能不能按。 */
+  private playbackLocked = false;
   private readonly perfStatus: HTMLElement;
   /** `setPerfStatus` 比對用；避免值沒變時每幀重寫 DOM。 */
   private lastPerfText: string | null = null;
@@ -105,20 +121,50 @@ export class ControlPanel {
       this.buttonRow('框住果凍', opts.onFrameJelly),
       this.demoHeading(),
       ...opts.demos.map((demo) => this.demoButtonRow(demo.label, () => opts.onRunDemo(demo.id))),
-      this.buttonRow('停止／重設', opts.onReset),
+      this.trackHeading(),
     );
+
+    const track = this.trackRow(opts.onToggleRecording, opts.onPlayTrack);
+    this.recordButton = track.recordButton;
+    this.playTrackButton = track.playTrackButton;
+    panel.append(track.row, this.buttonRow('停止／重設', opts.onReset));
 
     this.element = panel;
   }
 
   /**
-   * Demo 播放中呼叫 `setDemoButtonsEnabled(false)` 鎖住所有 Demo 按鈕（issue #15）——
-   * 不然疊加按下另一個 Demo，前一個 Demo 已經建立的 Pin/Grab 不會被清掉（`DemoRunner.start`
-   * 只換排程，不會回頭釋放已生效的約束），會留下一個永遠釘住卻沒人記得的 Pin。播完
-   * 或按「停止／重設」都要解鎖，見 `JellySandbox.frame`。
+   * Demo／Track 播放中呼叫 `setPlaybackControlsEnabled(false)` 鎖住所有 Demo 按鈕
+   * 跟「開始錄製」「播放 Track」（issue #15、issue #29）——不然疊加按下另一個
+   * Demo，前一個 Demo 已經建立的 Pin/Grab 不會被清掉（`DemoRunner.start` 只換
+   * 排程，不會回頭釋放已生效的約束），會留下一個永遠釘住卻沒人記得的 Pin；
+   * Track 重播跟 Demo 共用同一個 `DemoRunner`，同樣的理由也適用。播完或按
+   * 「停止／重設」都要解鎖，見 `JellySandbox.frame`／`setPlaybackLocked`。
    */
-  setDemoButtonsEnabled(enabled: boolean): void {
+  setPlaybackControlsEnabled(enabled: boolean): void {
     for (const button of this.demoButtons) button.disabled = !enabled;
+    this.recordButton.disabled = !enabled;
+    this.playbackLocked = !enabled;
+    this.updatePlayTrackButtonState();
+  }
+
+  /**
+   * 錄製中／已停止的視覺切換（issue #29）——比照 Pin 模式的手法：按鈕文字變色
+   * 加粗＋脈動（`.jelly-recording-active`，樣式見 `style.css`），低頭一眼就知道
+   * 現在正在錄。
+   */
+  setRecordingActive(active: boolean): void {
+    this.recordButton.classList.toggle('jelly-recording-active', active);
+    this.recordButton.textContent = active ? '■ 停止錄製' : '● 開始錄製 Track';
+  }
+
+  /** 是否已經錄過至少一次（哪怕是空 Track）——決定「播放 Track」按鈕能不能按（issue #29）。 */
+  setTrackPlaybackEnabled(ready: boolean): void {
+    this.trackReady = ready;
+    this.updatePlayTrackButtonState();
+  }
+
+  private updatePlayTrackButtonState(): void {
+    this.playTrackButton.disabled = this.playbackLocked || !this.trackReady;
   }
 
   /**
@@ -264,6 +310,42 @@ export class ControlPanel {
     heading.className = 'jelly-control-heading';
     heading.textContent = 'Demo';
     return heading;
+  }
+
+  /** Track 錄製列前的小標題（issue #29），跟 Demo 分開一眼看出這區是「使用者自己錄的」。 */
+  private trackHeading(): HTMLElement {
+    const heading = document.createElement('div');
+    heading.className = 'jelly-control-heading';
+    heading.textContent = 'Track';
+    return heading;
+  }
+
+  /**
+   * 「開始錄製／停止錄製」切換鈕 + 「播放 Track」按鈕（issue #29）。回傳個別按鈕
+   * 讓建構子能直接賦值給欄位（`recordButton`/`playTrackButton` 是 `readonly`，
+   * 賦值要發生在建構子本體才能通過 TS 的明確賦值檢查）。「播放 Track」初始鎖住——
+   * 還沒錄過，沒有東西可以播（見 `setTrackPlaybackEnabled`）。
+   */
+  private trackRow(
+    onToggleRecording: () => void,
+    onPlayTrack: () => void,
+  ): { row: HTMLElement; recordButton: HTMLButtonElement; playTrackButton: HTMLButtonElement } {
+    const row = document.createElement('div');
+    row.className = 'jelly-control-row';
+
+    const recordButton = document.createElement('button');
+    recordButton.type = 'button';
+    recordButton.textContent = '● 開始錄製 Track';
+    recordButton.addEventListener('click', onToggleRecording);
+
+    const playTrackButton = document.createElement('button');
+    playTrackButton.type = 'button';
+    playTrackButton.textContent = '▶ 播放 Track';
+    playTrackButton.disabled = true;
+    playTrackButton.addEventListener('click', onPlayTrack);
+
+    row.append(recordButton, playTrackButton);
+    return { row, recordButton, playTrackButton };
   }
 
   private buttonRow(labelText: string, onClick: () => void): HTMLElement {

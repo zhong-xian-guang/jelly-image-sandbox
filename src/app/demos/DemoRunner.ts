@@ -1,17 +1,31 @@
 /**
  * 輕量時間軸執行器（issue #15 / T14）——依「已經跑了幾個固定 sim step」（不是
- * wall-clock 時間或 RAF 幀數）觸發排定的 `InputEvent`，跟即時輸入走同一條
- * `applyInput` 窄介面（ADR-0005），不繞過它直接戳 `SimCore` 內部狀態。
+ * wall-clock 時間或 RAF 幀數）觸發排定的事件，跟即時輸入走同一條
+ * `applyInput`／`cameraCommands` 窄介面（ADR-0005），不繞過它們直接戳 `SimCore`
+ * 或相機內部狀態。
  *
  * 用 sim-step 計數而非幀數/時間，是因為 `JellySandbox` 主迴圈用
- * `FixedStepAccumulator` 把真實時間切成數量不定的固定步——同一個 Demo 不管
+ * `FixedStepAccumulator` 把真實時間切成數量不定的固定步——同一個排程不管
  * 實際掉幀與否，只要跑過一樣多的 sim step，事件就在同一個 step 觸發，結果
  * 決定性一致（issue #15 驗收條件：「Demo 在決定性模擬下每次播放結果一致」）。
  * `JellySandbox` 需要在 `sim.step()` 前呼叫一次 `advance()`（每個固定 step 各一次）。
+ *
+ * issue #29 / V2 T1a 擴充：排程裡的事件可能是 `InputEvent` 也可能是
+ * `CameraCommand`（`TrackRecorder` 錄下的相機平移／縮放），`advance` 依 `type`
+ * 分流派給對應的回呼——兩者字面值不重疊，不需要額外 tag（見 `isCameraCommand`）。
+ * 這條路徑也是 Track 重播機制本身：`TrackRecorder.stop()` 回傳的排程格式跟
+ * `DemoStep[]` 相同，可以直接餵給這裡的 `start()` 精準重播（見 ADR-0006）。
  */
 
+import type { CameraCommand } from '../../camera';
 import type { InputEvent } from '../../sim';
-import type { DemoStep } from './types';
+import type { DemoEvent, DemoStep } from './types';
+
+const CAMERA_COMMAND_TYPES: readonly string[] = ['panBy', 'zoomBy', 'setFollow', 'frame'];
+
+function isCameraCommand(event: DemoEvent): event is CameraCommand {
+  return CAMERA_COMMAND_TYPES.includes(event.type);
+}
 
 export class DemoRunner {
   private schedule: DemoStep[] = [];
@@ -41,13 +55,16 @@ export class DemoRunner {
 
   /**
    * 每個固定 sim step 呼叫一次：把「這個 step（含）之前該觸發、還沒觸發」的
-   * 事件依序送進 `applyInput`，再把內部 step 計數加一。播完排程最後一個事件
-   * 後自動停止（`isRunning` 變 `false`）。
+   * 事件依序分流送進 `applyInput`（`InputEvent`）或 `applyCamera`
+   * （`CameraCommand`），再把內部 step 計數加一。播完排程最後一個事件後自動
+   * 停止（`isRunning` 變 `false`）。
    */
-  advance(applyInput: (event: InputEvent) => void): void {
+  advance(applyInput: (event: InputEvent) => void, applyCamera: (command: CameraCommand) => void): void {
     if (!this.running) return;
     while (this.cursor < this.schedule.length && this.schedule[this.cursor]!.atStep <= this.stepIndex) {
-      applyInput(this.schedule[this.cursor]!.event);
+      const event = this.schedule[this.cursor]!.event;
+      if (isCameraCommand(event)) applyCamera(event);
+      else applyInput(event);
       this.cursor++;
     }
     this.stepIndex++;
