@@ -1,0 +1,4 @@
+# 這台機器（跟未來任何 Windows checkout）的 core.autocrlf=true 會把 checkout 出來
+# 的檔案轉成 CRLF；shell script 的 shebang／多行語法碰到 CRLF 會直接壞掉
+# （bash 找不到 `#!/usr/bin/env bash\r` 這個直譯器），所以強制這類檔案永遠用 LF。
+*.sh text eol=lf

@@ -21,4 +21,12 @@ npm run format    # Prettier 寫回
 
 ## 發佈
 
-`npm run build` 產出的 `dist/` 是自包含的：`index.html` 用相對路徑載入資源，直接以 `file://` 開啟即可執行，不需要伺服器。把 `dist/` 打包成 zip 上傳 itch.io。
+`npm run build` 產出的 `dist/` 是自包含的：`index.html` 用相對路徑載入資源，直接以 `file://` 開啟即可執行，不需要伺服器。
+
+用 [butler](https://itch.io/docs/butler/) 上架／更新 itch.io 頁面：
+
+```sh
+bash scripts/publish-itch.sh   # 第一次會帶你走完整流程；之後重跑會沿用 .env 裡存的設定
+```
+
+首次設定（專案 slug、butler channel）之後存在 `.env`（不進版控）；之後每次發新版本，重跑同一支腳本即可，或直接 `npm run build && butler push dist <ITCH_TARGET>`（`ITCH_TARGET` 見 `.env`）。
