@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  computeWireframeEdges,
   containerPosition,
   createTextureBuffers,
   type TextureMesh,
@@ -76,6 +77,29 @@ describe('writePositions', () => {
 
   it('長度不符 → 丟', () => {
     expect(() => writePositions(new Float32Array(4), new Float64Array(6))).toThrow(/不符/);
+  });
+});
+
+describe('computeWireframeEdges', () => {
+  it('兩個三角形共用一條邊 → 共用邊只算一次（5 條邊，10 個索引）', () => {
+    const edges = computeWireframeEdges(quadMesh().indices);
+    expect(edges.length).toBe(10);
+
+    const pairs = new Set<string>();
+    for (let i = 0; i < edges.length; i += 2) {
+      const [a, b] = [edges[i]!, edges[i + 1]!];
+      pairs.add(a < b ? `${a}_${b}` : `${b}_${a}`);
+    }
+    expect(pairs).toEqual(new Set(['0_1', '1_2', '0_2', '2_3', '0_3']));
+  });
+
+  it('沒有三角形 → 空陣列', () => {
+    expect(computeWireframeEdges(new Uint32Array(0))).toEqual(new Uint32Array(0));
+  });
+
+  it('單一三角形 → 三條邊', () => {
+    const edges = computeWireframeEdges(new Uint32Array([0, 1, 2]));
+    expect(edges.length).toBe(6);
   });
 });
 

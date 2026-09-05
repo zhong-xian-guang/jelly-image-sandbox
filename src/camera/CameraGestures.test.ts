@@ -40,8 +40,8 @@ describe('CameraGestures — 滾輪縮放', () => {
   });
 });
 
-describe('CameraGestures — 背景拖曳平移', () => {
-  it('單一背景指標拖曳 → panBy（螢幕位移），不縮放', () => {
+describe('CameraGestures — 單一相機指標拖曳平移', () => {
+  it('單一相機指標拖曳 → panBy（螢幕位移），不縮放', () => {
     const { g, cmds } = make();
     g.pointerDown(1, 100, 100, true);
     g.pointerMove(1, 130, 90);
@@ -53,7 +53,7 @@ describe('CameraGestures — 背景拖曳平移', () => {
     expect(zooms(cmds)).toHaveLength(0);
   });
 
-  it('非背景（命中 Jelly）的指標不觸發相機', () => {
+  it('CameraInput 判定不該算相機（例如觸控命中 Jelly）的指標 → 不觸發相機', () => {
     const { g, cmds } = make();
     g.pointerDown(1, 100, 100, false);
     g.pointerMove(1, 200, 200);
@@ -71,7 +71,7 @@ describe('CameraGestures — 背景拖曳平移', () => {
 });
 
 describe('CameraGestures — 雙指平移 + 縮放', () => {
-  it('兩背景指標一起平移 → 累積 panBy = 質心位移、淨縮放 ≈ 1', () => {
+  it('兩個相機指標一起平移 → 累積 panBy = 質心位移、淨縮放 ≈ 1', () => {
     const { g, cmds } = make();
     g.pointerDown(1, 0, 0, true);
     g.pointerDown(2, 100, 0, true);

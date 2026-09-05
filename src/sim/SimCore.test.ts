@@ -360,6 +360,42 @@ describe('SimCore — Pin', () => {
     expect(allFinite(pinned.positions)).toBe(true);
   });
 
+  it('不相干的 Grab 剛好抓在 Pin 同一個三角形上、用力拖走 → Pin 自己紋風不動', () => {
+    // 兩個約束共用同一個三角形／權重（同座標 picking 必命中同一個三角形）：
+    // Pin 用 id='p' 先建；'other' 用不同 id 建一個 Grab、再拖到很遠。修 bug 前
+    // Grab 在 Map 插入順序上排在 Pin 之後，會在同一個 substep 覆寫掉 Pin 的修正，
+    // 把 Pin 的附著點一路拖走——這裡驗證改成「Pin 永遠最後解」後不會再發生。
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'pin', id: 'p', x: 48, y: 48 });
+    const before = sim.attachPoint('p')!;
+
+    sim.applyInput({ type: 'grab', id: 'other', x: 48, y: 48 });
+    for (let f = 1; f <= 30; f++) {
+      sim.applyInput({ type: 'moveGrab', id: 'other', x: 48 + 5 * f, y: 48 + 5 * f });
+      sim.step(1 / 60);
+    }
+
+    const after = sim.attachPoint('p')!;
+    expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeLessThan(1);
+  });
+
+  it('Pin 建立在先、Grab 在後也一樣不會被拖走（不依賴約束的插入順序）', () => {
+    // 上一個測項的 Pin 剛好先建；這裡反過來——Grab 先建、Pin 後建，且刻意用
+    // 「插入順序」上會排在 Pin 之後的第三個約束再次確認 Pin 恆常最後解。
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'grab', id: 'other', x: 48, y: 48 });
+    sim.applyInput({ type: 'pin', id: 'p', x: 48, y: 48 });
+    const before = sim.attachPoint('p')!;
+
+    for (let f = 1; f <= 30; f++) {
+      sim.applyInput({ type: 'moveGrab', id: 'other', x: 48 - 5 * f, y: 48 + 5 * f });
+      sim.step(1 / 60);
+    }
+
+    const after = sim.attachPoint('p')!;
+    expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeLessThan(1);
+  });
+
   it('pin 不帶座標 → 就地把 Grab 凍結成 Pin，之後 moveGrab 被忽略', () => {
     const sim = new SimCore(MESH());
     sim.applyInput({ type: 'grab', id: 'h', x: 0, y: 0 });
@@ -419,6 +455,39 @@ describe('SimCore — Pin', () => {
     expect(sim.attachPoint('p1')).toBeNull();
     expect(sim.attachPoint('p2')).toBeNull();
     expect(sim.attachPoint('g')).not.toBeNull();
+  });
+
+  it('listPins：回傳每個 Pin 的 id + 附著點，不含 Grab', () => {
+    const sim = new SimCore(MESH());
+    expect(sim.listPins()).toEqual([]);
+
+    sim.applyInput({ type: 'pin', id: 'p1', x: 0, y: 0 });
+    sim.applyInput({ type: 'pin', id: 'p2', x: 96, y: 0 });
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+
+    const pins = sim.listPins();
+    expect(pins).toHaveLength(2);
+    const byId = new Map(pins.map((p) => [p.id, p.point]));
+    expect(byId.get('p1')!.x).toBeCloseTo(0, 6);
+    expect(byId.get('p1')!.y).toBeCloseTo(0, 6);
+    expect(byId.get('p2')!.x).toBeCloseTo(96, 6);
+    expect(byId.get('p2')!.y).toBeCloseTo(0, 6);
+
+    sim.clearPins();
+    expect(sim.listPins()).toEqual([]);
+  });
+
+  it('listPins：附著點隨網格變形移動（跟 attachPoint 一致）', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'pin', id: 'p', x: 0, y: 0 });
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+    sim.applyInput({ type: 'moveGrab', id: 'g', x: 140, y: 130 });
+    run(sim, 30);
+
+    const pins = sim.listPins();
+    expect(pins).toHaveLength(1);
+    expect(pins[0]!.id).toBe('p');
+    expect(pins[0]!.point).toEqual(sim.attachPoint('p'));
   });
 
   it('決定性：含 pin / movePin / unpin 的事件流兩次跑結果完全相等', () => {

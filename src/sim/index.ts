@@ -15,4 +15,5 @@ export type {
   AreaStats,
   Point,
   SurfacePoint,
+  PinInfo,
 } from './types';

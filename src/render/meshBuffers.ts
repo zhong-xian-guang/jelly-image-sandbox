@@ -81,6 +81,32 @@ export function writePositions(target: Float32Array, positions: ArrayLike<number
 }
 
 /**
+ * 每個三角形三條邊去重後攤平成 `[a0, b0, a1, b1, ...]`——網格顯示開關（debug
+ * 用）拿它逐幀畫線框。拓撲固定，建構 `JellyRenderer` 時只算一次，之後每幀
+ * 直接用同一份索引配上當前 `positions` 畫線，不必重算。
+ */
+export function computeWireframeEdges(indices: ArrayLike<number>): Uint32Array {
+  const seen = new Set<string>();
+  const edges: number[] = [];
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = indices[t]!;
+    const b = indices[t + 1]!;
+    const c = indices[t + 2]!;
+    for (const [p, q] of [
+      [a, b],
+      [b, c],
+      [c, a],
+    ] as const) {
+      const key = p < q ? `${p}_${q}` : `${q}_${p}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push(p, q);
+    }
+  }
+  return Uint32Array.from(edges);
+}
+
+/**
  * PixiJS 容器的 `position`：世界原點投影到螢幕的位置（scale 直接用 `camera.scale`，
  * Pixi container 自己的 `scale` 屬性設那個）。就是 `worldToScreen(camera, …, 0, 0)`。
  */

@@ -92,6 +92,12 @@ export interface SurfacePoint {
   w: readonly [number, number, number];
 }
 
+/** 一個 Pin：`id` + 附著點目前世界座標。`SimCore.listPins()` 的回傳元素。 */
+export interface PinInfo {
+  id: PointerId;
+  point: Point;
+}
+
 /** 軸對齊包圍盒（世界座標）。 */
 export interface Bbox {
   minX: number;

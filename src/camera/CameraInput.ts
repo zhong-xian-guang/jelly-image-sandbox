@@ -1,10 +1,16 @@
 /**
  * `CameraInput`（issue #13 / T12）——把 DOM 滾輪／指標事件接到 `CameraGestures`。
  *
- * 薄的接線層（對照輸入層的 `PointerInput`）：`wheel` → 縮放；`pointerdown` 落在
- * Jelly 之外（picking 沒命中）→ 背景拖曳 → 平移／雙指縮放。命中 Jelly 的指標留給
- * `PointerInput` 當 Grab，這裡不碰（兩層共用同一個 canvas，各自 addEventListener）。
+ * 薄的接線層（對照輸入層的 `PointerInput`）：`wheel` → 縮放；指標拖曳觸發平移
+ * ／雙指縮放的判定分兩種裝置：
+ *  - **滑鼠**：只認中鍵（`button === 1`），不論落在 Jelly 上或背景都算——這樣
+ *    縮到很近、畫面被 Jelly 佔滿找不到背景可拖時，仍能用中鍵平移相機。左鍵
+ *    留給 `PointerInput` 當 Grab，這裡完全不碰。
+ *  - **觸控／觸控筆**：沒有「鍵」的概念，維持原本的判定——`pointerdown` 落在
+ *    Jelly 之外（picking 沒命中）才算背景拖曳；命中 Jelly 的留給 `PointerInput`
+ *    當 Grab。
  *
+ * 兩層共用同一個 canvas、各自 `addEventListener`，靠上述判斷互不重疊。
  * 判定結果是 `CameraCommand`，交給呼叫端每幀餵進 `updateCamera`——不直接改相機狀態。
  */
 
@@ -62,9 +68,13 @@ export class CameraInput {
 
   private onDown = (ev: PointerEvent): void => {
     const [x, y] = this.localXY(ev);
-    const onBackground = !this.hitTest(this.screenToWorld(x, y));
-    if (onBackground) this.target.setPointerCapture(ev.pointerId);
-    this.gestures.pointerDown(ev.pointerId, x, y, onBackground);
+    // 滑鼠：只有中鍵算相機（不論有沒有落在 Jelly 上）。觸控／觸控筆：維持
+    // 原本的背景判定（命中 Jelly 的留給 PointerInput 當 Grab）。
+    const trackForCamera =
+      ev.pointerType === 'mouse' ? ev.button === 1 : !this.hitTest(this.screenToWorld(x, y));
+    if (!trackForCamera) return;
+    this.target.setPointerCapture(ev.pointerId);
+    this.gestures.pointerDown(ev.pointerId, x, y, true);
   };
 
   private onMove = (ev: PointerEvent): void => {
