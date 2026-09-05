@@ -52,6 +52,11 @@ export class PinMarkers {
     this.element.classList.toggle('is-removable', removable);
   }
 
+  /** 「顯示 Pin」開關——整層藏起來，不用逐一移除節點（`update` 之後還會照常同步）。 */
+  setVisible(visible: boolean): void {
+    this.element.classList.toggle('is-hidden', !visible);
+  }
+
   destroy(): void {
     this.element.remove();
   }

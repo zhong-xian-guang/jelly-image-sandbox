@@ -29,7 +29,9 @@
  * **Pin 的視覺提示**：`PinMarkers`（DOM 覆蓋層）每幀把 `sim.listPins()` 的世界
  * 座標投影成螢幕座標畫成小圓點；Pin 模式開啟時標記變紅脈動（提示可以點掉）、
  * 畫布游標也換成十字——兩層一起讓「現在是不是在 Pin 模式」不用低頭看面板就
- * 知道（見 `setPinMode`）。
+ * 知道（見 `setPinMode`）。「顯示 Pin」關掉時整層藏起來、`frame()` 也跳過投影
+ * 計算（見 `setPinsVisible`）；`ControlPanel` 那邊會同時鎖住 Pin 模式／清除所有
+ * Pin，所見即所得。
  */
 
 import {
@@ -98,6 +100,8 @@ export class JellySandbox {
   private boundaryMode: BoundaryMode = 'infinite';
   /** 控制面板「Pin 模式」開關；`attachInputHandlers` 的 `applyInput` 靠它轉接。 */
   private pinModeEnabled = false;
+  /** 「顯示 Pin」開關——關閉時 `pinMarkers` 整層藏起來、跳過每幀的投影計算。 */
+  private pinsVisible = true;
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
   private wireframeVisible = false;
 
@@ -136,6 +140,7 @@ export class JellySandbox {
         softness: DEFAULT_SOFTNESS,
         tapStrength: this.sim.params.tapStrength,
         pinMode: this.pinModeEnabled,
+        showPins: this.pinsVisible,
         followLocked: !this.cameraState.followEnabled,
         showWireframe: this.wireframeVisible,
       },
@@ -145,6 +150,7 @@ export class JellySandbox {
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
       onPinModeChange: (enabled) => this.setPinMode(enabled),
       onClearPins: () => this.sim.clearPins(),
+      onShowPinsChange: (visible) => this.setPinsVisible(visible),
       onFollowLockChange: (locked) => this.setFollowLock(locked),
       onFrameJelly: () => this.frameJelly(),
       onReset: () => this.sim.reset(),
@@ -210,7 +216,11 @@ export class JellySandbox {
     this.cameraCommands.push({ type: 'setFollow', enabled: !locked });
   }
 
-  /** 「框住果凍」按鈕（issue #14）——一次性緩動 fit 當前 bbox 後恢復跟隨。 */
+  /**
+   * 「框住果凍」按鈕（issue #14）——一次性緩動 fit 當前 bbox。純一次性動作，
+   * 不碰「鎖定跟隨」狀態（`updateCamera` 的 `frame` 指令不改 `followEnabled`），
+   * 按這顆鈕不會讓控制面板的「鎖定跟隨」勾選框跟實際狀態對不上。
+   */
   frameJelly(): void {
     this.cameraCommands.push({ type: 'frame' });
   }
@@ -259,6 +269,16 @@ export class JellySandbox {
 
   private applyPinModeCursor(): void {
     this.renderer.canvas.style.cursor = this.pinModeEnabled ? 'crosshair' : '';
+  }
+
+  /**
+   * 「顯示 Pin」開關——只管標記的顯示／隱藏。`ControlPanel` 那邊已經在使用者
+   * 關掉顯示時順便把「Pin 模式」的勾選框也一起強制關掉（所見即所得），這裡
+   * 不用重複處理；只要單純記著這個旗標，`frame()` 每幀據此決定要不要投影更新。
+   */
+  private setPinsVisible(visible: boolean): void {
+    this.pinsVisible = visible;
+    this.pinMarkers.setVisible(visible);
   }
 
   /** 「顯示網格」開關（issue #14 追加，debug 用）——記在 `wireframeVisible`，`replaceJelly` 換新 `JellyRenderer` 時要重套。 */
@@ -400,18 +420,20 @@ export class JellySandbox {
     this.renderer.setCamera(this.cameraState.transform);
     this.renderer.render();
 
-    const canvasSize = this.canvasSize();
-    this.pinMarkers.update(
-      this.sim.listPins().map((pin) => {
-        const screen = worldToScreen(
-          this.cameraState.transform,
-          canvasSize,
-          pin.point.x,
-          pin.point.y,
-        );
-        return { id: String(pin.id), x: screen.x, y: screen.y };
-      }),
-    );
+    if (this.pinsVisible) {
+      const canvasSize = this.canvasSize();
+      this.pinMarkers.update(
+        this.sim.listPins().map((pin) => {
+          const screen = worldToScreen(
+            this.cameraState.transform,
+            canvasSize,
+            pin.point.x,
+            pin.point.y,
+          );
+          return { id: String(pin.id), x: screen.x, y: screen.y };
+        }),
+      );
+    }
 
     this.rafId = requestAnimationFrame(this.frame);
   };

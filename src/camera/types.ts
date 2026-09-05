@@ -88,7 +88,10 @@ export interface CameraState {
  * - `zoomBy`：以 `pivotScreen`（畫布局部座標）為定點縮放 `factor` 倍——該螢幕點
  *   底下的世界座標在縮放前後不變（滾輪對準游標縮放）。
  * - `setFollow`：切「鎖定跟隨」——`enabled = false` 即自動跟隨關。
- * - `frame`：「框住果凍」按鈕——一次性緩動 fit 當前 bbox 後恢復跟隨。
+ * - `frame`：「框住果凍」按鈕——一次性緩動 fit 當前 bbox。純粹的一次性動作，
+ *   不改 `followEnabled`：鎖定跟隨時 fit 完停在原地，沒鎖定時 fit 完照常繼續
+ *   自動跟隨（因為本來就是開的）。不會讓「鎖定跟隨」勾選框背後的狀態跟畫面
+ *   對不上。
  */
 export type CameraCommand =
   | { type: 'panBy'; dxScreen: number; dyScreen: number }

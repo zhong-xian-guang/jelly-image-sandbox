@@ -21,20 +21,23 @@ function stubPointerCapture(el: HTMLElement): void {
  */
 function makePointerEvent(
   type: string,
-  init: { pointerId: number; clientX: number; clientY: number },
+  init: { pointerId: number; clientX: number; clientY: number; button?: number },
 ): Event {
   const ev = new MouseEvent(type, {
     bubbles: true,
     cancelable: true,
     clientX: init.clientX,
     clientY: init.clientY,
+    button: init.button ?? 0,
   });
   Object.defineProperty(ev, 'pointerId', { value: init.pointerId });
   return ev;
 }
 
-function fireDown(target: EventTarget, pointerId: number, x: number, y: number): void {
-  target.dispatchEvent(makePointerEvent('pointerdown', { pointerId, clientX: x, clientY: y }));
+function fireDown(target: EventTarget, pointerId: number, x: number, y: number, button = 0): void {
+  target.dispatchEvent(
+    makePointerEvent('pointerdown', { pointerId, clientX: x, clientY: y, button }),
+  );
 }
 
 function fireUp(target: EventTarget, pointerId: number, x: number, y: number): void {
@@ -98,6 +101,21 @@ describe('PointerInput — 每個手勢配一個獨立 id（不直接沿用瀏�
     const types = events.map((e) => e.type);
     expect(types.filter((t) => t === 'grab')).toHaveLength(1);
     expect(types.filter((t) => t === 'release')).toHaveLength(1);
+
+    input.destroy();
+  });
+
+  it('滑鼠中鍵按下不算 Grab（中鍵留給 CameraInput 當相機平移）', () => {
+    const events: InputEvent[] = [];
+    const input = new PointerInput(el, {
+      screenToWorld: (x, y) => ({ x, y }),
+      applyInput: (e) => events.push(e),
+    });
+
+    fireDown(el, 1, 10, 10, 1); // button === 1（中鍵）
+    fireUp(el, 1, 10, 10);
+
+    expect(events).toHaveLength(0);
 
     input.destroy();
   });

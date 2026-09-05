@@ -13,6 +13,12 @@
  * 成每次 `pointerdown` 自己配一個遞增的合成 id（`sessionIds` 記錄瀏覽器 id →
  * 合成 id 的對應，`pointerup`/`pointercancel` 時清掉），讓每個獨立手勢的身分
  * 互不相干，Pin 才能真的長期存在、不被日後無關的操作誤刪。
+ *
+ * **只認滑鼠左鍵／觸控／觸控筆的主要接觸點**（`ev.button === 0`，這是
+ * `PointerEvent` 對「主鍵／唯一接觸點」的統一表示法，觸控與觸控筆本來就只
+ * 回報 0）。滑鼠中鍵（`button === 1`）整個忽略、不進 `GestureTracker`——
+ * 中鍵留給 `CameraInput` 當相機平移，兩者才不會對同一次按下各自反應（見
+ * `CameraInput` 對應的判斷）。
  */
 
 import type { InputEvent, Point } from '../sim';
@@ -70,6 +76,7 @@ export class PointerInput {
 
   private onDown = (ev: PointerEvent): void => {
     ev.preventDefault();
+    if (ev.button !== 0) return; // 中鍵／右鍵不算 Grab；中鍵留給 CameraInput 平移
     this.target.setPointerCapture(ev.pointerId);
     const id = this.nextSessionId++;
     this.sessionIds.set(ev.pointerId, id);

@@ -1,14 +1,16 @@
 /**
  * 相機手勢判定（issue #13 / T12）——純邏輯，不碰 DOM。
  *
- * 把「滾輪 + 背景指標拖曳」翻成 `CameraCommand`（`updateCamera` 吃的手動指令）：
- *  - `wheel`                → `zoomBy`（對準指標處）
- *  - 單一背景指標拖曳        → `panBy`（螢幕位移）
- *  - ≥ 2 個背景指標          → `panBy`（質心位移）+ `zoomBy`（間距比、對準質心）
+ * 把「滾輪 + 相機指標拖曳」翻成 `CameraCommand`（`updateCamera` 吃的手動指令）：
+ *  - `wheel`              → `zoomBy`（對準指標處）
+ *  - 單一相機指標拖曳      → `panBy`（螢幕位移）
+ *  - ≥ 2 個相機指標        → `panBy`（質心位移）+ `zoomBy`（間距比、對準質心）
  *
- * 「背景」＝ `pointerDown` 當下 picking 沒命中 Jelly（由 `CameraInput` 判定後傳入
- * `onBackground`）。命中 Jelly 的指標屬於 Grab／多重抓取，這裡完全不碰它——相機與
- * 求解器輸入是兩條獨立的流（見 ADR-0005）。DOM 事件接線在 `CameraInput`。
+ * 哪些指標算「相機的」由 `CameraInput` 判定後透過 `pointerDown` 的
+ * `trackForCamera` 傳進來：滑鼠中鍵不管有沒有命中 Jelly 都算；觸控／觸控筆
+ * 則是 picking 沒命中 Jelly 才算（沒有「鍵」可用來區分）。命中 Jelly 的滑鼠
+ * 左鍵／觸控／觸控筆屬於 Grab／多重抓取，這裡完全不碰它——相機與求解器輸入
+ * 是兩條獨立的流（見 ADR-0005）。DOM 事件接線在 `CameraInput`。
  */
 
 import type { CameraCommand } from './types';
@@ -45,7 +47,7 @@ interface Aggregate {
 export class CameraGestures {
   private readonly emit: (cmd: CameraCommand) => void;
   private readonly config: CameraGesturesConfig;
-  /** 目前追蹤中的背景指標（命中 Jelly 的不進來）。 */
+  /** 目前追蹤中的相機指標（`trackForCamera` 為 false 的不進來）。 */
   private readonly pointers = new Map<number | string, { x: number; y: number }>();
   /** 上一次的指標群聚合，move 時比對出增量。down / up 時只重設不 emit。 */
   private last: Aggregate | null = null;
@@ -61,9 +63,17 @@ export class CameraGestures {
     this.emit({ type: 'zoomBy', factor, pivotScreen: { x: screenX, y: screenY } });
   }
 
-  /** `onBackground` 為 false（命中 Jelly）時整個忽略——那是 Grab。 */
-  pointerDown(id: number | string, screenX: number, screenY: number, onBackground: boolean): void {
-    if (!onBackground) return;
+  /**
+   * `trackForCamera` 由 `CameraInput` 判定（滑鼠中鍵，或觸控／觸控筆命中背景）；
+   * 為 `false` 時整個忽略——那個指標屬於 Grab。
+   */
+  pointerDown(
+    id: number | string,
+    screenX: number,
+    screenY: number,
+    trackForCamera: boolean,
+  ): void {
+    if (!trackForCamera) return;
     this.pointers.set(id, { x: screenX, y: screenY });
     this.last = this.aggregate();
   }
@@ -102,7 +112,7 @@ export class CameraGestures {
     this.pointerUp(id);
   }
 
-  /** 目前追蹤中的背景指標數。 */
+  /** 目前追蹤中的相機指標數。 */
   get activeCount(): number {
     return this.pointers.size;
   }

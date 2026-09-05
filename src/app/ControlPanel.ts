@@ -12,6 +12,10 @@
  * 標記切成「可點掉」的視覺（紅色脈動），兩層加在一起讓「現在是不是在 Pin
  * 模式」不用低頭看面板就知道。
  *
+ * 「顯示 Pin」關掉時，所見即所得：畫面上看不到 Pin 標記，「Pin 模式」勾選框跟
+ * 「清除所有 Pin」按鈕就跟著鎖住（`disabled`）——不能對看不見的東西下手。原本
+ * 已開著的「Pin 模式」也會被強制關掉，不會變成「看不到卻還在默默放 Pin」。
+ *
  * 「顯示網格」是純 debug 用的三角化線框開關，接 `JellyRenderer.setWireframeVisible`。
  */
 
@@ -23,6 +27,8 @@ export interface ControlPanelInitial {
   softness: number;
   tapStrength: number;
   pinMode: boolean;
+  /** Pin 標記顯示開關；關閉時 Pin 模式／清除所有 Pin 一併鎖住。 */
+  showPins: boolean;
   followLocked: boolean;
   /** 網格線框開關（debug 用）。 */
   showWireframe: boolean;
@@ -36,6 +42,7 @@ export interface ControlPanelOptions {
   onTapStrengthChange: (strength: number) => void;
   onPinModeChange: (enabled: boolean) => void;
   onClearPins: () => void;
+  onShowPinsChange: (visible: boolean) => void;
   onFollowLockChange: (locked: boolean) => void;
   onFrameJelly: () => void;
   onReset: () => void;
@@ -61,7 +68,13 @@ export class ControlPanel {
         opts.initial.tapStrength,
         opts.onTapStrengthChange,
       ),
-      this.pinRow(opts.initial.pinMode, opts.onPinModeChange, opts.onClearPins),
+      ...this.pinRows(
+        opts.initial.pinMode,
+        opts.initial.showPins,
+        opts.onPinModeChange,
+        opts.onClearPins,
+        opts.onShowPinsChange,
+      ),
       this.checkboxRow('鎖定跟隨', opts.initial.followLocked, opts.onFollowLockChange),
       this.buttonRow('框住果凍', opts.onFrameJelly),
       this.buttonRow('停止／重設', opts.onReset),
@@ -118,19 +131,25 @@ export class ControlPanel {
     return row;
   }
 
-  private pinRow(
-    initial: boolean,
+  /**
+   * 兩排：「顯示 Pin」開關 + 「Pin 模式」/「清除所有 Pin」。後者的可用狀態跟著
+   * 前者走——關掉顯示就鎖住、強制退出 Pin 模式（所見即所得，見類別頂端說明）。
+   */
+  private pinRows(
+    initialPinMode: boolean,
+    initialShowPins: boolean,
     onPinModeChange: (enabled: boolean) => void,
     onClearPins: () => void,
-  ): HTMLElement {
-    const row = document.createElement('div');
-    row.className = 'jelly-control-row';
+    onShowPinsChange: (visible: boolean) => void,
+  ): HTMLElement[] {
+    const pinRow = document.createElement('div');
+    pinRow.className = 'jelly-control-row';
 
     const pinLabel = document.createElement('label');
-    pinLabel.classList.toggle('jelly-pin-mode-active', initial);
+    pinLabel.classList.toggle('jelly-pin-mode-active', initialPinMode);
     const pinCheckbox = document.createElement('input');
     pinCheckbox.type = 'checkbox';
-    pinCheckbox.checked = initial;
+    pinCheckbox.checked = initialPinMode;
     pinCheckbox.addEventListener('change', () => {
       pinLabel.classList.toggle('jelly-pin-mode-active', pinCheckbox.checked);
       onPinModeChange(pinCheckbox.checked);
@@ -142,8 +161,27 @@ export class ControlPanel {
     clearButton.textContent = '清除所有 Pin';
     clearButton.addEventListener('click', onClearPins);
 
-    row.append(pinLabel, clearButton);
-    return row;
+    pinRow.append(pinLabel, clearButton);
+
+    /** 「顯示 Pin」關／開時同步鎖住／解鎖 Pin 模式勾選框跟清除按鈕。 */
+    const setPinControlsLocked = (locked: boolean): void => {
+      pinCheckbox.disabled = locked;
+      clearButton.disabled = locked;
+    };
+    setPinControlsLocked(!initialShowPins);
+
+    const showRow = this.checkboxRow('顯示 Pin', initialShowPins, (visible) => {
+      onShowPinsChange(visible);
+      setPinControlsLocked(!visible);
+      if (!visible && pinCheckbox.checked) {
+        // 看不到 Pin 了，不能讓 Pin 模式繼續默默放看不到的 Pin。
+        pinCheckbox.checked = false;
+        pinLabel.classList.remove('jelly-pin-mode-active');
+        onPinModeChange(false);
+      }
+    });
+
+    return [showRow, pinRow];
   }
 
   private checkboxRow(

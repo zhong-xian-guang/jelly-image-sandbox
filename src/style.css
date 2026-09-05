@@ -91,6 +91,12 @@ body {
   font: inherit;
 }
 
+/** 鎖住的控制項（例如「顯示 Pin」關閉時的 Pin 模式／清除所有 Pin）——所見即所得。 */
+.jelly-control-row :disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /** 「Pin 模式」勾選時的視覺提示（issue #14 追加）——標籤變色＋加粗，呼應畫布游標變成十字。 */
 .jelly-control-row label.jelly-pin-mode-active {
   color: #ffb400;
@@ -107,6 +113,11 @@ body {
   inset: 0;
   z-index: 5; /* 蓋在畫布之上、但在控制面板／拖放提示（z-index 10）之下 */
   pointer-events: none;
+}
+
+/** 「顯示 Pin」關閉——整層藏起來。 */
+.jelly-pin-markers.is-hidden {
+  display: none;
 }
 
 .jelly-pin-marker {
