@@ -122,6 +122,16 @@ body {
   font-weight: 600;
 }
 
+/**
+ * substep 降級 debug 讀出（issue #16 追加）——低調的等寬小字，手動用 CPU 節流測試
+ * 降級／回穩時方便一眼確認，不搶控制面板其他項目的注意力。
+ */
+.jelly-perf-status {
+  font-family: monospace;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
 /** Demo 按鈕列前的小標題（issue #15 追加）——跟其他控制項分區，一眼看出這是自動演出。 */
 .jelly-control-heading {
   margin-top: 4px;

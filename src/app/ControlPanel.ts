@@ -20,6 +20,12 @@
  *
  * 「Demo」按鈕（issue #15）播放中會被 `JellySandbox` 呼叫 `setDemoButtonsEnabled(false)`
  * 全部鎖住，理由同上——避免疊加播放兩個 Demo 留下沒人清的殘留 Pin/Grab。
+ *
+ * 「Substep」是 issue #16 追加的唯讀 debug 讀出，`JellySandbox` 每幀呼叫
+ * `setPerfStatus` 同步目前的 `PerfMonitor.substeps` / `degraded`——手動測試「節流
+ * CPU 降級」時（見該 issue 驗收條件）用眼睛確認 4→2→4 有沒有真的發生，不用開
+ * DevTools 斷點。`setPerfStatus` 內部比對是否真的變了才寫 DOM，值沒變的每幀呼叫
+ * 不會產生多餘的 reflow（在想省效能的降級路徑上，多餘 DOM 寫入是反效果）。
  */
 
 import type { BoundaryMode } from '../sim';
@@ -65,12 +71,18 @@ export class ControlPanel {
   readonly element: HTMLElement;
   /** 播放中鎖住，避免疊加播放兩個 Demo（issue #15）——見 `setDemoButtonsEnabled`。 */
   private readonly demoButtons: HTMLButtonElement[] = [];
+  private readonly perfStatus: HTMLElement;
+  /** `setPerfStatus` 比對用；避免值沒變時每幀重寫 DOM。 */
+  private lastPerfText: string | null = null;
 
   constructor(opts: ControlPanelOptions) {
     const panel = document.createElement('div');
     panel.className = 'jelly-control-panel';
 
+    this.perfStatus = this.perfStatusRow();
+
     panel.append(
+      this.perfStatus,
       this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange),
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
       this.rangeRow('軟硬度', 0, 1, 0.01, opts.initial.softness, opts.onSoftnessChange),
@@ -107,6 +119,17 @@ export class ControlPanel {
    */
   setDemoButtonsEnabled(enabled: boolean): void {
     for (const button of this.demoButtons) button.disabled = !enabled;
+  }
+
+  /**
+   * `JellySandbox` 每幀同步一次目前的 substep 數／是否處於降級狀態（issue #16）。
+   * 只在文字真的變了才寫 DOM（見類別頂端說明）。
+   */
+  setPerfStatus(substeps: number, degraded: boolean): void {
+    const text = degraded ? `Substep：${substeps}（已降級）` : `Substep：${substeps}`;
+    if (text === this.lastPerfText) return;
+    this.lastPerfText = text;
+    this.perfStatus.textContent = text;
   }
 
   destroy(): void {
@@ -224,6 +247,14 @@ export class ControlPanel {
     checkbox.addEventListener('change', () => onChange(checkbox.checked));
 
     row.append(checkbox, labelText);
+    return row;
+  }
+
+  /** 唯讀 debug 讀出列，文字由 `setPerfStatus` 填入（建構時先放預設值）。 */
+  private perfStatusRow(): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'jelly-control-row jelly-perf-status';
+    row.textContent = 'Substep：4';
     return row;
   }
 
