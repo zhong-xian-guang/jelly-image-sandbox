@@ -46,7 +46,7 @@
  * 經 `sim.applyInput` 送進去——跟即時輸入同一條窄介面，不繞道。「停止／重設」
  * 按鈕（`resetSim`）先停 Demo 排程再重設 `SimCore`，避免重設後殘留事件繼續
  * 觸發；重新匯入圖片（`replaceJelly`）也會中斷 Demo，因為排定座標是對著舊
- * 網格算的，套到新網格沒意義。播放中鎖住所有 Demo 按鈕（`setDemoButtonsLocked`），
+ * 網格算的，套到新網格沒意義。播放中鎖住所有 Demo 按鈕（`setPlaybackLocked`），
  * 擋掉「疊加播放另一個 Demo」——`DemoRunner.start` 只換排程、不會回頭釋放前一個
  * Demo 已經建立的 Pin/Grab，疊加播放會留下一個沒人記得、永遠釘住的 Pin。
  *
@@ -162,7 +162,7 @@ export class JellySandbox {
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
   private wireframeVisible = false;
   /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
-  private demoButtonsLocked = false;
+  private playbackLocked = false;
   /** 上一次錄製結束後的 Track；`null` 表示還沒錄過，「播放 Track」按鈕維持鎖住。 */
   private recordedTrack: Track | null = null;
 
@@ -301,7 +301,7 @@ export class JellySandbox {
     const demo = DEMOS.find((d) => d.id === id);
     if (!demo) return;
     this.demoRunner.start(demo.build(this.sim.positions));
-    this.setDemoButtonsLocked(true); // 立即鎖住，擋掉「趁還沒進下一幀又點另一個 Demo」的疊加播放
+    this.setPlaybackLocked(true); // 立即鎖住，擋掉「趁還沒進下一幀又點另一個 Demo」的疊加播放
   }
 
   /**
@@ -324,19 +324,19 @@ export class JellySandbox {
   /**
    * 「播放 Track」按鈕（issue #29）：把上一次錄好的 Track 直接交給 `demoRunner`
    * 精準重播——Track 的排程格式跟 `DemoStep[]` 相同，不需要另外寫播放器（見
-   * ADR-0006）。跟 Demo 共用同一個 `DemoRunner`，鎖定邏輯（`setDemoButtonsLocked`）
+   * ADR-0006）。跟 Demo 共用同一個 `DemoRunner`，鎖定邏輯（`setPlaybackLocked`）
    * 也自然覆蓋到這裡，不用另外處理。
    */
   private playTrack(): void {
     if (!this.recordedTrack) return;
     this.demoRunner.start(this.recordedTrack);
-    this.setDemoButtonsLocked(true); // 立即鎖住，理由同 runDemo
+    this.setPlaybackLocked(true); // 立即鎖住，理由同 runDemo
   }
 
   /** 集中處理鎖定狀態變化，`frame()` 每幀同步一次時才不會對沒變的按鈕重複寫 `disabled`。 */
-  private setDemoButtonsLocked(locked: boolean): void {
-    if (this.demoButtonsLocked === locked) return;
-    this.demoButtonsLocked = locked;
+  private setPlaybackLocked(locked: boolean): void {
+    if (this.playbackLocked === locked) return;
+    this.playbackLocked = locked;
     this.controlPanel.setPlaybackControlsEnabled(!locked);
   }
 
@@ -347,7 +347,7 @@ export class JellySandbox {
    */
   private resetSim(): void {
     this.demoRunner.stop();
-    this.setDemoButtonsLocked(false);
+    this.setPlaybackLocked(false);
     if (this.trackRecorder.isRecording) {
       // 中斷仍在進行中的錄製；已經錄好、存在 `recordedTrack` 裡的 Track 不受影響（拓撲沒變，還能重播）。
       this.trackRecorder.stop();
@@ -475,7 +475,7 @@ export class JellySandbox {
    */
   private async replaceJelly(mesh: SimMesh, texture: HTMLImageElement): Promise<void> {
     this.demoRunner.stop(); // 舊 Jelly 的座標對新網格沒意義，換 Jelly 時中斷排程中的 Demo
-    this.setDemoButtonsLocked(false);
+    this.setPlaybackLocked(false);
     // 同樣理由：錄製中／已錄好的 Track 座標都是對著舊網格算的，換 Jelly 時一併中斷並丟棄。
     if (this.trackRecorder.isRecording) this.trackRecorder.stop();
     this.recordedTrack = null;
@@ -589,7 +589,7 @@ export class JellySandbox {
       this.sim.step(STEP_SECONDS);
       this.trackRecorder.tick(); // 跟 demoRunner 同一個 step 計數，錄下的時間戳記才能對得上重播（issue #29）
     }
-    this.setDemoButtonsLocked(this.demoRunner.isRunning); // 追上「Demo／Track 自己播完」這種沒有按鈕點擊觸發的狀態變化
+    this.setPlaybackLocked(this.demoRunner.isRunning); // 追上「Demo／Track 自己播完」這種沒有按鈕點擊觸發的狀態變化
 
     const cmds = this.cameraCommands;
     this.cameraCommands = [];
