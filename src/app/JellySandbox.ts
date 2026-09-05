@@ -25,6 +25,11 @@
  * `./walledBounds`，Pin 模式的輸入轉接見 `../input/pinModeRouting`（開啟 Pin 模式
  * 後，`PointerInput` 原本會發的 `grab` 改由它轉成 `pin`，直接放 Pin 而非可拖曳
  * 的 Grab）。
+ *
+ * **牆壁邊框**（issue #9 追加）：切到 Walled 邊界時，`WalledBoundary.box`（世界
+ * 座標常數）同步畫成 `JellyRenderer` 裡的一個外框（見 `setWallBounds`），撞牆
+ * 時看得到界線在哪，不會覺得「明明沒碰到東西卻被彈回來」。切回 Infinite 或
+ * 重新匯入圖片都會同步藏起來／重套（`applyBoundaryMode`、`replaceJelly`）。
  */
 
 import {
@@ -39,6 +44,7 @@ import { PointerInput, routeForPinMode } from '../input';
 import { buildSimMesh, type SimMesh } from '../mesh';
 import { JellyRenderer } from '../render';
 import {
+  type Bbox,
   type BoundaryMode,
   InfiniteBoundary,
   SimCore,
@@ -82,6 +88,8 @@ export class JellySandbox {
   private importing = false;
   /** 目前的 Boundary 模式——`SimCore` 沒有 getter，重新匯入圖片時要靠這個重套。 */
   private boundaryMode: BoundaryMode = 'infinite';
+  /** `walled` 時目前的牆壁 AABB（給 `JellyRenderer.setWallBounds` 畫外框），`infinite` 時為 `null`。 */
+  private wallBox: Bbox | null = null;
   /** 控制面板「Pin 模式」開關；`attachInputHandlers` 的 `applyInput` 靠它轉接。 */
   private pinModeEnabled = false;
 
@@ -195,19 +203,26 @@ export class JellySandbox {
   /**
    * Boundary 切換（issue #14）：`walled` 用目前 bbox 算一個正方形邊界範圍（見
    * `./walledBounds`）、`infinite` 換回無邊界。記在 `boundaryMode`——`replaceJelly`
-   * 換新 `SimCore` 時要重套，否則面板顯示的模式會跟實際物理不一致。
+   * 換新 `SimCore` 時要重套，否則面板顯示的模式會跟實際物理不一致。同時把
+   * `wallBox` 套到 Renderer（issue #9 追加）：撞牆時畫面上有外框可以對照，
+   * 不會覺得「明明沒碰到東西卻被彈回來」。
    */
   private setBoundaryMode(mode: BoundaryMode): void {
     this.boundaryMode = mode;
     this.applyBoundaryMode(this.sim);
+    this.renderer.setWallBounds(this.wallBox);
   }
 
+  /** 套用 `boundaryMode` 到 `sim`，並同步 `wallBox`（`replaceJelly` 換新 Renderer 後要另外重套，見該處）。 */
   private applyBoundaryMode(sim: SimCore): void {
-    sim.setBoundary(
-      this.boundaryMode === 'walled'
-        ? new WalledBoundary(computeWalledBounds(sim.bbox()))
-        : new InfiniteBoundary(),
-    );
+    if (this.boundaryMode === 'walled') {
+      const boundary = new WalledBoundary(computeWalledBounds(sim.bbox()));
+      sim.setBoundary(boundary);
+      this.wallBox = boundary.box;
+    } else {
+      sim.setBoundary(new InfiniteBoundary());
+      this.wallBox = null;
+    }
   }
 
   /** Softness 滑桿（issue #14）：0–1 → `cellFrac` + `alphaSm`（見 `../sim/softness`）。 */
@@ -290,6 +305,7 @@ export class JellySandbox {
       renderer.canvas,
     ));
     this.renderer.setCamera(this.cameraState.transform);
+    this.renderer.setWallBounds(this.wallBox); // 新 JellyRenderer 預設沒有牆框，要重套
   }
 
   /** `PointerInput` + `CameraInput` 都吃同一組 project／hitTest；重新匯入後換綁到新 canvas。 */

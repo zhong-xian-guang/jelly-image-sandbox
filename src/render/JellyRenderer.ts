@@ -7,11 +7,17 @@
  *
  * **只吃 `positions` 陣列**，不認得求解器（`SimCore`）。世界→螢幕變換透過
  * `setCamera` 傳入（T12 Camera 的輸出接這裡）。不使用 Canvas 2D 逐三角 `drawImage`。
+ *
+ * **牆壁邊框**（issue #9 追加）：`setWallBounds(box)` 畫出 Walled 邊界的 AABB
+ * 外框，讓撞牆有畫面上看得到的界線可以對照，不會覺得「明明沒碰到東西卻被彈
+ * 回來」。`box` 是世界座標常數（`WalledBoundary.box`，不隨 Jelly 變形），只在
+ * 邊界模式切換時重算；傳 `null`（Infinite 模式）整層藏起來。
  */
 
 import {
   Application,
   Container,
+  Graphics,
   Mesh,
   MeshGeometry,
   Texture,
@@ -25,6 +31,14 @@ import {
   type TextureMesh,
   writePositions,
 } from './meshBuffers';
+
+/** Walled 邊界的 AABB。跟 `../sim` 的 `Bbox` 結構相同，這裡獨立宣告——Renderer 不認得求解器（見檔頭）。 */
+export interface WallBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
 
 export interface JellyRendererOptions {
   /** 畫布寬 / 高（CSS 像素）。 */
@@ -49,6 +63,9 @@ export class JellyRenderer {
   private readonly geometry: MeshGeometry;
   /** 每幀就地覆寫、再交給 GPU 的頂點 buffer。 */
   private readonly positionBuffer: Float32Array;
+  private readonly wallFrame: Graphics;
+  /** Walled 邊界的 AABB；`null` = Infinite（`wallFrame` 隱藏）。 */
+  private wallBox: WallBounds | null = null;
   private camera: CameraTransform = { x: 0, y: 0, scale: 1 };
   private width: number;
   private height: number;
@@ -69,8 +86,12 @@ export class JellyRenderer {
     const texture = opts.texture instanceof Texture ? opts.texture : Texture.from(opts.texture);
     this.mesh = new Mesh({ geometry: this.geometry, texture });
 
+    this.wallFrame = new Graphics();
+    this.wallFrame.visible = false;
+
     this.world = new Container();
     this.world.addChild(this.mesh);
+    this.world.addChild(this.wallFrame); // 疊在貼圖之上
     this.app.stage.addChild(this.world);
 
     this.applyCamera();
@@ -110,6 +131,21 @@ export class JellyRenderer {
   setCamera(camera: CameraTransform): void {
     this.camera = { ...camera };
     this.applyCamera();
+    // 邊框線寬用 camera.scale 換算成固定螢幕像素（見 redrawWallFrame），縮放
+    // 改變時要重畫一次，不然要等到下一次 setWallBounds 才會用新的 scale。
+    if (this.wallFrame.visible) this.redrawWallFrame();
+  }
+
+  /**
+   * 牆壁邊框（issue #9）：`box` = `WalledBoundary.box`，畫出目前 Walled 邊界的
+   * AABB 外框；`null`（Infinite 模式）整層藏起來。`box` 是世界座標常數，只有
+   * 邊界模式切換時才會變，不用每幀呼叫——呼叫端（`JellySandbox`）只在切換時
+   * 重套一次。
+   */
+  setWallBounds(box: WallBounds | null): void {
+    this.wallBox = box;
+    this.wallFrame.visible = box != null;
+    if (box) this.redrawWallFrame();
   }
 
   /** 畫布尺寸改變（CSS 像素）。 */
@@ -134,5 +170,19 @@ export class JellyRenderer {
     const p = containerPosition(this.camera, this.width, this.height);
     this.world.position.set(p.x, p.y);
     this.world.scale.set(this.camera.scale);
+  }
+
+  /**
+   * 畫 `wallBox` 的矩形外框。線寬除以 `camera.scale`——`wallFrame` 跟主網格一起
+   * 被 `world.scale` 縮放，除掉那個縮放才能讓邊框線不管怎麼縮放都維持約 3 個
+   * 螢幕像素粗、清楚可辨。
+   */
+  private redrawWallFrame(): void {
+    if (!this.wallBox) return;
+    const { minX, minY, maxX, maxY } = this.wallBox;
+    this.wallFrame.clear();
+    this.wallFrame
+      .rect(minX, minY, maxX - minX, maxY - minY)
+      .stroke({ width: 3 / (this.camera.scale || 1), color: 0x33aaff, alpha: 0.85 });
   }
 }
