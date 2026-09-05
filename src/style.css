@@ -23,13 +23,23 @@ body {
     'Segoe UI',
     Roboto,
     sans-serif;
-  touch-action: none;
 }
 
 #app {
   width: 100vw;
   height: 100vh;
   position: relative;
+}
+
+/**
+ * `touch-action` 只設在 canvas 上（不是 body）：`PointerInput`/`CameraInput` 要在
+ * canvas 上收原始觸控手勢（拖曳、雙指縮放），瀏覽器內建的捲動/縮放/長按選單會
+ * 打架，所以擋掉。但 `touch-action` 不是「子元素可以再打開」的那種繼承——設在
+ * body 會連控制面板（issue #14）裡的 `<input type=range>` 都一起癱掉，滑桿在
+ * 觸控裝置上完全拖不動。範圍縮到只有 canvas，面板的原生控制項就不受影響。
+ */
+#app canvas {
+  touch-action: none;
 }
 
 /** 拖放匯入（issue #12 / T11）的提示層：拖著檔案經過畫面時疊出，放開或離開就消失。 */
@@ -51,4 +61,32 @@ body {
 
 .jelly-drop-hint.is-active {
   display: flex;
+}
+
+/** 玩家控制面板（issue #14 / T13）：疊在畫布左上角，`position:absolute` + `z-index`。 */
+.jelly-control-panel {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.jelly-control-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.jelly-control-row select,
+.jelly-control-row button,
+.jelly-control-row input[type='range'] {
+  font: inherit;
 }

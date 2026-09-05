@@ -404,6 +404,23 @@ describe('SimCore — Pin', () => {
     expect(a.y).toBeCloseTo(25, 2);
   });
 
+  it('clearPins：一次移除所有 Pin，保留 Grab', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'pin', id: 'p1', x: 0, y: 0 });
+    sim.applyInput({ type: 'pin', id: 'p2', x: 96, y: 0 });
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+    expect(sim.pinCount).toBe(2);
+    expect(sim.grabCount).toBe(1);
+
+    sim.clearPins();
+
+    expect(sim.pinCount).toBe(0);
+    expect(sim.grabCount).toBe(1);
+    expect(sim.attachPoint('p1')).toBeNull();
+    expect(sim.attachPoint('p2')).toBeNull();
+    expect(sim.attachPoint('g')).not.toBeNull();
+  });
+
   it('決定性：含 pin / movePin / unpin 的事件流兩次跑結果完全相等', () => {
     const play = (): number[] => {
       const sim = new SimCore(MESH());
@@ -653,5 +670,38 @@ describe('SimCore — Boundary', () => {
       return Array.from(sim.positions);
     };
     expect(play()).toEqual(play());
+  });
+});
+
+describe('SimCore — reset', () => {
+  it('位置回到 rest、速度歸零、清掉 Grab／Pin', () => {
+    const sim = new SimCore(MESH());
+    const rest = Float64Array.from(sim.positions);
+
+    sim.applyInput({ type: 'pin', id: 'p', x: 0, y: 0 });
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+    sim.applyInput({ type: 'moveGrab', id: 'g', x: 140, y: 130 });
+    run(sim, 30);
+    expect(sim.kineticEnergy()).toBeGreaterThan(0); // 甩動中，確實有動能可歸零
+
+    sim.reset();
+
+    expect(Array.from(sim.positions)).toEqual(Array.from(rest));
+    expect(sim.kineticEnergy()).toBe(0);
+    expect(sim.pinCount).toBe(0);
+    expect(sim.grabCount).toBe(0);
+  });
+
+  it('reset 後仍可正常 step、grab、pin', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'grab', id: 'g', x: 0, y: 0 });
+    run(sim, 10);
+    sim.reset();
+
+    sim.applyInput({ type: 'pin', id: 'p', x: 96, y: 96 });
+    run(sim, 60);
+    expect(sim.pinCount).toBe(1);
+    expect(sim.kineticEnergy()).toBeLessThan(1e-6);
+    expect(allFinite(sim.positions)).toBe(true);
   });
 });

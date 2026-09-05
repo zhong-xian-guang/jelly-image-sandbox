@@ -21,6 +21,9 @@ export interface Boundary {
   resolveBoundary(pos: Float64Array, prev: Float64Array, count: number, dt: number): void;
 }
 
+/** 兩種 `Boundary` 實作的名字——控制面板（issue #14）用它記錄／切換目前模式。 */
+export type BoundaryMode = 'walled' | 'infinite';
+
 /** 無邊界、無限延伸。no-op——Jelly 可被甩到任意遠。 */
 export class InfiniteBoundary implements Boundary {
   resolveBoundary(): void {
