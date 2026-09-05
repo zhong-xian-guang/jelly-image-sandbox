@@ -238,8 +238,10 @@ else
 fi
 
 say "從網址列可以看到 https://<使用者名稱>.itch.io/<project-slug> 這樣的格式。"
+warn "project slug 要跟網址列一模一樣照抄（itch.io 慣例用連字號 - 分隔，不是底線 _）——"
+warn "打錯會在下面 butler push 時收到「invalid game」錯誤，不是登入的問題。"
 ask ITCH_USER "你的 itch.io 使用者名稱："
-ask ITCH_PROJECT "專案的 project slug："
+ask ITCH_PROJECT "專案的 project slug（照網址列原樣照抄）："
 write_env ITCH_USER "$ITCH_USER"
 write_env ITCH_PROJECT "$ITCH_PROJECT"
 
@@ -264,11 +266,22 @@ stage "執行 butler push"
 
 say "即將執行：butler push dist $ITCH_TARGET"
 pause "準備好就按 Enter"
-if ! butler push dist "$ITCH_TARGET"; then
-  warn "push 失敗。最常見原因是登入憑證過期——執行 'butler login' 後重跑這支腳本即可，"
-  warn "已經填過的值都存在 .env 裡，重跑會直接帶出來（Enter 就能沿用）。"
+PUSH_LOG=$(mktemp)
+if ! butler push dist "$ITCH_TARGET" 2>&1 | tee "$PUSH_LOG"; then
+  if grep -qi "invalid game" "$PUSH_LOG"; then
+    warn "「invalid game」——這不是登入問題，是 $ITCH_TARGET 裡的使用者名稱／project slug"
+    warn "跟 itch.io 上實際的專案網址對不上（常見狀況：slug 打成底線 _，實際是連字號 -）。"
+    warn "回 itch.io 開你的專案頁面，把網址列的 slug 原樣照抄，改一下 .env 裡的 ITCH_PROJECT"
+    warn "（跟 ITCH_TARGET）之後重跑這支腳本，或直接手動："
+    warn "  butler push dist <正確的使用者名稱>/<正確的 slug>:$ITCH_CHANNEL"
+  else
+    warn "push 失敗。可能是登入憑證過期——執行 'butler login' 後重跑這支腳本即可，"
+    warn "已經填過的值都存在 .env 裡，重跑會直接帶出來（Enter 就能沿用）。"
+  fi
+  rm -f "$PUSH_LOG"
   exit 1
 fi
+rm -f "$PUSH_LOG"
 say "✓ push 成功。"
 pause
 
