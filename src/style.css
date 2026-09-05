@@ -29,4 +29,26 @@ body {
 #app {
   width: 100vw;
   height: 100vh;
+  position: relative;
+}
+
+/** 拖放匯入（issue #12 / T11）的提示層：拖著檔案經過畫面時疊出，放開或離開就消失。 */
+.jelly-drop-hint {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  text-align: center;
+  font-size: 1.5rem;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  border: 4px dashed rgba(255, 255, 255, 0.6);
+  pointer-events: none;
+  z-index: 10;
+}
+
+.jelly-drop-hint.is-active {
+  display: flex;
 }
