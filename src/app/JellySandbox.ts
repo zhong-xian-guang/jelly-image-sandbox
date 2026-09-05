@@ -49,6 +49,15 @@
  * 網格算的，套到新網格沒意義。播放中鎖住所有 Demo 按鈕（`setDemoButtonsLocked`），
  * 擋掉「疊加播放另一個 Demo」——`DemoRunner.start` 只換排程、不會回頭釋放前一個
  * Demo 已經建立的 Pin/Grab，疊加播放會留下一個沒人記得、永遠釘住的 Pin。
+ *
+ * **substep 自動降級 + 網格解析度退路**（issue #16 / T15）：`PerfMonitor`（純
+ * 狀態機，見該檔）每幀吃「這幀花了幾毫秒」，持續超標（弱裝置／背景分頁搶資源）
+ * 就把 `sim.params.substeps` 從 4 降到 2，讓每步花的運算變少、幀率回穩；持續
+ * 回穩又升回 4。降級當下順便點亮一次性的「網格退路」旗標——舊 Jelly 拓撲已凍結
+ * 沒法即時減面，只能讓**下一次**拖放匯入改用較低的 `targetParticleCount`（見
+ * `REDUCED_TARGET_PARTICLE_COUNT`），新匯入的 Jelly 三角形數變少、負擔跟著降。
+ * `frame()` 每幀把目前 substep 數同步到 `ControlPanel.setPerfStatus`，手動用
+ * DevTools CPU 節流測試時能直接看到 4→2→4 有沒有真的發生。
  */
 
 import {
@@ -61,7 +70,7 @@ import {
   worldToScreen,
 } from '../camera';
 import { PointerInput, routeForPinMode } from '../input';
-import { buildSimMesh, type SimMesh } from '../mesh';
+import { buildSimMesh, DEFAULT_PARAMS, type SimMesh } from '../mesh';
 import { JellyRenderer } from '../render';
 import {
   type Bbox,
@@ -76,6 +85,7 @@ import { createDefaultJelly } from './defaultJelly';
 import { DEMOS, DemoRunner } from './demos';
 import { DropImportInput } from './DropImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
+import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
 import { computeWalledBounds } from './walledBounds';
 
@@ -97,6 +107,13 @@ const DEFAULT_SOFTNESS = 0.5;
  * `pinModeContext`），這樣判定範圍不會隨縮放忽大忽小。
  */
 const PIN_REMOVE_RADIUS_PX = 16;
+/**
+ * 網格解析度退路（issue #16）：substep 降級發生後，下一次拖放匯入改用這個較低的
+ * `targetParticleCount`（預設 `DEFAULT_PARAMS.targetParticleCount` 的一半），讓
+ * 新匯入的 Jelly 三角形數變少、負擔跟著降下來。舊 Jelly 拓撲已凍結沒法即時降，
+ * 這條退路只影響「下一張」匯入的圖（見 `PerfMonitor.consumeMeshFallbackPending`）。
+ */
+const REDUCED_TARGET_PARTICLE_COUNT = Math.round(DEFAULT_PARAMS.targetParticleCount / 2);
 
 export class JellySandbox {
   private sim: SimCore;
@@ -108,6 +125,7 @@ export class JellySandbox {
   private readonly pinMarkers: PinMarkers;
   private readonly demoRunner = new DemoRunner();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
+  private readonly perfMonitor = new PerfMonitor();
   private readonly root: HTMLElement;
   private readonly dropHint: HTMLDivElement;
   private readonly importHint: HTMLDivElement;
@@ -384,7 +402,12 @@ export class JellySandbox {
   };
 
   private async importPng(pngBytes: Uint8Array): Promise<void> {
-    const mesh: SimMesh = buildSimMesh(pngBytes);
+    // 網格解析度退路（issue #16）：上次 substep 降級以來還沒消化過，這次匯入改用
+    // 較低的 targetParticleCount（見 REDUCED_TARGET_PARTICLE_COUNT、PerfMonitor）。
+    const meshParams = this.perfMonitor.consumeMeshFallbackPending()
+      ? { targetParticleCount: REDUCED_TARGET_PARTICLE_COUNT }
+      : {};
+    const mesh: SimMesh = buildSimMesh(pngBytes, meshParams);
     const texture = await decodeTextureImage(pngBytes);
     await this.replaceJelly(mesh, texture);
   }
@@ -481,8 +504,16 @@ export class JellySandbox {
   }
 
   private frame = (nowMs: number): void => {
-    const elapsed = (nowMs - this.lastFrameMs) / 1000;
+    const elapsedMs = nowMs - this.lastFrameMs;
+    const elapsed = elapsedMs / 1000;
     this.lastFrameMs = nowMs;
+    // 同一個 clamp 給 camera 平滑跟 PerfMonitor 累積用：分頁切回來那一大幀不會
+    // 被當成「持續超標一整秒」誤觸發降級（見 PerfMonitor 說明的 sustainSeconds）。
+    const clampedElapsed = Math.min(Math.max(elapsed, 0), CAMERA_MAX_DT);
+
+    this.perfMonitor.sample(elapsedMs, clampedElapsed);
+    this.sim.params.substeps = this.perfMonitor.substeps;
+    this.controlPanel.setPerfStatus(this.perfMonitor.substeps, this.perfMonitor.degraded);
 
     const steps = this.accumulator.advance(elapsed);
     for (let i = 0; i < steps; i++) {
@@ -498,7 +529,7 @@ export class JellySandbox {
       { centroid: this.sim.centroid(), bbox: this.sim.bbox() },
       this.canvasSize(),
       cmds,
-      Math.min(Math.max(elapsed, 0), CAMERA_MAX_DT),
+      clampedElapsed,
     );
 
     this.renderer.setPositions(this.sim.positions);
