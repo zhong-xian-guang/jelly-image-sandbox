@@ -70,8 +70,12 @@ const DROP_HINT_ACTIVE_CLASS = 'is-active';
 const TAP_STRENGTH_RANGE = { min: 1000, max: 11000, step: 100 };
 /** Softness 滑桿初始位置（0–1 中點 = `DEFAULT_SIM_PARAMS`，見 `../sim/softness`）。 */
 const DEFAULT_SOFTNESS = 0.5;
-/** Pin 模式下「點掉既有 Pin」的判定半徑 = 目前 bbox 對角線 × 此係數。 */
-const PIN_REMOVE_RADIUS_FRAC = 0.06;
+/**
+ * Pin 模式下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
+ * CSS 直徑（16px）同數量級，換算回世界座標時要除以目前相機縮放（見
+ * `pinModeContext`），這樣判定範圍不會隨縮放忽大忽小。
+ */
+const PIN_REMOVE_RADIUS_PX = 16;
 
 export class JellySandbox {
   private sim: SimCore;
@@ -94,6 +98,8 @@ export class JellySandbox {
   private boundaryMode: BoundaryMode = 'infinite';
   /** 控制面板「Pin 模式」開關；`attachInputHandlers` 的 `applyInput` 靠它轉接。 */
   private pinModeEnabled = false;
+  /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
+  private wireframeVisible = false;
 
   private rafId = 0;
   private lastFrameMs = 0;
@@ -131,6 +137,7 @@ export class JellySandbox {
         tapStrength: this.sim.params.tapStrength,
         pinMode: this.pinModeEnabled,
         followLocked: !this.cameraState.followEnabled,
+        showWireframe: this.wireframeVisible,
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
@@ -141,6 +148,7 @@ export class JellySandbox {
       onFollowLockChange: (locked) => this.setFollowLock(locked),
       onFrameJelly: () => this.frameJelly(),
       onReset: () => this.sim.reset(),
+      onWireframeChange: (visible) => this.setWireframeVisible(visible),
     });
     root.appendChild(this.controlPanel.element);
 
@@ -253,15 +261,24 @@ export class JellySandbox {
     this.renderer.canvas.style.cursor = this.pinModeEnabled ? 'crosshair' : '';
   }
 
+  /** 「顯示網格」開關（issue #14 追加，debug 用）——記在 `wireframeVisible`，`replaceJelly` 換新 `JellyRenderer` 時要重套。 */
+  private setWireframeVisible(visible: boolean): void {
+    this.wireframeVisible = visible;
+    this.renderer.setWireframeVisible(visible);
+  }
+
   /**
-   * `attachInputHandlers` 的 `applyInput` 每次事件都算一次——`sim.bbox()` 是
-   * O(Particle 數)，但只在指標按下/移動/放開時呼叫（不是每幀），對這個規模的
-   * 網格（幾百個 Particle）完全不是負擔，換來的是邏輯集中在一處、好懂。
+   * `removeRadius` 換算成螢幕像素、再除以目前的相機縮放（`transform.scale`）
+   * 換回世界座標——這樣不管縮多近多遠，「點多靠近算點中一個 Pin」在螢幕上看
+   * 起來永遠是同樣大小（跟 Pin 標記本身固定的 CSS 像素直徑一致）。原本用
+   * 「bbox 對角線的固定比例」是世界座標常數，縮得越近，同一個世界半徑換算成
+   * 螢幕像素就越大，會出現「明明離標記很遠，點下去卻被當成點中」的錯覺。
    */
   private pinModeContext(): { pins: ReturnType<SimCore['listPins']>; removeRadius: number } {
-    const bb = this.sim.bbox();
-    const diag = Math.hypot(bb.maxX - bb.minX, bb.maxY - bb.minY) || 1;
-    return { pins: this.sim.listPins(), removeRadius: diag * PIN_REMOVE_RADIUS_FRAC };
+    return {
+      pins: this.sim.listPins(),
+      removeRadius: PIN_REMOVE_RADIUS_PX / this.cameraState.transform.scale,
+    };
   }
 
   /**
@@ -327,6 +344,7 @@ export class JellySandbox {
     ));
     this.renderer.setCamera(this.cameraState.transform);
     this.applyPinModeCursor(); // 新 canvas 是全新元素，游標樣式要重套
+    this.renderer.setWireframeVisible(this.wireframeVisible); // 新 JellyRenderer 預設隱藏，要重套
   }
 
   /** `PointerInput` + `CameraInput` 都吃同一組 project／hitTest；重新匯入後換綁到新 canvas。 */

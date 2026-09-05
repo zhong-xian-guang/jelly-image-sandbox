@@ -360,6 +360,42 @@ describe('SimCore — Pin', () => {
     expect(allFinite(pinned.positions)).toBe(true);
   });
 
+  it('不相干的 Grab 剛好抓在 Pin 同一個三角形上、用力拖走 → Pin 自己紋風不動', () => {
+    // 兩個約束共用同一個三角形／權重（同座標 picking 必命中同一個三角形）：
+    // Pin 用 id='p' 先建；'other' 用不同 id 建一個 Grab、再拖到很遠。修 bug 前
+    // Grab 在 Map 插入順序上排在 Pin 之後，會在同一個 substep 覆寫掉 Pin 的修正，
+    // 把 Pin 的附著點一路拖走——這裡驗證改成「Pin 永遠最後解」後不會再發生。
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'pin', id: 'p', x: 48, y: 48 });
+    const before = sim.attachPoint('p')!;
+
+    sim.applyInput({ type: 'grab', id: 'other', x: 48, y: 48 });
+    for (let f = 1; f <= 30; f++) {
+      sim.applyInput({ type: 'moveGrab', id: 'other', x: 48 + 5 * f, y: 48 + 5 * f });
+      sim.step(1 / 60);
+    }
+
+    const after = sim.attachPoint('p')!;
+    expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeLessThan(1);
+  });
+
+  it('Pin 建立在先、Grab 在後也一樣不會被拖走（不依賴約束的插入順序）', () => {
+    // 上一個測項的 Pin 剛好先建；這裡反過來——Grab 先建、Pin 後建，且刻意用
+    // 「插入順序」上會排在 Pin 之後的第三個約束再次確認 Pin 恆常最後解。
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'grab', id: 'other', x: 48, y: 48 });
+    sim.applyInput({ type: 'pin', id: 'p', x: 48, y: 48 });
+    const before = sim.attachPoint('p')!;
+
+    for (let f = 1; f <= 30; f++) {
+      sim.applyInput({ type: 'moveGrab', id: 'other', x: 48 - 5 * f, y: 48 + 5 * f });
+      sim.step(1 / 60);
+    }
+
+    const after = sim.attachPoint('p')!;
+    expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeLessThan(1);
+  });
+
   it('pin 不帶座標 → 就地把 Grab 凍結成 Pin，之後 moveGrab 被忽略', () => {
     const sim = new SimCore(MESH());
     sim.applyInput({ type: 'grab', id: 'h', x: 0, y: 0 });

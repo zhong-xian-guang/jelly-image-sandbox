@@ -11,6 +11,8 @@
  * 見 `style.css`）——`JellySandbox` 另外還會把畫布游標換成十字、把 `PinMarkers`
  * 標記切成「可點掉」的視覺（紅色脈動），兩層加在一起讓「現在是不是在 Pin
  * 模式」不用低頭看面板就知道。
+ *
+ * 「顯示網格」是純 debug 用的三角化線框開關，接 `JellyRenderer.setWireframeVisible`。
  */
 
 import type { BoundaryMode } from '../sim';
@@ -22,6 +24,8 @@ export interface ControlPanelInitial {
   tapStrength: number;
   pinMode: boolean;
   followLocked: boolean;
+  /** 網格線框開關（debug 用）。 */
+  showWireframe: boolean;
 }
 
 export interface ControlPanelOptions {
@@ -35,6 +39,7 @@ export interface ControlPanelOptions {
   onFollowLockChange: (locked: boolean) => void;
   onFrameJelly: () => void;
   onReset: () => void;
+  onWireframeChange: (visible: boolean) => void;
 }
 
 export class ControlPanel {
@@ -46,6 +51,7 @@ export class ControlPanel {
 
     panel.append(
       this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange),
+      this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
       this.rangeRow('軟硬度', 0, 1, 0.01, opts.initial.softness, opts.onSoftnessChange),
       this.rangeRow(
         '輕拍力道',
