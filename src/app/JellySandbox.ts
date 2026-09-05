@@ -39,6 +39,16 @@
  * 座標常數）同步畫成 `JellyRenderer` 裡的一個外框（見 `setWallBounds`），撞牆
  * 時看得到界線在哪，不會覺得「明明沒碰到東西卻被彈回來」。切回 Infinite 或
  * 重新匯入圖片都會同步藏起來／重套（`applyBoundaryMode`、`replaceJelly`）。
+ *
+ * **Demo**（issue #15 / T14 追加）：`./demos` 提供純函式腳本（`DEMOS`）+
+ * `DemoRunner`（依 sim-step 計數排定事件，見該檔說明）。主迴圈每跑一個固定
+ * step 前先呼叫 `demoRunner.advance(...)`，把該 step 排定的 `InputEvent` 一樣
+ * 經 `sim.applyInput` 送進去——跟即時輸入同一條窄介面，不繞道。「停止／重設」
+ * 按鈕（`resetSim`）先停 Demo 排程再重設 `SimCore`，避免重設後殘留事件繼續
+ * 觸發；重新匯入圖片（`replaceJelly`）也會中斷 Demo，因為排定座標是對著舊
+ * 網格算的，套到新網格沒意義。播放中鎖住所有 Demo 按鈕（`setDemoButtonsLocked`），
+ * 擋掉「疊加播放另一個 Demo」——`DemoRunner.start` 只換排程、不會回頭釋放前一個
+ * Demo 已經建立的 Pin/Grab，疊加播放會留下一個沒人記得、永遠釘住的 Pin。
  */
 
 import {
@@ -63,6 +73,7 @@ import {
 } from '../sim';
 import { ControlPanel } from './ControlPanel';
 import { createDefaultJelly } from './defaultJelly';
+import { DEMOS, DemoRunner } from './demos';
 import { DropImportInput } from './DropImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { PinMarkers } from './PinMarkers';
@@ -95,6 +106,7 @@ export class JellySandbox {
   private readonly dropImportInput: DropImportInput;
   private readonly controlPanel: ControlPanel;
   private readonly pinMarkers: PinMarkers;
+  private readonly demoRunner = new DemoRunner();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
   private readonly root: HTMLElement;
   private readonly dropHint: HTMLDivElement;
@@ -115,6 +127,8 @@ export class JellySandbox {
   private pinsVisible = true;
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
   private wireframeVisible = false;
+  /** `controlPanel.setDemoButtonsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
+  private demoButtonsLocked = false;
 
   private rafId = 0;
   private lastFrameMs = 0;
@@ -158,6 +172,7 @@ export class JellySandbox {
         showWireframe: this.wireframeVisible,
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
+      demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -166,7 +181,8 @@ export class JellySandbox {
       onShowPinsChange: (visible) => this.setPinsVisible(visible),
       onFollowLockChange: (locked) => this.setFollowLock(locked),
       onFrameJelly: () => this.frameJelly(),
-      onReset: () => this.sim.reset(),
+      onRunDemo: (id) => this.runDemo(id),
+      onReset: () => this.resetSim(),
       onWireframeChange: (visible) => this.setWireframeVisible(visible),
     });
     root.appendChild(this.controlPanel.element);
@@ -237,6 +253,35 @@ export class JellySandbox {
    */
   frameJelly(): void {
     this.cameraCommands.push({ type: 'frame' });
+  }
+
+  /**
+   * Demo 按鈕（issue #15）：依 `id` 找到腳本，用「目前」`sim.positions` 算出這個
+   * Jelly 形狀上的時間軸交給 `demoRunner`。已在播放中的 Demo（若有）直接被取代。
+   */
+  private runDemo(id: string): void {
+    const demo = DEMOS.find((d) => d.id === id);
+    if (!demo) return;
+    this.demoRunner.start(demo.build(this.sim.positions));
+    this.setDemoButtonsLocked(true); // 立即鎖住，擋掉「趁還沒進下一幀又點另一個 Demo」的疊加播放
+  }
+
+  /** 集中處理鎖定狀態變化，`frame()` 每幀同步一次時才不會對沒變的按鈕重複寫 `disabled`。 */
+  private setDemoButtonsLocked(locked: boolean): void {
+    if (this.demoButtonsLocked === locked) return;
+    this.demoButtonsLocked = locked;
+    this.controlPanel.setDemoButtonsEnabled(!locked);
+  }
+
+  /**
+   * 「停止／重設」（issue #14；issue #15 追加停 Demo）：先停掉排程中的 Demo
+   * 事件（否則 `sim.reset()` 後、還沒播完的排程繼續把事件砸進去，看起來像
+   * 「重設沒生效」），再重設 Jelly 本身。
+   */
+  private resetSim(): void {
+    this.demoRunner.stop();
+    this.setDemoButtonsLocked(false);
+    this.sim.reset();
   }
 
   /**
@@ -352,6 +397,8 @@ export class JellySandbox {
    * 不用重套）。
    */
   private async replaceJelly(mesh: SimMesh, texture: HTMLImageElement): Promise<void> {
+    this.demoRunner.stop(); // 舊 Jelly 的座標對新網格沒意義，換 Jelly 時中斷排程中的 Demo
+    this.setDemoButtonsLocked(false);
     const sim = new SimCore(mesh);
     sim.params.cellFrac = this.sim.params.cellFrac;
     sim.params.alphaSm = this.sim.params.alphaSm;
@@ -438,7 +485,11 @@ export class JellySandbox {
     this.lastFrameMs = nowMs;
 
     const steps = this.accumulator.advance(elapsed);
-    for (let i = 0; i < steps; i++) this.sim.step(STEP_SECONDS);
+    for (let i = 0; i < steps; i++) {
+      this.demoRunner.advance((event) => this.sim.applyInput(event));
+      this.sim.step(STEP_SECONDS);
+    }
+    this.setDemoButtonsLocked(this.demoRunner.isRunning); // 追上「Demo 自己播完」這種沒有按鈕點擊觸發的狀態變化
 
     const cmds = this.cameraCommands;
     this.cameraCommands = [];
