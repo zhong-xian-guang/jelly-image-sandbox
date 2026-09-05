@@ -14,7 +14,11 @@
  *  - **手動平移／縮放**（`panBy` / `zoomBy`）：立即套用，並把 `sinceManualSeconds`
  *    歸零 → 暫停自動跟隨；閒置到 `resumeDelaySeconds` 後緩動回歸。
  *  - **鎖定跟隨**（`setFollow { enabled:false }`）：自動跟隨關，手動仍可動。
- *  - **框住果凍**（`frame`）：忽略暫停與鎖定，一次性緩動到 fit，到位後恢復跟隨。
+ *  - **框住果凍**（`frame`）：忽略暫停，一次性緩動到 fit——**不改** `followEnabled`。
+ *    鎖定跟隨時 fit 完就停在那裡（符合「鎖定」的字面意思：相機不會自己動）；
+ *    沒鎖定時 fit 完照常恢復自動跟隨（因為原本就是開的，framing 只是搶著先動一次）。
+ *    一次性按鈕不該偷偷改動「鎖定跟隨」勾選框背後的狀態，否則畫面上的勾選框會
+ *    跟實際狀態對不上。
  */
 
 import type {
@@ -123,7 +127,6 @@ export function updateCamera(
       }
       case 'frame': {
         framing = true;
-        followEnabled = true;
         break;
       }
     }

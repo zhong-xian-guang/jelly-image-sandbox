@@ -34,6 +34,7 @@ import {
   type AreaStats,
   type Bbox,
   type InputEvent,
+  type PinInfo,
   type Point,
   type PointerId,
   type SimParams,
@@ -347,6 +348,18 @@ export class SimCore {
     return this.weightedPoint(c);
   }
 
+  /**
+   * 目前所有作用中的 Pin：`id` + 附著點目前世界座標（隨網格變形移動）。畫 Pin
+   * 標記、或「點掉特定 Pin」需要知道每個 Pin 現在在哪裡時用。
+   */
+  listPins(): PinInfo[] {
+    const pins: PinInfo[] = [];
+    for (const [id, c] of this.constraints) {
+      if (c.pinned) pins.push({ id, point: this.weightedPoint(c) });
+    }
+    return pins;
+  }
+
   /** Grab／Pin 框外退路的吸附半徑：呼叫端指定值，否則靜止 bbox 對角線 × 0.1。 */
   private grabRadius(explicit?: number): number {
     return explicit ?? this.restDiag * 0.1;
@@ -617,9 +630,23 @@ export class SimCore {
    * Pin（`pinned`）β 恆為 1（ADR-0004），Grab 用 `params.grabBeta`。
    * Multi-grab / 多 Pin = 依序解，天然共存（共用 Particle 的密集約束不會同一
    * substep 全部精確滿足，靠逐 substep 迭代收斂）。
+   *
+   * **先解全部 Grab、再解全部 Pin**（不是照 `constraints` 的插入順序）：兩條約束
+   * 共用到同一個 Particle 時，同一個 substep 裡誰後解、誰的目標就贏。如果照插入
+   * 順序解，一個晚建立、又剛好抓在 Pin 那個三角形上的 Grab 會在 Pin 之後執行，
+   * 把 Pin 的附著點拖向 Grab 的目標——持續拖曳下 Pin 會被整個拖走，違反
+   * ADR-0004「用力甩／Tap 都拔不掉」的保證。固定「Pin 永遠最後解」讓 Pin 不管
+   * 建立先後、也不管有沒有其他約束疊在同一個三角形上，每個 substep 都有最後
+   * 修正權——會被拉開的是 Pin 周圍的網格（可觀察的拉伸），不是 Pin 自己。
    */
   private solveConstraints(): void {
+    this.solveConstraintsPass(false); // Grab 先解
+    this.solveConstraintsPass(true); // Pin 後解——保證不會被同一 substep 內任何 Grab 拖走
+  }
+
+  private solveConstraintsPass(pinned: boolean): void {
     for (const g of this.constraints.values()) {
+      if (g.pinned !== pinned) continue;
       const beta = g.pinned ? 1 : this.params.grabBeta;
       const [i0, i1, i2] = g.tri;
       const [w0, w1, w2] = g.w;

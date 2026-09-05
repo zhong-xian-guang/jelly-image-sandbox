@@ -268,13 +268,42 @@ describe('updateCamera — 框住果凍（AC5）', () => {
     expect(s.transform.x).toBeGreaterThan(150);
   });
 
-  it('frame 即使在鎖定狀態也重新啟用自動跟隨', () => {
+  it('frame 是純一次性動作——不改 followEnabled，鎖定狀態下 fit 完停在原地、不會偷偷解鎖', () => {
     const target = targetAt(0, 0);
-    let s = createCameraState(target, CANVAS);
-    s = updateCamera(s, target, CANVAS, [{ type: 'setFollow', enabled: false }], 1 / 60);
+    // 先鎖定，再手動甩到離譜的地方（鎖定不影響手動平移／縮放，見 AC4）
+    let s = updateCamera(
+      createCameraState(target, CANVAS),
+      target,
+      CANVAS,
+      [{ type: 'setFollow', enabled: false }],
+      1 / 60,
+    );
+    s = updateCamera(
+      s,
+      target,
+      CANVAS,
+      [
+        { type: 'panBy', dxScreen: 5000, dyScreen: 3000 },
+        { type: 'zoomBy', factor: 0.2, pivotScreen: { x: 400, y: 300 } },
+      ],
+      0,
+    );
     expect(s.followEnabled).toBe(false);
+    expect(s.transform.x).not.toBeCloseTo(0, 1);
+
     s = updateCamera(s, target, CANVAS, [{ type: 'frame' }], 1 / 60);
-    expect(s.followEnabled).toBe(true);
+    expect(s.framing).toBe(true);
+    expect(s.followEnabled).toBe(false); // 框住果凍不解鎖
+
+    s = run(s, target, 2); // 跑完 framing 動畫
+    const fit = fitTransform(target.bbox, CANVAS);
+    expect(s.transform.x).toBeCloseTo(fit.x, 3);
+    expect(s.framing).toBe(false);
+    expect(s.followEnabled).toBe(false); // 到位後仍鎖定
+
+    // 鎖定著：質心移動，相機不該跟上（維持在 fit 的位置不動）
+    s = run(s, targetAt(200, 0), 1.5);
+    expect(s.transform.x).toBeCloseTo(fit.x, 3);
   });
 });
 

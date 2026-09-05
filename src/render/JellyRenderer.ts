@@ -8,6 +8,11 @@
  * **只吃 `positions` 陣列**，不認得求解器（`SimCore`）。世界→螢幕變換透過
  * `setCamera` 傳入（T12 Camera 的輸出接這裡）。不使用 Canvas 2D 逐三角 `drawImage`。
  *
+ * **網格線框**（debug 用，issue #14 追加）：`setWireframeVisible(true)` 疊一層
+ * 半透明線框，逐三角形邊畫在貼圖之上，跟著同一份 `positions` 變形——診斷網格
+ * 相關問題（sliver、翻面、Region 邊界）時可以直接看到三角化長什麼樣子。邊的
+ * 拓撲（`computeWireframeEdges`）只在建構時算一次；預設隱藏，不影響一般畫面。
+ *
  * **牆壁邊框**（issue #9 追加）：`setWallBounds(box)` 畫出 Walled 邊界的 AABB
  * 外框，讓撞牆有畫面上看得到的界線可以對照，不會覺得「明明沒碰到東西卻被彈
  * 回來」。`box` 是世界座標常數（`WalledBoundary.box`，不隨 Jelly 變形），只在
@@ -26,6 +31,7 @@ import {
 
 import {
   type CameraTransform,
+  computeWireframeEdges,
   containerPosition,
   createTextureBuffers,
   type TextureMesh,
@@ -63,6 +69,9 @@ export class JellyRenderer {
   private readonly geometry: MeshGeometry;
   /** 每幀就地覆寫、再交給 GPU 的頂點 buffer。 */
   private readonly positionBuffer: Float32Array;
+  /** 每三角形三邊去重後的頂點索引對，建構時算一次（拓撲固定）。 */
+  private readonly wireframeEdges: Uint32Array;
+  private readonly wireframe: Graphics;
   private readonly wallFrame: Graphics;
   /** Walled 邊界的 AABB；`null` = Infinite（`wallFrame` 隱藏）。 */
   private wallBox: WallBounds | null = null;
@@ -82,16 +91,21 @@ export class JellyRenderer {
       uvs: buffers.uvs,
       indices: buffers.indices,
     });
+    this.wireframeEdges = computeWireframeEdges(buffers.indices);
 
     const texture = opts.texture instanceof Texture ? opts.texture : Texture.from(opts.texture);
     this.mesh = new Mesh({ geometry: this.geometry, texture });
+
+    this.wireframe = new Graphics();
+    this.wireframe.visible = false;
 
     this.wallFrame = new Graphics();
     this.wallFrame.visible = false;
 
     this.world = new Container();
     this.world.addChild(this.mesh);
-    this.world.addChild(this.wallFrame); // 疊在貼圖之上
+    this.world.addChild(this.wireframe); // 疊在貼圖之上
+    this.world.addChild(this.wallFrame); // 最上層——邊框不該被網格線蓋住
     this.app.stage.addChild(this.world);
 
     this.applyCamera();
@@ -125,15 +139,24 @@ export class JellyRenderer {
     // 同一個 Float32Array 參照回設 → PixiJS 標記 buffer dirty、下次 render 重傳 GPU
     // （bufferSubData，不重配 GPU buffer）。
     this.geometry.positions = this.positionBuffer;
+    if (this.wireframe.visible) this.redrawWireframe();
   }
 
   /** 世界→螢幕變換：`screen = (world − {x,y}) · scale + 畫布中心`。 */
   setCamera(camera: CameraTransform): void {
     this.camera = { ...camera };
     this.applyCamera();
-    // 邊框線寬用 camera.scale 換算成固定螢幕像素（見 redrawWallFrame），縮放
-    // 改變時要重畫一次，不然要等到下一次 setWallBounds 才會用新的 scale。
+    // 線框／邊框寬度都用 camera.scale 換算成固定螢幕像素（見 redrawWireframe、
+    // redrawWallFrame），縮放改變時要重畫一次，不然要等到下一次 setPositions /
+    // setWallBounds 才會用新的 scale。
+    if (this.wireframe.visible) this.redrawWireframe();
     if (this.wallFrame.visible) this.redrawWallFrame();
+  }
+
+  /** 網格線框開關（debug 用）。開啟時立即畫一次，不用等下一次 `setPositions`。 */
+  setWireframeVisible(visible: boolean): void {
+    this.wireframe.visible = visible;
+    if (visible) this.redrawWireframe();
   }
 
   /**
@@ -173,9 +196,25 @@ export class JellyRenderer {
   }
 
   /**
-   * 畫 `wallBox` 的矩形外框。線寬除以 `camera.scale`——`wallFrame` 跟主網格一起
-   * 被 `world.scale` 縮放，除掉那個縮放才能讓邊框線不管怎麼縮放都維持約 3 個
-   * 螢幕像素粗、清楚可辨。
+   * 逐邊畫線：座標直接讀 `positionBuffer`（跟主網格同一份，天然同步變形）。
+   * 線寬除以 `camera.scale`——`wireframe` 跟主網格一起被 `world.scale` 縮放，
+   * 除掉那個縮放才能讓線框不管怎麼縮放都維持約 1 個螢幕像素粗。
+   */
+  private redrawWireframe(): void {
+    this.wireframe.clear();
+    const buf = this.positionBuffer;
+    for (let i = 0; i < this.wireframeEdges.length; i += 2) {
+      const a = this.wireframeEdges[i]!;
+      const b = this.wireframeEdges[i + 1]!;
+      this.wireframe.moveTo(buf[2 * a]!, buf[2 * a + 1]!);
+      this.wireframe.lineTo(buf[2 * b]!, buf[2 * b + 1]!);
+    }
+    this.wireframe.stroke({ width: 1 / (this.camera.scale || 1), color: 0xff00ff, alpha: 0.85 });
+  }
+
+  /**
+   * 畫 `wallBox` 的矩形外框。線寬同 `redrawWireframe` 除以 `camera.scale`，
+   * 縮放不管多近多遠邊框線都維持約 3 個螢幕像素粗、清楚可辨。
    */
   private redrawWallFrame(): void {
     if (!this.wallBox) return;

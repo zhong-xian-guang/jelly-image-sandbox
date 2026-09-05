@@ -4,6 +4,21 @@
  * 薄的接線層：`pointerdown/move/up/cancel` → 換算成畫布局部座標 + 時間戳 →
  * 呼叫 `GestureTracker`。所有影響模擬的輸入都經由 tracker 的 `emit`（接
  * `sim.applyInput`），輸入層不直接碰求解器內部（ADR-0005）。
+ *
+ * **不直接把瀏覽器的 `PointerEvent.pointerId` 當 `GestureTracker`／`SimCore` 的
+ * `id` 用**——滑鼠裝置的 `pointerId` 依規範永遠是 `1`，如果照樣沿用，兩次分開
+ * 的滑鼠手勢會共用同一個 id。這對一般 Grab 沒事（放開就清掉），但 Pin 會一直
+ * 留在 `constraints` map 裡：後續任何一次不相干的滑鼠 Grab 只要撞上同一個 id，
+ * `SimCore.doGrab` 會直接覆寫掉那個 Pin（見 issue #14 事後回報的 bug）。這裡改
+ * 成每次 `pointerdown` 自己配一個遞增的合成 id（`sessionIds` 記錄瀏覽器 id →
+ * 合成 id 的對應，`pointerup`/`pointercancel` 時清掉），讓每個獨立手勢的身分
+ * 互不相干，Pin 才能真的長期存在、不被日後無關的操作誤刪。
+ *
+ * **只認滑鼠左鍵／觸控／觸控筆的主要接觸點**（`ev.button === 0`，這是
+ * `PointerEvent` 對「主鍵／唯一接觸點」的統一表示法，觸控與觸控筆本來就只
+ * 回報 0）。滑鼠中鍵（`button === 1`）整個忽略、不進 `GestureTracker`——
+ * 中鍵留給 `CameraInput` 當相機平移，兩者才不會對同一次按下各自反應（見
+ * `CameraInput` 對應的判斷）。
  */
 
 import type { InputEvent, Point } from '../sim';
@@ -23,6 +38,9 @@ export class PointerInput {
   private readonly target: HTMLElement;
   private readonly tracker: GestureTracker;
   private readonly now: () => number;
+  /** 瀏覽器 `pointerId` → 這次手勢的合成 id；手勢結束（up/cancel）就刪掉。 */
+  private readonly sessionIds = new Map<number, number>();
+  private nextSessionId = 1;
 
   constructor(target: HTMLElement, opts: PointerInputOptions) {
     this.target = target;
@@ -58,24 +76,35 @@ export class PointerInput {
 
   private onDown = (ev: PointerEvent): void => {
     ev.preventDefault();
+    if (ev.button !== 0) return; // 中鍵／右鍵不算 Grab；中鍵留給 CameraInput 平移
     this.target.setPointerCapture(ev.pointerId);
+    const id = this.nextSessionId++;
+    this.sessionIds.set(ev.pointerId, id);
     const [x, y] = this.localXY(ev);
-    this.tracker.down(ev.pointerId, x, y, this.now());
+    this.tracker.down(id, x, y, this.now());
   };
 
   private onMove = (ev: PointerEvent): void => {
+    const id = this.sessionIds.get(ev.pointerId);
+    if (id === undefined) return;
     const [x, y] = this.localXY(ev);
-    this.tracker.move(ev.pointerId, x, y);
+    this.tracker.move(id, x, y);
   };
 
   private onUp = (ev: PointerEvent): void => {
-    const [x, y] = this.localXY(ev);
-    this.tracker.up(ev.pointerId, x, y, this.now());
+    const id = this.sessionIds.get(ev.pointerId);
+    this.sessionIds.delete(ev.pointerId);
+    if (id !== undefined) {
+      const [x, y] = this.localXY(ev);
+      this.tracker.up(id, x, y, this.now());
+    }
     this.releaseCapture(ev.pointerId);
   };
 
   private onCancel = (ev: PointerEvent): void => {
-    this.tracker.cancel(ev.pointerId);
+    const id = this.sessionIds.get(ev.pointerId);
+    this.sessionIds.delete(ev.pointerId);
+    if (id !== undefined) this.tracker.cancel(id);
     this.releaseCapture(ev.pointerId);
   };
 
