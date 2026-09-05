@@ -12,6 +12,11 @@
  * 半透明線框，逐三角形邊畫在貼圖之上，跟著同一份 `positions` 變形——診斷網格
  * 相關問題（sliver、翻面、Region 邊界）時可以直接看到三角化長什麼樣子。邊的
  * 拓撲（`computeWireframeEdges`）只在建構時算一次；預設隱藏，不影響一般畫面。
+ *
+ * **牆壁邊框**（issue #9 追加）：`setWallBounds(box)` 畫出 Walled 邊界的 AABB
+ * 外框，讓撞牆有畫面上看得到的界線可以對照，不會覺得「明明沒碰到東西卻被彈
+ * 回來」。`box` 是世界座標常數（`WalledBoundary.box`，不隨 Jelly 變形），只在
+ * 邊界模式切換時重算；傳 `null`（Infinite 模式）整層藏起來。
  */
 
 import {
@@ -32,6 +37,14 @@ import {
   type TextureMesh,
   writePositions,
 } from './meshBuffers';
+
+/** Walled 邊界的 AABB。跟 `../sim` 的 `Bbox` 結構相同，這裡獨立宣告——Renderer 不認得求解器（見檔頭）。 */
+export interface WallBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
 
 export interface JellyRendererOptions {
   /** 畫布寬 / 高（CSS 像素）。 */
@@ -59,6 +72,9 @@ export class JellyRenderer {
   /** 每三角形三邊去重後的頂點索引對，建構時算一次（拓撲固定）。 */
   private readonly wireframeEdges: Uint32Array;
   private readonly wireframe: Graphics;
+  private readonly wallFrame: Graphics;
+  /** Walled 邊界的 AABB；`null` = Infinite（`wallFrame` 隱藏）。 */
+  private wallBox: WallBounds | null = null;
   private camera: CameraTransform = { x: 0, y: 0, scale: 1 };
   private width: number;
   private height: number;
@@ -83,9 +99,13 @@ export class JellyRenderer {
     this.wireframe = new Graphics();
     this.wireframe.visible = false;
 
+    this.wallFrame = new Graphics();
+    this.wallFrame.visible = false;
+
     this.world = new Container();
     this.world.addChild(this.mesh);
     this.world.addChild(this.wireframe); // 疊在貼圖之上
+    this.world.addChild(this.wallFrame); // 最上層——邊框不該被網格線蓋住
     this.app.stage.addChild(this.world);
 
     this.applyCamera();
@@ -126,15 +146,29 @@ export class JellyRenderer {
   setCamera(camera: CameraTransform): void {
     this.camera = { ...camera };
     this.applyCamera();
-    // 線框寬度用 camera.scale 換算成固定螢幕像素（見 redrawWireframe），縮放
-    // 改變時要重畫一次，不然要等到下一次 setPositions 才會用新的 scale。
+    // 線框／邊框寬度都用 camera.scale 換算成固定螢幕像素（見 redrawWireframe、
+    // redrawWallFrame），縮放改變時要重畫一次，不然要等到下一次 setPositions /
+    // setWallBounds 才會用新的 scale。
     if (this.wireframe.visible) this.redrawWireframe();
+    if (this.wallFrame.visible) this.redrawWallFrame();
   }
 
   /** 網格線框開關（debug 用）。開啟時立即畫一次，不用等下一次 `setPositions`。 */
   setWireframeVisible(visible: boolean): void {
     this.wireframe.visible = visible;
     if (visible) this.redrawWireframe();
+  }
+
+  /**
+   * 牆壁邊框（issue #9）：`box` = `WalledBoundary.box`，畫出目前 Walled 邊界的
+   * AABB 外框；`null`（Infinite 模式）整層藏起來。`box` 是世界座標常數，只有
+   * 邊界模式切換時才會變，不用每幀呼叫——呼叫端（`JellySandbox`）只在切換時
+   * 重套一次。
+   */
+  setWallBounds(box: WallBounds | null): void {
+    this.wallBox = box;
+    this.wallFrame.visible = box != null;
+    if (box) this.redrawWallFrame();
   }
 
   /** 畫布尺寸改變（CSS 像素）。 */
@@ -176,5 +210,18 @@ export class JellyRenderer {
       this.wireframe.lineTo(buf[2 * b]!, buf[2 * b + 1]!);
     }
     this.wireframe.stroke({ width: 1 / (this.camera.scale || 1), color: 0xff00ff, alpha: 0.85 });
+  }
+
+  /**
+   * 畫 `wallBox` 的矩形外框。線寬同 `redrawWireframe` 除以 `camera.scale`，
+   * 縮放不管多近多遠邊框線都維持約 3 個螢幕像素粗、清楚可辨。
+   */
+  private redrawWallFrame(): void {
+    if (!this.wallBox) return;
+    const { minX, minY, maxX, maxY } = this.wallBox;
+    this.wallFrame.clear();
+    this.wallFrame
+      .rect(minX, minY, maxX - minX, maxY - minY)
+      .stroke({ width: 3 / (this.camera.scale || 1), color: 0x33aaff, alpha: 0.85 });
   }
 }
