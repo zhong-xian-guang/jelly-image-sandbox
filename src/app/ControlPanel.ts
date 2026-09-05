@@ -6,6 +6,11 @@
  * 邏輯（Softness 曲線、Walled 邊界範圍、Pin 模式轉接）都在各自的純函式模組
  * （`../sim/softness`、`./walledBounds`、`../input/pinModeRouting`），接線在
  * `JellySandbox`。
+ *
+ * 「Pin 模式」開啟時勾選框旁的文字會變色加粗（`.jelly-pin-mode-active`，樣式
+ * 見 `style.css`）——`JellySandbox` 另外還會把畫布游標換成十字、把 `PinMarkers`
+ * 標記切成「可點掉」的視覺（紅色脈動），兩層加在一起讓「現在是不是在 Pin
+ * 模式」不用低頭看面板就知道。
  */
 
 import type { BoundaryMode } from '../sim';
@@ -116,10 +121,14 @@ export class ControlPanel {
     row.className = 'jelly-control-row';
 
     const pinLabel = document.createElement('label');
+    pinLabel.classList.toggle('jelly-pin-mode-active', initial);
     const pinCheckbox = document.createElement('input');
     pinCheckbox.type = 'checkbox';
     pinCheckbox.checked = initial;
-    pinCheckbox.addEventListener('change', () => onPinModeChange(pinCheckbox.checked));
+    pinCheckbox.addEventListener('change', () => {
+      pinLabel.classList.toggle('jelly-pin-mode-active', pinCheckbox.checked);
+      onPinModeChange(pinCheckbox.checked);
+    });
     pinLabel.append(pinCheckbox, 'Pin 模式');
 
     const clearButton = document.createElement('button');

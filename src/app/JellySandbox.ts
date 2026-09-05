@@ -24,7 +24,12 @@
  * 換算邏輯都在純函式模組——Softness 曲線見 `../sim/softness`，Walled 邊界範圍見
  * `./walledBounds`，Pin 模式的輸入轉接見 `../input/pinModeRouting`（開啟 Pin 模式
  * 後，`PointerInput` 原本會發的 `grab` 改由它轉成 `pin`，直接放 Pin 而非可拖曳
- * 的 Grab）。
+ * 的 Grab；點在既有 Pin 附近則轉成 `unpin`，即「點掉特定 Pin」）。
+ *
+ * **Pin 的視覺提示**：`PinMarkers`（DOM 覆蓋層）每幀把 `sim.listPins()` 的世界
+ * 座標投影成螢幕座標畫成小圓點；Pin 模式開啟時標記變紅脈動（提示可以點掉）、
+ * 畫布游標也換成十字——兩層一起讓「現在是不是在 Pin 模式」不用低頭看面板就
+ * 知道（見 `setPinMode`）。
  */
 
 import {
@@ -34,6 +39,7 @@ import {
   createCameraState,
   screenToWorld,
   updateCamera,
+  worldToScreen,
 } from '../camera';
 import { PointerInput, routeForPinMode } from '../input';
 import { buildSimMesh, type SimMesh } from '../mesh';
@@ -49,6 +55,7 @@ import { ControlPanel } from './ControlPanel';
 import { createDefaultJelly } from './defaultJelly';
 import { DropImportInput } from './DropImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
+import { PinMarkers } from './PinMarkers';
 import { computeWalledBounds } from './walledBounds';
 
 const STEP_SECONDS = 1 / 60;
@@ -63,6 +70,8 @@ const DROP_HINT_ACTIVE_CLASS = 'is-active';
 const TAP_STRENGTH_RANGE = { min: 1000, max: 11000, step: 100 };
 /** Softness 滑桿初始位置（0–1 中點 = `DEFAULT_SIM_PARAMS`，見 `../sim/softness`）。 */
 const DEFAULT_SOFTNESS = 0.5;
+/** Pin 模式下「點掉既有 Pin」的判定半徑 = 目前 bbox 對角線 × 此係數。 */
+const PIN_REMOVE_RADIUS_FRAC = 0.06;
 
 export class JellySandbox {
   private sim: SimCore;
@@ -71,6 +80,7 @@ export class JellySandbox {
   private cameraInput: CameraInput;
   private readonly dropImportInput: DropImportInput;
   private readonly controlPanel: ControlPanel;
+  private readonly pinMarkers: PinMarkers;
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
   private readonly root: HTMLElement;
   private readonly dropHint: HTMLDivElement;
@@ -133,6 +143,10 @@ export class JellySandbox {
       onReset: () => this.sim.reset(),
     });
     root.appendChild(this.controlPanel.element);
+
+    this.pinMarkers = new PinMarkers();
+    root.appendChild(this.pinMarkers.element);
+    this.applyPinModeCursor();
   }
 
   /** 建立預設 Jelly 並組裝好；呼叫 `start()` 開始跑。 */
@@ -177,6 +191,7 @@ export class JellySandbox {
     this.dropImportInput.destroy();
     this.dropHint.remove();
     this.controlPanel.destroy();
+    this.pinMarkers.destroy();
     this.input.destroy();
     this.cameraInput.destroy();
     this.renderer.destroy();
@@ -223,9 +238,30 @@ export class JellySandbox {
     this.sim.params.tapStrength = strength;
   }
 
-  /** 「Pin 模式」開關（issue #14）——`attachInputHandlers` 的 `applyInput` 靠它轉接。 */
+  /**
+   * 「Pin 模式」開關（issue #14）——`attachInputHandlers` 的 `applyInput` 靠
+   * `pinModeEnabled` 轉接；這裡順便切畫布游標（十字）跟 Pin 標記的「可點掉」
+   * 視覺（紅色脈動），兩者都是純粹的提示，不影響任何判定邏輯。
+   */
   private setPinMode(enabled: boolean): void {
     this.pinModeEnabled = enabled;
+    this.applyPinModeCursor();
+    this.pinMarkers.setRemovable(enabled);
+  }
+
+  private applyPinModeCursor(): void {
+    this.renderer.canvas.style.cursor = this.pinModeEnabled ? 'crosshair' : '';
+  }
+
+  /**
+   * `attachInputHandlers` 的 `applyInput` 每次事件都算一次——`sim.bbox()` 是
+   * O(Particle 數)，但只在指標按下/移動/放開時呼叫（不是每幀），對這個規模的
+   * 網格（幾百個 Particle）完全不是負擔，換來的是邏輯集中在一處、好懂。
+   */
+  private pinModeContext(): { pins: ReturnType<SimCore['listPins']>; removeRadius: number } {
+    const bb = this.sim.bbox();
+    const diag = Math.hypot(bb.maxX - bb.minX, bb.maxY - bb.minY) || 1;
+    return { pins: this.sim.listPins(), removeRadius: diag * PIN_REMOVE_RADIUS_FRAC };
   }
 
   /**
@@ -290,6 +326,7 @@ export class JellySandbox {
       renderer.canvas,
     ));
     this.renderer.setCamera(this.cameraState.transform);
+    this.applyPinModeCursor(); // 新 canvas 是全新元素，游標樣式要重套
   }
 
   /** `PointerInput` + `CameraInput` 都吃同一組 project／hitTest；重新匯入後換綁到新 canvas。 */
@@ -305,7 +342,7 @@ export class JellySandbox {
       screenToWorld: project,
       hitTest,
       applyInput: (event) => {
-        const routed = routeForPinMode(event, this.pinModeEnabled);
+        const routed = routeForPinMode(event, this.pinModeEnabled, this.pinModeContext());
         if (routed) this.sim.applyInput(routed);
       },
     });
@@ -344,6 +381,19 @@ export class JellySandbox {
     this.renderer.setPositions(this.sim.positions);
     this.renderer.setCamera(this.cameraState.transform);
     this.renderer.render();
+
+    const canvasSize = this.canvasSize();
+    this.pinMarkers.update(
+      this.sim.listPins().map((pin) => {
+        const screen = worldToScreen(
+          this.cameraState.transform,
+          canvasSize,
+          pin.point.x,
+          pin.point.y,
+        );
+        return { id: String(pin.id), x: screen.x, y: screen.y };
+      }),
+    );
 
     this.rafId = requestAnimationFrame(this.frame);
   };

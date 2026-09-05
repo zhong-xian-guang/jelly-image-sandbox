@@ -421,6 +421,39 @@ describe('SimCore — Pin', () => {
     expect(sim.attachPoint('g')).not.toBeNull();
   });
 
+  it('listPins：回傳每個 Pin 的 id + 附著點，不含 Grab', () => {
+    const sim = new SimCore(MESH());
+    expect(sim.listPins()).toEqual([]);
+
+    sim.applyInput({ type: 'pin', id: 'p1', x: 0, y: 0 });
+    sim.applyInput({ type: 'pin', id: 'p2', x: 96, y: 0 });
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+
+    const pins = sim.listPins();
+    expect(pins).toHaveLength(2);
+    const byId = new Map(pins.map((p) => [p.id, p.point]));
+    expect(byId.get('p1')!.x).toBeCloseTo(0, 6);
+    expect(byId.get('p1')!.y).toBeCloseTo(0, 6);
+    expect(byId.get('p2')!.x).toBeCloseTo(96, 6);
+    expect(byId.get('p2')!.y).toBeCloseTo(0, 6);
+
+    sim.clearPins();
+    expect(sim.listPins()).toEqual([]);
+  });
+
+  it('listPins：附著點隨網格變形移動（跟 attachPoint 一致）', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'pin', id: 'p', x: 0, y: 0 });
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+    sim.applyInput({ type: 'moveGrab', id: 'g', x: 140, y: 130 });
+    run(sim, 30);
+
+    const pins = sim.listPins();
+    expect(pins).toHaveLength(1);
+    expect(pins[0]!.id).toBe('p');
+    expect(pins[0]!.point).toEqual(sim.attachPoint('p'));
+  });
+
   it('決定性：含 pin / movePin / unpin 的事件流兩次跑結果完全相等', () => {
     const play = (): number[] => {
       const sim = new SimCore(MESH());

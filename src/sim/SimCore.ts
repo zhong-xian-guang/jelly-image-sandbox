@@ -34,6 +34,7 @@ import {
   type AreaStats,
   type Bbox,
   type InputEvent,
+  type PinInfo,
   type Point,
   type PointerId,
   type SimParams,
@@ -345,6 +346,18 @@ export class SimCore {
     const c = this.constraints.get(id);
     if (!c) return null;
     return this.weightedPoint(c);
+  }
+
+  /**
+   * 目前所有作用中的 Pin：`id` + 附著點目前世界座標（隨網格變形移動）。畫 Pin
+   * 標記、或「點掉特定 Pin」需要知道每個 Pin 現在在哪裡時用。
+   */
+  listPins(): PinInfo[] {
+    const pins: PinInfo[] = [];
+    for (const [id, c] of this.constraints) {
+      if (c.pinned) pins.push({ id, point: this.weightedPoint(c) });
+    }
+    return pins;
   }
 
   /** Grab／Pin 框外退路的吸附半徑：呼叫端指定值，否則靜止 bbox 對角線 × 0.1。 */

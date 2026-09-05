@@ -90,3 +90,49 @@ body {
 .jelly-control-row input[type='range'] {
   font: inherit;
 }
+
+/** 「Pin 模式」勾選時的視覺提示（issue #14 追加）——標籤變色＋加粗，呼應畫布游標變成十字。 */
+.jelly-control-row label.jelly-pin-mode-active {
+  color: #ffb400;
+  font-weight: 600;
+}
+
+/**
+ * Pin 位置標記層（issue #14 追加）：疊在畫布上、跟著每個 Pin 的目前世界座標
+ * 走。`pointer-events: none`——不擋手勢，點掉特定 Pin 是靠世界座標鄰近判定
+ * （見 `src/input/pinModeRouting.ts`），不是點中這個 DOM 節點。
+ */
+.jelly-pin-markers {
+  position: absolute;
+  inset: 0;
+  z-index: 5; /* 蓋在畫布之上、但在控制面板／拖放提示（z-index 10）之下 */
+  pointer-events: none;
+}
+
+.jelly-pin-marker {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255, 210, 60, 0.9);
+  border: 2px solid rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+/** Pin 模式開啟時：標記變紅並脈動，提示「點一下可以移除它」。 */
+.jelly-pin-markers.is-removable .jelly-pin-marker {
+  background: rgba(255, 90, 90, 0.9);
+  animation: jelly-pin-pulse 1s ease-in-out infinite;
+}
+
+@keyframes jelly-pin-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.25);
+  }
+}
