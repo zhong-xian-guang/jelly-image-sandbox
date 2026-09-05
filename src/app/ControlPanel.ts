@@ -17,9 +17,18 @@
  * 已開著的「Pin 模式」也會被強制關掉，不會變成「看不到卻還在默默放 Pin」。
  *
  * 「顯示網格」是純 debug 用的三角化線框開關，接 `JellyRenderer.setWireframeVisible`。
+ *
+ * 「Demo」按鈕（issue #15）播放中會被 `JellySandbox` 呼叫 `setDemoButtonsEnabled(false)`
+ * 全部鎖住，理由同上——避免疊加播放兩個 Demo 留下沒人清的殘留 Pin/Grab。
  */
 
 import type { BoundaryMode } from '../sim';
+
+/** 一顆 Demo 按鈕要顯示的最小資訊——`ControlPanel` 特意不 import `./demos`，維持跟 `SimCore`/`JellySandbox` 無關的薄接線層，這裡自己開一個形狀就好。 */
+export interface DemoMenuItem {
+  id: string;
+  label: string;
+}
 
 export interface ControlPanelInitial {
   boundary: BoundaryMode;
@@ -37,6 +46,8 @@ export interface ControlPanelInitial {
 export interface ControlPanelOptions {
   initial: ControlPanelInitial;
   tapStrengthRange: { min: number; max: number; step: number };
+  /** 「Demo」按鈕列表（issue #15），依序顯示；點下呼叫 `onRunDemo(id)`。 */
+  demos: readonly DemoMenuItem[];
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -45,12 +56,15 @@ export interface ControlPanelOptions {
   onShowPinsChange: (visible: boolean) => void;
   onFollowLockChange: (locked: boolean) => void;
   onFrameJelly: () => void;
+  onRunDemo: (id: string) => void;
   onReset: () => void;
   onWireframeChange: (visible: boolean) => void;
 }
 
 export class ControlPanel {
   readonly element: HTMLElement;
+  /** 播放中鎖住，避免疊加播放兩個 Demo（issue #15）——見 `setDemoButtonsEnabled`。 */
+  private readonly demoButtons: HTMLButtonElement[] = [];
 
   constructor(opts: ControlPanelOptions) {
     const panel = document.createElement('div');
@@ -77,10 +91,22 @@ export class ControlPanel {
       ),
       this.checkboxRow('鎖定跟隨', opts.initial.followLocked, opts.onFollowLockChange),
       this.buttonRow('框住果凍', opts.onFrameJelly),
+      this.demoHeading(),
+      ...opts.demos.map((demo) => this.demoButtonRow(demo.label, () => opts.onRunDemo(demo.id))),
       this.buttonRow('停止／重設', opts.onReset),
     );
 
     this.element = panel;
+  }
+
+  /**
+   * Demo 播放中呼叫 `setDemoButtonsEnabled(false)` 鎖住所有 Demo 按鈕（issue #15）——
+   * 不然疊加按下另一個 Demo，前一個 Demo 已經建立的 Pin/Grab 不會被清掉（`DemoRunner.start`
+   * 只換排程，不會回頭釋放已生效的約束），會留下一個永遠釘住卻沒人記得的 Pin。播完
+   * 或按「停止／重設」都要解鎖，見 `JellySandbox.frame`。
+   */
+  setDemoButtonsEnabled(enabled: boolean): void {
+    for (const button of this.demoButtons) button.disabled = !enabled;
   }
 
   destroy(): void {
@@ -201,6 +227,14 @@ export class ControlPanel {
     return row;
   }
 
+  /** Demo 按鈕列前的小標題，跟其他控制項分開一眼看出這區是「自動演出」。 */
+  private demoHeading(): HTMLElement {
+    const heading = document.createElement('div');
+    heading.className = 'jelly-control-heading';
+    heading.textContent = 'Demo';
+    return heading;
+  }
+
   private buttonRow(labelText: string, onClick: () => void): HTMLElement {
     const row = document.createElement('div');
     row.className = 'jelly-control-row';
@@ -211,6 +245,21 @@ export class ControlPanel {
     button.addEventListener('click', onClick);
 
     row.appendChild(button);
+    return row;
+  }
+
+  /** 同 `buttonRow`，另外把按鈕記進 `demoButtons`，讓 `setDemoButtonsEnabled` 管得到。 */
+  private demoButtonRow(labelText: string, onClick: () => void): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'jelly-control-row';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = labelText;
+    button.addEventListener('click', onClick);
+
+    row.appendChild(button);
+    this.demoButtons.push(button);
     return row;
   }
 }
