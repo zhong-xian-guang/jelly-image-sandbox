@@ -1,7 +1,8 @@
 /**
  * `JellySandbox`（issue #11 / T10，issue #13 / T12 接入 Camera，issue #12 / T11
- * 接入拖放匯入）——第一個能玩的組裝：`SimCore`（模擬）+ `JellyRenderer`（算繪）+
- * `PointerInput`（輸入）+ `CameraInput`（相機手動輸入）+ 固定步主迴圈。
+ * 接入拖放匯入，issue #14 / T13 接入控制面板）——第一個能玩的組裝：`SimCore`
+ * （模擬）+ `JellyRenderer`（算繪）+ `PointerInput`（輸入）+ `CameraInput`
+ * （相機手動輸入）+ 固定步主迴圈。
  *
  * 主迴圈用 `FixedStepAccumulator`（+ 250ms clamp）把真實時間切成 60Hz 固定步推進
  * 求解器；每幀再用**真實**幀時距（clamp 到 100ms）呼叫純函式 `updateCamera` 推進
@@ -15,7 +16,15 @@
  * 挑出拖放的 PNG 檔案、讀成位元組後回呼 `importPng` → `buildSimMesh` → 換一套新的
  * `SimCore` + `JellyRenderer`（拓撲變了、舊 Mesh geometry 沒法沿用）。新 Renderer
  * 先建好、確定成功了才拆舊的，畫面不會有空檔；解碼／建網格失敗（非圖片、壞檔）
- * 一律 `console.warn` 後放棄，不影響原本的 Jelly。
+ * 一律 `console.warn` 後放棄，不影響原本的 Jelly。匯入時把控制面板目前設定
+ * （Softness、輕拍力道、Boundary 模式）重新套到新的 `SimCore`，面板不會顯示跟
+ * 實際物理不一致的值。
+ *
+ * **控制面板**：`ControlPanel`（同樣是薄的 DOM 接線層）建 UI、回呼往外送；實際
+ * 換算邏輯都在純函式模組——Softness 曲線見 `../sim/softness`，Walled 邊界範圍見
+ * `./walledBounds`，Pin 模式的輸入轉接見 `../input/pinModeRouting`（開啟 Pin 模式
+ * 後，`PointerInput` 原本會發的 `grab` 改由它轉成 `pin`，直接放 Pin 而非可拖曳
+ * 的 Grab）。
  */
 
 import {
@@ -26,19 +35,34 @@ import {
   screenToWorld,
   updateCamera,
 } from '../camera';
-import { PointerInput } from '../input';
+import { PointerInput, routeForPinMode } from '../input';
 import { buildSimMesh, type SimMesh } from '../mesh';
 import { JellyRenderer } from '../render';
-import { SimCore } from '../sim';
+import {
+  type BoundaryMode,
+  InfiniteBoundary,
+  SimCore,
+  softnessToParams,
+  WalledBoundary,
+} from '../sim';
+import { ControlPanel } from './ControlPanel';
 import { createDefaultJelly } from './defaultJelly';
 import { DropImportInput } from './DropImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
+import { computeWalledBounds } from './walledBounds';
 
 const STEP_SECONDS = 1 / 60;
 /** 相機平滑用的單幀時距上限（分頁切回來不會讓相機瞬移）。 */
 const CAMERA_MAX_DT = 0.1;
 /** 拖曳中疊在畫面上的提示層 class（樣式見 `style.css`）。 */
 const DROP_HINT_ACTIVE_CLASS = 'is-active';
+/**
+ * 輕拍力道滑桿的範圍；中點 = `DEFAULT_SIM_PARAMS.tapStrength`（6000）——同
+ * `../sim/softness` 的理由，滑桿沒被動過時中點顯示的值要跟實際生效的一致。
+ */
+const TAP_STRENGTH_RANGE = { min: 1000, max: 11000, step: 100 };
+/** Softness 滑桿初始位置（0–1 中點 = `DEFAULT_SIM_PARAMS`，見 `../sim/softness`）。 */
+const DEFAULT_SOFTNESS = 0.5;
 
 export class JellySandbox {
   private sim: SimCore;
@@ -46,6 +70,7 @@ export class JellySandbox {
   private input: PointerInput;
   private cameraInput: CameraInput;
   private readonly dropImportInput: DropImportInput;
+  private readonly controlPanel: ControlPanel;
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
   private readonly root: HTMLElement;
   private readonly dropHint: HTMLDivElement;
@@ -55,6 +80,10 @@ export class JellySandbox {
   private cameraCommands: CameraCommand[] = [];
   /** 拖放匯入進行中——擋掉重疊的第二次匯入（連續拖放兩張圖不會互相打架）。 */
   private importing = false;
+  /** 目前的 Boundary 模式——`SimCore` 沒有 getter，重新匯入圖片時要靠這個重套。 */
+  private boundaryMode: BoundaryMode = 'infinite';
+  /** 控制面板「Pin 模式」開關；`attachInputHandlers` 的 `applyInput` 靠它轉接。 */
+  private pinModeEnabled = false;
 
   private rafId = 0;
   private lastFrameMs = 0;
@@ -84,6 +113,26 @@ export class JellySandbox {
       onDragActiveChange: (active) =>
         this.dropHint.classList.toggle(DROP_HINT_ACTIVE_CLASS, active),
     });
+
+    this.controlPanel = new ControlPanel({
+      initial: {
+        boundary: this.boundaryMode,
+        softness: DEFAULT_SOFTNESS,
+        tapStrength: this.sim.params.tapStrength,
+        pinMode: this.pinModeEnabled,
+        followLocked: !this.cameraState.followEnabled,
+      },
+      tapStrengthRange: TAP_STRENGTH_RANGE,
+      onBoundaryChange: (mode) => this.setBoundaryMode(mode),
+      onSoftnessChange: (t) => this.setSoftness(t),
+      onTapStrengthChange: (strength) => this.setTapStrength(strength),
+      onPinModeChange: (enabled) => this.setPinMode(enabled),
+      onClearPins: () => this.sim.clearPins(),
+      onFollowLockChange: (locked) => this.setFollowLock(locked),
+      onFrameJelly: () => this.frameJelly(),
+      onReset: () => this.sim.reset(),
+    });
+    root.appendChild(this.controlPanel.element);
   }
 
   /** 建立預設 Jelly 並組裝好；呼叫 `start()` 開始跑。 */
@@ -127,6 +176,7 @@ export class JellySandbox {
     window.removeEventListener('resize', this.onResize);
     this.dropImportInput.destroy();
     this.dropHint.remove();
+    this.controlPanel.destroy();
     this.input.destroy();
     this.cameraInput.destroy();
     this.renderer.destroy();
@@ -140,6 +190,42 @@ export class JellySandbox {
   /** 「框住果凍」按鈕（issue #14）——一次性緩動 fit 當前 bbox 後恢復跟隨。 */
   frameJelly(): void {
     this.cameraCommands.push({ type: 'frame' });
+  }
+
+  /**
+   * Boundary 切換（issue #14）：`walled` 用目前 bbox 算一個正方形邊界範圍（見
+   * `./walledBounds`）、`infinite` 換回無邊界。記在 `boundaryMode`——`replaceJelly`
+   * 換新 `SimCore` 時要重套，否則面板顯示的模式會跟實際物理不一致。
+   */
+  private setBoundaryMode(mode: BoundaryMode): void {
+    this.boundaryMode = mode;
+    this.applyBoundaryMode(this.sim);
+  }
+
+  private applyBoundaryMode(sim: SimCore): void {
+    sim.setBoundary(
+      this.boundaryMode === 'walled'
+        ? new WalledBoundary(computeWalledBounds(sim.bbox()))
+        : new InfiniteBoundary(),
+    );
+  }
+
+  /** Softness 滑桿（issue #14）：0–1 → `cellFrac` + `alphaSm`（見 `../sim/softness`）。 */
+  private setSoftness(t: number): void {
+    const { cellFrac, alphaSm } = softnessToParams(t);
+    this.sim.params.cellFrac = cellFrac;
+    this.sim.params.alphaSm = alphaSm;
+    this.sim.rebuildRegions();
+  }
+
+  /** 輕拍力道滑桿（issue #14）。 */
+  private setTapStrength(strength: number): void {
+    this.sim.params.tapStrength = strength;
+  }
+
+  /** 「Pin 模式」開關（issue #14）——`attachInputHandlers` 的 `applyInput` 靠它轉接。 */
+  private setPinMode(enabled: boolean): void {
+    this.pinModeEnabled = enabled;
   }
 
   /**
@@ -164,9 +250,21 @@ export class JellySandbox {
     await this.replaceJelly(mesh, texture);
   }
 
-  /** 建好新的一套（sim + renderer + camera）成功後才拆舊的——畫面不會有空檔。 */
+  /**
+   * 建好新的一套（sim + renderer + camera）成功後才拆舊的——畫面不會有空檔。
+   * 新 `SimCore` 一律從 `DEFAULT_SIM_PARAMS` 起家，所以要把控制面板目前設定
+   * （Softness、輕拍力道、Boundary 模式）重新套上去，面板才不會顯示跟實際物理
+   * 不一致的值（Pin 模式是 `JellySandbox` 層的路由旗標，不受換 `SimCore` 影響，
+   * 不用重套）。
+   */
   private async replaceJelly(mesh: SimMesh, texture: HTMLImageElement): Promise<void> {
     const sim = new SimCore(mesh);
+    sim.params.cellFrac = this.sim.params.cellFrac;
+    sim.params.alphaSm = this.sim.params.alphaSm;
+    sim.params.tapStrength = this.sim.params.tapStrength;
+    sim.rebuildRegions();
+    this.applyBoundaryMode(sim);
+
     const renderer = await JellyRenderer.create({
       width: this.root.clientWidth,
       height: this.root.clientHeight,
@@ -206,7 +304,10 @@ export class JellySandbox {
     const input = new PointerInput(canvas, {
       screenToWorld: project,
       hitTest,
-      applyInput: (event) => this.sim.applyInput(event),
+      applyInput: (event) => {
+        const routed = routeForPinMode(event, this.pinModeEnabled);
+        if (routed) this.sim.applyInput(routed);
+      },
     });
     const cameraInput = new CameraInput(canvas, {
       screenToWorld: project,

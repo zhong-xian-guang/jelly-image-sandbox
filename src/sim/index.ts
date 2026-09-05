@@ -2,7 +2,9 @@
 
 export { SimCore } from './SimCore';
 export { InfiniteBoundary, WalledBoundary } from './boundary';
-export type { Boundary, WalledBoundaryOptions } from './boundary';
+export type { Boundary, BoundaryMode, WalledBoundaryOptions } from './boundary';
+export { softnessToParams } from './softness';
+export type { SoftnessParams } from './softness';
 export { DEFAULT_SIM_PARAMS } from './types';
 export type {
   SimParams,

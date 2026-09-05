@@ -318,6 +318,25 @@ export class SimCore {
     return count;
   }
 
+  /** 一次移除所有 Pin（保留 Grab）。控制面板「清除所有 Pin」用。 */
+  clearPins(): void {
+    for (const [id, c] of this.constraints) {
+      if (c.pinned) this.constraints.delete(id);
+    }
+  }
+
+  /**
+   * 把 Jelly 重設回靜置狀態：位置回到 rest（初始網格）座標、速度歸零、清掉所有
+   * Grab／Pin。控制面板「停止／重設」用。拓撲／Region 不受影響（只跟 rest 座標
+   * 與 `params.cellFrac` 有關，兩者都沒變）。
+   */
+  reset(): void {
+    this.pos.set(this.rest);
+    this.prev.set(this.rest);
+    this.vel.fill(0);
+    this.constraints.clear();
+  }
+
   /**
    * 某個 Grab／Pin 附著點目前的世界座標（隨網格變形移動），供算繪畫把手、或測試
    * 斷言收斂用。該 `id` 沒有作用中的約束時回傳 `null`。
