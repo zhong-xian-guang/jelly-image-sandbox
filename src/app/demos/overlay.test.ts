@@ -149,10 +149,26 @@ describe('mergeTracks', () => {
     ).toEqual([{ atStep: 0, event: { type: 'tap', x: 0, y: 0 } }]);
   });
 
-  it('不改動傳入的 step 物件（回傳新物件）', () => {
-    const step = { atStep: 0, event: { type: 'grab', id: 'g', x: 0, y: 0 } } as const;
-    const track: OverlayTrack = { startStep: 2, idPrefix: 'A/', steps: [step] };
-    mergeTracks([track]);
-    expect(step).toEqual({ atStep: 0, event: { type: 'grab', id: 'g', x: 0, y: 0 } });
+  it('不改動傳入的 tracks 陣列、每個 OverlayTrack、其 steps 陣列與 step 物件', () => {
+    const stepA = { atStep: 1, event: { type: 'grab', id: 'g', x: 0, y: 0 } } as const;
+    const stepB = { atStep: 4, event: { type: 'tap', x: 2, y: 2 } } as const;
+    const trackA: OverlayTrack = { startStep: 2, idPrefix: 'A/', steps: [stepA] };
+    const trackB: OverlayTrack = { startStep: 0, idPrefix: 'B/', steps: [stepB] };
+    const tracks = [trackA, trackB];
+
+    // 凍結每一層：任何寫入（就地改 atStep、push 進 steps、換掉 tracks 內容）都會丟例外。
+    Object.freeze(tracks);
+    Object.freeze(trackA);
+    Object.freeze(trackB);
+    Object.freeze(trackA.steps);
+    Object.freeze(trackB.steps);
+    Object.freeze(stepA);
+    Object.freeze(stepB);
+
+    expect(() => mergeTracks(tracks)).not.toThrow();
+    expect(tracks).toEqual([
+      { startStep: 2, idPrefix: 'A/', steps: [{ atStep: 1, event: { type: 'grab', id: 'g', x: 0, y: 0 } }] },
+      { startStep: 0, idPrefix: 'B/', steps: [{ atStep: 4, event: { type: 'tap', x: 2, y: 2 } }] },
+    ]);
   });
 });

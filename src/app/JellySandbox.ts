@@ -113,7 +113,7 @@ import {
 } from '../sim';
 import { ControlPanel } from './ControlPanel';
 import { createDefaultJelly } from './defaultJelly';
-import { DEMOS, DemoRunner, mergeTracks } from './demos';
+import { DEMOS, DemoRunner, mergeTracks, STEP_SECONDS, secondsToStep, stepToSeconds } from './demos';
 import { DropImportInput } from './DropImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { PerfMonitor } from './PerfMonitor';
@@ -121,7 +121,6 @@ import { PinMarkers } from './PinMarkers';
 import { TrackRecorder, type RecordTarget, type Track } from './track';
 import { computeWalledBounds } from './walledBounds';
 
-const STEP_SECONDS = 1 / 60;
 /** 相機平滑用的單幀時距上限（分頁切回來不會讓相機瞬移）。 */
 const CAMERA_MAX_DT = 0.1;
 /** 拖曳中疊在畫面上的提示層 class（樣式見 `style.css`）。 */
@@ -159,11 +158,6 @@ interface RecordedActionTrack {
   startStep: number;
   steps: Track;
 }
-
-/** step 計數 → 秒（UI 顯示）。四捨五入的反向見 `secondsToStep`。 */
-const stepToSeconds = (step: number): number => step * STEP_SECONDS;
-/** 秒（UI 編輯）→ step 計數（內部唯一事實來源，比照 `demos/scripts.ts` 的 `at()`）。 */
-const secondsToStep = (seconds: number): number => Math.max(0, Math.round(seconds / STEP_SECONDS));
 
 export class JellySandbox {
   private sim: SimCore;
@@ -383,9 +377,17 @@ export class JellySandbox {
     this.syncTrackList();
   }
 
+  /**
+   * 某條 Track 的「起始秒數」欄位被改（issue #33）。內部存的是量化過的 step
+   * 計數，改完 `syncTrackList()` 把欄位重寫成量化後的秒數——使用者輸入 0.11 秒
+   * （不是 1/60 的整數倍）時，欄位會校正成實際生效的 0.1167 秒，看到的即是播放
+   * 時用的值。負數 clamp 到 0。
+   */
   private setTrackStartTime(id: string, seconds: number): void {
     const track = this.actionTracks.find((t) => t.id === id);
-    if (track) track.startStep = secondsToStep(seconds);
+    if (!track) return;
+    track.startStep = Math.max(0, secondsToStep(seconds));
+    this.syncTrackList();
   }
 
   private deleteTrack(id: string): void {

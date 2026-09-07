@@ -11,9 +11,22 @@
 import type { CameraCommand } from '../../camera';
 import type { DemoEvent } from './types';
 
-/** `CameraCommand` 聯集裡所有的 `type` 字面值（見 `../../camera/types`）。 */
-export const CAMERA_COMMAND_TYPES: readonly string[] = ['panBy', 'zoomBy', 'setFollow', 'frame'];
+/**
+ * `CameraCommand` 聯集裡每個 `type` 的成員表——鍵型別綁死 `CameraCommand['type']`，
+ * 之後在 `../../camera/types` 新增相機指令變體卻忘了補這裡，會是編譯錯誤而不是
+ * 默默被歸類成動作事件。`CAMERA_COMMAND_TYPES` 與 `isCameraCommand` 都由它衍生，
+ * 只有這一份要維護。
+ */
+const CAMERA_COMMAND_TYPE_SET: Record<CameraCommand['type'], true> = {
+  panBy: true,
+  zoomBy: true,
+  setFollow: true,
+  frame: true,
+};
+
+/** `CameraCommand` 所有的 `type` 字面值（衍生自 `CAMERA_COMMAND_TYPE_SET`）。 */
+export const CAMERA_COMMAND_TYPES: readonly string[] = Object.keys(CAMERA_COMMAND_TYPE_SET);
 
 export function isCameraCommand(event: DemoEvent): event is CameraCommand {
-  return CAMERA_COMMAND_TYPES.includes(event.type);
+  return event.type in CAMERA_COMMAND_TYPE_SET;
 }

@@ -3,7 +3,7 @@
  * ADR-0007）——把「多條各自單指標錄下的 Action Track ＋ 各自的起始 step」壓成
  * **一條**全域時間軸，交給既有的 `DemoRunner` 精準重播。
  *
- * 這裡刻意只認 `DemoStep[]`（時間軸），不認 `TrackRecorder`（錄製層）——合併的
+ * 這裡刻意只認 `DemoStep[]`（時間軸），不認 `TrackRecorder`（錄製層）——疊起來的
  * 是時間軸，「這串 step 來自使用者錄的 Track」是呼叫端（`JellySandbox`）的框架。
  * 放在 `demos/` 而非 `track/`，讓 `demos/` 維持自足的低層時間軸執行層、`track/`
  * 疊在其上。
@@ -19,7 +19,7 @@
  *    Track 前綴不同 → 跨 Track 不再碰撞（否則 TrackA 的 `release` 會誤中 TrackB
  *    的 Grab，疊加就不是真正的同時多點抓取）。`tap` 與相機指令沒有 `id`，原樣通過。
  *
- * 合併後依全域 `atStep` 穩定排序：同一個 step 上，先列的 Track 事件排在前、
+ * 疊起來後依全域 `atStep` 穩定排序：同一個 step 上，先列的 Track 事件排在前、
  * 條內原順序保留 —— 每次疊加結果逐格一致（issue #33 驗收條件：決定性）。
  */
 
@@ -42,18 +42,19 @@ function withPrefixedId(event: DemoEvent, prefix: string): DemoEvent {
 
 /**
  * 把多條 `OverlayTrack` 壓成一條全域時間軸：各自平移 `atStep`、重新映射 `id`，
- * 合併後依全域 `atStep` 穩定升冪排序。不改動傳入的 step 物件。
+ * 再依全域 `atStep` 穩定升冪排序。不改動傳入的物件（各層都是新的）。名稱沿用
+ * ADR-0007 / issue #33 spec 指定的 `mergeTracks`。
  */
 export function mergeTracks(tracks: readonly OverlayTrack[]): DemoStep[] {
-  const merged: DemoStep[] = [];
+  const overlaid: DemoStep[] = [];
   for (const track of tracks) {
     for (const step of track.steps) {
-      merged.push({
+      overlaid.push({
         atStep: track.startStep + step.atStep,
         event: withPrefixedId(step.event, track.idPrefix),
       });
     }
   }
   // Array.prototype.sort 自 ES2019 起穩定：同 atStep 維持推入順序（先列的 Track 在前、條內原順序保留）。
-  return merged.sort((a, b) => a.atStep - b.atStep);
+  return overlaid.sort((a, b) => a.atStep - b.atStep);
 }
