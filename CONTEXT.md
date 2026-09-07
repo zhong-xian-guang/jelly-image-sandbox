@@ -37,7 +37,7 @@ _Avoid_: pinch、hold、drag handle、拖曳點
 _Avoid_: 抓取點（易與指標位置混淆）、grabbed vertex
 
 **Multi-grab（多重抓取）**：
-同時存在的一組彼此獨立的 Grab。v1 由多指／多指標即時操作產生；v2 素材工具另外可用疊加播放多條各自單指標錄製的 Track 做出同樣效果（見 Track），讓只有單一滑鼠的使用者也能做出多點同時抓取的演出。
+同時存在的一組彼此獨立的 Grab。v1 由多指／多指標即時操作產生；v2 素材工具另外可用疊加播放多條各自單指標錄製的 Action Track 做出同樣效果，讓只有單一滑鼠的使用者也能做出多點同時抓取的演出。
 _Avoid_: 多點觸控抓取
 
 **Fling（甩動）**：
@@ -73,11 +73,27 @@ _Avoid_: silhouette、stencil、剪影
 _Avoid_: outline、boundary（已被 Boundary 佔用）、edge loop、剪影
 
 **Track（軌）**：
-一段錄下的輸入事件流——通常是一次「按下到放開」的抓取（加可選的結尾 Pin），或一次 Tap，或一段相機操作。多條 Track 各設起始時間、疊加播放，組成一段素材。核心動機：使用者通常只有單一指標（一支滑鼠），疊加多條各自單指標錄下的 Track 是在單指標裝置上做出 Multi-grab 效果的手段，而非單純的多軌剪輯功能。素材供外部影片剪輯用，不是給 itch.io 頁面本身。屬 v2 素材工具（見 ADR-0005）。
+一段錄下的事件流，在共同時間軸上有起始時間、可修剪頭尾。分兩種：**Action Track** 與 **Camera Track**。多條 Track 疊加播放組成一段素材，供外部影片剪輯用（不是給 itch.io 頁面本身）。核心動機：使用者通常只有單一指標（一支滑鼠），疊加多條各自單指標錄下的 Action Track 是在單指標裝置上做出 Multi-grab 效果的手段（見 ADR-0005、ADR-0007）。
 _Avoid_: recording、clip、layer、圖層
 
+**Action Track（動作軌）**：
+只含指標事件（Grab／Tap／Pin 等）的 Track。可多條，時間軸上可自由重疊——那正是疊出 Multi-grab 的用途。
+_Avoid_: pointer track、input track、指標軌（口語可，正式用「動作軌」）
+
+**Camera Track（相機軌）**：
+只含相機操作（平移／縮放／框住果凍／鎖定跟隨）的 Track，並帶錄製當下的鏡頭快照。播放到其起始時間即硬切到該快照、再放相對位移量。相機軌之間在時間軸上**不得重疊**（同一時刻只有一個鏡頭；重疊時軟警告，只認先列那條）。沒有相機軌在作用時，鏡頭停在框好果凍的靜止狀態。
+_Avoid_: viewport track、運鏡軌（口語可）
+
+**Recording target（錄製目標）**：
+按下錄製前選定這次要錄哪一路：只錄動作／只錄運鏡／兩者同時。「兩者同時」一次產出一條 Action Track 加一條 Camera Track。單頻道錄製時，另一路的操作即時生效但不會被錄進去。
+_Avoid_: mode、channel、頻道
+
+**Trim（修剪）**：
+一條 Track 播放時只取其本地時間 in／out 之間的片段（頭尾各切掉一段），讓使用者能錄鬆一點再收緊，不必重錄。修掉開頭後，剩餘內容仍從該 Track 的起始時間開始播。
+_Avoid_: crop、cut、剪裁
+
 **Overlay（疊加播放）**：
-多條 Track 各自設定起始時間後同時播放，讓分開錄製的操作在時間軸上重疊生效。是 Track 之所以要「多條」而非「一條錄到底」的原因。
+所有 Track 各自依起始時間與修剪範圍，在同一條時間軸上一起播放，讓分開錄製的操作在時間上重疊生效。是 Track 之所以要「多條」而非「一條錄到底」的原因。
 _Avoid_: merge、combine、合併
 
 **Demo（內建示範）**：
