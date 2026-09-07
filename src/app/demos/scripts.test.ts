@@ -43,6 +43,11 @@ function allFinite(xs: ArrayLike<number>): boolean {
   return true;
 }
 
+/** 內建 Demo 只用 `InputEvent`，不排 `CameraCommand`；這個回呼被呼叫代表分流壞了。 */
+function unexpectedCameraCommand(): never {
+  throw new Error('內建 Demo 不應該排出 CameraCommand');
+}
+
 /** 把一個 Demo 從頭播到排程結束（回傳跑完當下的 `SimCore`，尚未額外收斂）。 */
 function playToEnd(sim: SimCore, demoId: string): void {
   const demo = DEMOS.find((d) => d.id === demoId);
@@ -50,7 +55,7 @@ function playToEnd(sim: SimCore, demoId: string): void {
   const runner = new DemoRunner();
   runner.start(demo.build(sim.positions));
   while (runner.isRunning) {
-    runner.advance((event) => sim.applyInput(event));
+    runner.advance((event) => sim.applyInput(event), unexpectedCameraCommand);
     sim.step(1 / 60);
   }
 }
@@ -105,7 +110,7 @@ describe('內建 Demo 腳本', () => {
 
     let sawPinAndGrabTogether = false;
     while (runner.isRunning) {
-      runner.advance((event) => sim.applyInput(event));
+      runner.advance((event) => sim.applyInput(event), unexpectedCameraCommand);
       if (sim.pinCount === 1 && sim.grabCount === 1) sawPinAndGrabTogether = true;
       sim.step(1 / 60);
     }
@@ -121,12 +126,12 @@ describe('內建 Demo 腳本', () => {
     const runner = new DemoRunner();
     runner.start(demo.build(sim.positions));
 
-    runner.advance((event) => sim.applyInput(event)); // step 0：兩個 grab 一起下
+    runner.advance((event) => sim.applyInput(event), unexpectedCameraCommand); // step 0：兩個 grab 一起下
     expect(sim.grabCount).toBe(2);
     sim.step(1 / 60);
 
     while (runner.isRunning) {
-      runner.advance((event) => sim.applyInput(event));
+      runner.advance((event) => sim.applyInput(event), unexpectedCameraCommand);
       sim.step(1 / 60);
     }
     expect(sim.grabCount).toBe(0);

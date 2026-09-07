@@ -46,9 +46,35 @@
  * 經 `sim.applyInput` 送進去——跟即時輸入同一條窄介面，不繞道。「停止／重設」
  * 按鈕（`resetSim`）先停 Demo 排程再重設 `SimCore`，避免重設後殘留事件繼續
  * 觸發；重新匯入圖片（`replaceJelly`）也會中斷 Demo，因為排定座標是對著舊
- * 網格算的，套到新網格沒意義。播放中鎖住所有 Demo 按鈕（`setDemoButtonsLocked`），
+ * 網格算的，套到新網格沒意義。播放中鎖住所有 Demo 按鈕（`setPlaybackLocked`），
  * 擋掉「疊加播放另一個 Demo」——`DemoRunner.start` 只換排程、不會回頭釋放前一個
  * Demo 已經建立的 Pin/Grab，疊加播放會留下一個沒人記得、永遠釘住的 Pin。
+ *
+ * **Track 錄製**（issue #29 / V2 T1a 追加）：`./track` 提供 `TrackRecorder`——
+ * 跟 `DemoRunner` 互補的純類別，依 sim-step 排程「錄」而非「播」事件。攔截點
+ * 是 `attachInputHandlers` 裡既有的兩個派送點（`sim.applyInput(routed)` 之前、
+ * `cameraInput` 的 `emit` 推進 `cameraCommands` 之前）——錄製開啟時額外把同一個
+ * 事件轉呼叫進 `trackRecorder.record()`，不新增輸入路徑（ADR-0005）。主迴圈
+ * 每個固定 step 呼叫一次 `trackRecorder.tick()`，讓錄下的時間戳記跟
+ * `DemoRunner` 重播時的 step 計數對得上。`DemoRunner.advance` 因此擴充成也能
+ * 分流派送 `CameraCommand`（不只 `InputEvent`）給相機指令佇列，讓錄下的相機
+ * 平移／縮放也能重播；停止錄製後回傳的 Track 格式跟 `DemoStep[]` 相同，
+ * 「播放」按鈕直接呼叫 `demoRunner.start(recordedTrack)`——不需要另外寫播放器
+ * （見 ADR-0006）。換 Jelly（`replaceJelly`）會像 Demo 一樣中斷並丟棄錄製中的
+ * 內容跟已錄好的 Track，因為座標是對著舊網格算的；單純「停止／重設」
+ * （`resetSim`）不影響已錄好的 Track，只中斷仍在進行中的錄製。
+ *
+ * **Track 座標對齊**（issue #29 後續修正）：Grab/Tap/Pin 記的是錄製當下的
+ * 絕對世界座標、`CameraCommand` 記的是相對位移量——這兩個決定（issue #28
+ * User Story 20、21）都假設「播放時的場景／相機」跟「錄製當下」一致。使用者
+ * 實測發現：錄完後若手動移動過果凍或相機，座標／位移量套用的起點就錯了
+ * （前者會落空打不中果凍、後者會拍到別的地方）。`playTrack` 因此在
+ * `demoRunner.start` 之前先 `sim.reset()`（場景回 rest 狀態，讓絕對世界座標
+ * 重新對得上）、把 `cameraState` 瞬間對齊回 `recordedTrackStartCamera`（錄製
+ * *開始*那一刻的快照，見 `toggleRecording`）——兩者都是離散、決定性的瞬間
+ * 對齊，不是漸進的動畫，確保「重複按播放結果一致」（issue #28 User Story 9）
+ * 不受播放前場景／相機被怎麼動過影響。開始新錄製時會鎖住「播放 Track」，
+ * 避免錄製中途誤觸播放、被 `sim.reset()` 把正在錄的果凍砍掉重練。
  *
  * **substep 自動降級 + 網格解析度退路**（issue #16 / T15）：`PerfMonitor`（純
  * 狀態機，見該檔）每幀吃「這幀花了幾毫秒」，持續超標（弱裝置／背景分頁搶資源）
@@ -87,6 +113,7 @@ import { DropImportInput } from './DropImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
+import { TrackRecorder, type Track } from './track';
 import { computeWalledBounds } from './walledBounds';
 
 const STEP_SECONDS = 1 / 60;
@@ -124,6 +151,7 @@ export class JellySandbox {
   private readonly controlPanel: ControlPanel;
   private readonly pinMarkers: PinMarkers;
   private readonly demoRunner = new DemoRunner();
+  private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
   private readonly perfMonitor = new PerfMonitor();
   private readonly root: HTMLElement;
@@ -145,8 +173,17 @@ export class JellySandbox {
   private pinsVisible = true;
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
   private wireframeVisible = false;
-  /** `controlPanel.setDemoButtonsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
-  private demoButtonsLocked = false;
+  /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
+  private playbackLocked = false;
+  /** 上一次錄製結束後的 Track；`null` 表示還沒錄過，「播放 Track」按鈕維持鎖住。 */
+  private recordedTrack: Track | null = null;
+  /**
+   * 錄製「開始」那一刻的相機狀態快照——不是結束時的（見 `toggleRecording`）。
+   * `playTrack` 會先把相機瞬間對齊回這個快照，再重播錄下的相對位移指令，這樣
+   * 不管播放前相機被手動動到哪裡，重播出來的鏡頭路徑都跟錄製當下一致（issue #29
+   * 後續修正：`CameraCommand` 錄的是相對位移量，套在錯誤的起點上會拍到別的地方）。
+   */
+  private recordedTrackStartCamera: CameraState | null = null;
 
   private rafId = 0;
   private lastFrameMs = 0;
@@ -202,6 +239,8 @@ export class JellySandbox {
       onRunDemo: (id) => this.runDemo(id),
       onReset: () => this.resetSim(),
       onWireframeChange: (visible) => this.setWireframeVisible(visible),
+      onToggleRecording: () => this.toggleRecording(),
+      onPlayTrack: () => this.playTrack(),
     });
     root.appendChild(this.controlPanel.element);
 
@@ -281,14 +320,64 @@ export class JellySandbox {
     const demo = DEMOS.find((d) => d.id === id);
     if (!demo) return;
     this.demoRunner.start(demo.build(this.sim.positions));
-    this.setDemoButtonsLocked(true); // 立即鎖住，擋掉「趁還沒進下一幀又點另一個 Demo」的疊加播放
+    this.setPlaybackLocked(true); // 立即鎖住，擋掉「趁還沒進下一幀又點另一個 Demo」的疊加播放
+  }
+
+  /**
+   * 「開始錄製／停止錄製」切換鈕（issue #29）：開始時清空上一段錄製、順便快照
+   * 當下的相機狀態進 `recordedTrackStartCamera`（`playTrack` 重播前要對齊回這
+   * 個起點，見該處說明）；停止時把錄下的 Track 存進 `recordedTrack`（哪怕是
+   * 空的）並解鎖「播放 Track」按鈕。錄製中的事件本身不是在這裡送出的——是
+   * `attachInputHandlers` 的兩個既有派送點在錄製旗標開著時順手轉呼叫
+   * `trackRecorder.record()`。
+   *
+   * 開始錄製時額外鎖住「播放 Track」（哪怕上一段錄製留下的 Track 還能播）：
+   * `playTrack` 會呼叫 `sim.reset()`，若在錄製中被誤觸，等於把正在錄的果凍
+   * 從使用者手上砍掉重練，錄到一半的內容也會失真。
+   */
+  private toggleRecording(): void {
+    if (this.trackRecorder.isRecording) {
+      this.recordedTrack = this.trackRecorder.stop();
+      this.controlPanel.setRecordingActive(false);
+      this.controlPanel.setTrackPlaybackEnabled(true);
+    } else {
+      this.trackRecorder.start();
+      this.recordedTrackStartCamera = this.cameraState;
+      this.controlPanel.setRecordingActive(true);
+      this.controlPanel.setTrackPlaybackEnabled(false);
+    }
+  }
+
+  /**
+   * 「播放 Track」按鈕（issue #29；座標對不上的問題見後續修正）：Track 裡
+   * Grab/Tap/Pin 記的是錄製當下的絕對世界座標、相機指令記的是相對位移量——
+   * 兩者都假設「播放時的場景／相機」跟「錄製當下」一致，一旦錄完到按下播放
+   * 之間有人動過果凍或相機，座標／位移量套用的起點就錯了（前者會直接落空、
+   * 後者會拍到別的地方）。修法是播放前先把兩邊都拉回錄製當下的狀態：
+   *
+   * 1. `sim.reset()`——場景回到 rest 座標、速度歸零、清空 Grab/Pin，跟錄製時
+   *    通常從乾淨場景開始的假設對齊，錄下的絕對世界座標才會準確落在果凍上。
+   * 2. 把 `cameraState` 瞬間對齊回 `recordedTrackStartCamera`（錄製「開始」
+   *    當下的快照，不是結束時的）——`CameraCommand` 錄的是相對位移，套在正確
+   *    的起點上才會重播出錄製當下看到的鏡頭路徑。
+   *
+   * 之後把 Track 直接交給 `demoRunner` 精準重播——Track 的排程格式跟
+   * `DemoStep[]` 相同，不需要另外寫播放器（見 ADR-0006）。跟 Demo 共用同一個
+   * `DemoRunner`，鎖定邏輯（`setPlaybackLocked`）也自然覆蓋到這裡，不用另外處理。
+   */
+  private playTrack(): void {
+    if (!this.recordedTrack) return;
+    this.sim.reset();
+    if (this.recordedTrackStartCamera) this.cameraState = this.recordedTrackStartCamera;
+    this.demoRunner.start(this.recordedTrack);
+    this.setPlaybackLocked(true); // 立即鎖住，理由同 runDemo
   }
 
   /** 集中處理鎖定狀態變化，`frame()` 每幀同步一次時才不會對沒變的按鈕重複寫 `disabled`。 */
-  private setDemoButtonsLocked(locked: boolean): void {
-    if (this.demoButtonsLocked === locked) return;
-    this.demoButtonsLocked = locked;
-    this.controlPanel.setDemoButtonsEnabled(!locked);
+  private setPlaybackLocked(locked: boolean): void {
+    if (this.playbackLocked === locked) return;
+    this.playbackLocked = locked;
+    this.controlPanel.setPlaybackControlsEnabled(!locked);
   }
 
   /**
@@ -298,7 +387,12 @@ export class JellySandbox {
    */
   private resetSim(): void {
     this.demoRunner.stop();
-    this.setDemoButtonsLocked(false);
+    this.setPlaybackLocked(false);
+    if (this.trackRecorder.isRecording) {
+      // 中斷仍在進行中的錄製；已經錄好、存在 `recordedTrack` 裡的 Track 不受影響（拓撲沒變，還能重播）。
+      this.trackRecorder.stop();
+      this.controlPanel.setRecordingActive(false);
+    }
     this.sim.reset();
   }
 
@@ -421,7 +515,13 @@ export class JellySandbox {
    */
   private async replaceJelly(mesh: SimMesh, texture: HTMLImageElement): Promise<void> {
     this.demoRunner.stop(); // 舊 Jelly 的座標對新網格沒意義，換 Jelly 時中斷排程中的 Demo
-    this.setDemoButtonsLocked(false);
+    this.setPlaybackLocked(false);
+    // 同樣理由：錄製中／已錄好的 Track 座標跟相機起點快照都是對著舊 Jelly 算的，換 Jelly 時一併中斷並丟棄。
+    if (this.trackRecorder.isRecording) this.trackRecorder.stop();
+    this.recordedTrack = null;
+    this.recordedTrackStartCamera = null;
+    this.controlPanel.setRecordingActive(false);
+    this.controlPanel.setTrackPlaybackEnabled(false);
     const sim = new SimCore(mesh);
     sim.params.cellFrac = this.sim.params.cellFrac;
     sim.params.alphaSm = this.sim.params.alphaSm;
@@ -473,13 +573,19 @@ export class JellySandbox {
       hitTest,
       applyInput: (event) => {
         const routed = routeForPinMode(event, this.pinModeEnabled, this.pinModeContext());
-        if (routed) this.sim.applyInput(routed);
+        if (routed) {
+          this.sim.applyInput(routed);
+          this.trackRecorder.record(routed); // no-op 除非正在錄製（issue #29）
+        }
       },
     });
     const cameraInput = new CameraInput(canvas, {
       screenToWorld: project,
       hitTest,
-      emit: (cmd) => this.cameraCommands.push(cmd),
+      emit: (cmd) => {
+        this.cameraCommands.push(cmd);
+        this.trackRecorder.record(cmd); // no-op 除非正在錄製（issue #29）
+      },
     });
     return { input, cameraInput };
   }
@@ -517,10 +623,14 @@ export class JellySandbox {
 
     const steps = this.accumulator.advance(elapsed);
     for (let i = 0; i < steps; i++) {
-      this.demoRunner.advance((event) => this.sim.applyInput(event));
+      this.demoRunner.advance(
+        (event) => this.sim.applyInput(event),
+        (cmd) => this.cameraCommands.push(cmd),
+      );
       this.sim.step(STEP_SECONDS);
+      this.trackRecorder.tick(); // 跟 demoRunner 同一個 step 計數，錄下的時間戳記才能對得上重播（issue #29）
     }
-    this.setDemoButtonsLocked(this.demoRunner.isRunning); // 追上「Demo 自己播完」這種沒有按鈕點擊觸發的狀態變化
+    this.setPlaybackLocked(this.demoRunner.isRunning); // 追上「Demo／Track 自己播完」這種沒有按鈕點擊觸發的狀態變化
 
     const cmds = this.cameraCommands;
     this.cameraCommands = [];

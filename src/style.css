@@ -132,12 +132,33 @@ body {
   opacity: 0.7;
 }
 
-/** Demo 按鈕列前的小標題（issue #15 追加）——跟其他控制項分區，一眼看出這是自動演出。 */
+/** Demo／Track 按鈕列前的小標題（issue #15、issue #29 追加）——跟其他控制項分區，一眼看出這區是自動演出／自己錄的。 */
 .jelly-control-heading {
   margin-top: 4px;
   font-size: 0.75rem;
   font-weight: 600;
   opacity: 0.7;
+}
+
+/**
+ * 「開始錄製」按鈕在錄製中的視覺提示（issue #29 追加）——比照 Pin 模式的手法
+ * （`.jelly-pin-mode-active` 變色、`.jelly-pin-markers.is-removable` 脈動）：
+ * 文字變紅加粗，外加跟 Pin 標記同款的脈動 box-shadow，低頭一眼就知道正在錄。
+ */
+.jelly-control-row button.jelly-recording-active {
+  color: #ff5a5a;
+  font-weight: 600;
+  animation: jelly-recording-pulse 1s ease-in-out infinite;
+}
+
+@keyframes jelly-recording-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 90, 90, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 90, 90, 0.15);
+  }
 }
 
 /**
