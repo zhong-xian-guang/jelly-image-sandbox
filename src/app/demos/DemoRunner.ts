@@ -19,13 +19,8 @@
 
 import type { CameraCommand } from '../../camera';
 import type { InputEvent } from '../../sim';
-import type { DemoEvent, DemoStep } from './types';
-
-const CAMERA_COMMAND_TYPES: readonly string[] = ['panBy', 'zoomBy', 'setFollow', 'frame'];
-
-function isCameraCommand(event: DemoEvent): event is CameraCommand {
-  return CAMERA_COMMAND_TYPES.includes(event.type);
-}
+import { isCameraCommand } from './eventKind';
+import type { DemoStep } from './types';
 
 export class DemoRunner {
   private schedule: DemoStep[] = [];
