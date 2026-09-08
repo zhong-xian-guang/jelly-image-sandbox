@@ -11,10 +11,8 @@
 import type { PointerId } from '../../sim';
 import { centroidOf, dragTargetFromCorner, extremeParticle, rotateAround } from './geometry';
 import { easeInOutCubic, easeMoveSteps, easeOutCubic, linear } from './sequence';
+import { secondsToStep as at } from './time';
 import type { DemoDefinition, DemoStep } from './types';
-
-const STEPS_PER_SECOND = 60;
-const at = (seconds: number): number => Math.round(seconds * STEPS_PER_SECOND);
 
 const GRAB_ID: PointerId = 'demo-grab';
 const GRAB_ID_B: PointerId = 'demo-grab-b';

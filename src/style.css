@@ -162,6 +162,56 @@ body {
 }
 
 /**
+ * 已錄好的 Track 清單（issue #33 追加）——每列一條 Action Track：種類標記、
+ * 簡短標籤、可編輯的「起始秒數」欄位、刪除鈕。錄製中／播放中整列的欄位會被
+ * `disabled`（錄製與播放互斥）。
+ */
+.jelly-track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.jelly-track-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.jelly-track-row :disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.jelly-track-badge {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 0.7rem;
+}
+
+.jelly-track-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.jelly-track-row input.jelly-track-start {
+  flex: none;
+  width: 3.5em;
+  font: inherit;
+}
+
+.jelly-track-row button.jelly-track-delete {
+  flex: none;
+  font: inherit;
+}
+
+/**
  * Pin 位置標記層（issue #14 追加）：疊在畫布上、跟著每個 Pin 的目前世界座標
  * 走。`pointer-events: none`——不擋手勢，點掉特定 Pin 是靠世界座標鄰近判定
  * （見 `src/input/pinModeRouting.ts`），不是點中這個 DOM 節點。

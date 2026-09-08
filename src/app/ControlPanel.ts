@@ -35,11 +35,26 @@
  */
 
 import type { BoundaryMode } from '../sim';
+import type { RecordTarget } from './track';
 
 /** 一顆 Demo 按鈕要顯示的最小資訊——`ControlPanel` 特意不 import `./demos`，維持跟 `SimCore`/`JellySandbox` 無關的薄接線層，這裡自己開一個形狀就好。 */
 export interface DemoMenuItem {
   id: string;
   label: string;
+}
+
+/**
+ * Track 清單裡的一列（issue #33 / V2 T1-1）——`ControlPanel` 只拿它畫 UI，實際
+ * 的錄製內容／sim-step 換算都在 `JellySandbox`。目前只有動作軌（`kind: 'action'`），
+ * 相機軌（`'camera'`）留給之後的票。
+ */
+export interface TrackListRow {
+  id: string;
+  kind: 'action' | 'camera';
+  /** 簡短標籤（例如「動作軌 1（拖曳 · 輕拍 · Pin）」）。 */
+  label: string;
+  /** 這條 Track 在片段時間軸上的起始秒數（可編輯）。 */
+  startSeconds: number;
 }
 
 export interface ControlPanelInitial {
@@ -53,6 +68,8 @@ export interface ControlPanelInitial {
   followLocked: boolean;
   /** 網格線框開關（debug 用）。 */
   showWireframe: boolean;
+  /** 「錄製目標」選擇器的初始值（issue #33）。 */
+  recordTarget: RecordTarget;
 }
 
 export interface ControlPanelOptions {
@@ -71,10 +88,16 @@ export interface ControlPanelOptions {
   onRunDemo: (id: string) => void;
   onReset: () => void;
   onWireframeChange: (visible: boolean) => void;
+  /** 「錄製目標」選擇器變更（issue #33）——只錄動作／只錄運鏡／兩者同時。 */
+  onRecordTargetChange: (target: RecordTarget) => void;
   /** 「開始錄製／停止錄製」切換鈕（issue #29）。 */
   onToggleRecording: () => void;
-  /** 「播放 Track」按鈕（issue #29）——只在錄過至少一次、且沒有播放中鎖住時可按。 */
-  onPlayTrack: () => void;
+  /** 「▶ 播放全部」按鈕（issue #33）——把所有 Track 依起始時間疊加重播。 */
+  onPlayAll: () => void;
+  /** 某條 Track 的「起始秒數」欄位被改（issue #33）。 */
+  onTrackStartTimeChange: (id: string, seconds: number) => void;
+  /** 某條 Track 的刪除鈕被按（issue #33）。 */
+  onDeleteTrack: (id: string) => void;
 }
 
 export class ControlPanel {
@@ -82,16 +105,26 @@ export class ControlPanel {
   /** 播放中鎖住，避免疊加播放兩個 Demo（issue #15）——見 `setPlaybackControlsEnabled`。 */
   private readonly demoButtons: HTMLButtonElement[] = [];
   private readonly recordButton: HTMLButtonElement;
-  private readonly playTrackButton: HTMLButtonElement;
-  /** 是否已經錄過至少一次（哪怕是空 Track）——`setTrackPlaybackEnabled` 維護。 */
-  private trackReady = false;
-  /** Demo／Track 播放中鎖住——`setPlaybackControlsEnabled` 維護，跟 `trackReady` 一起決定播放鈕能不能按。 */
+  private readonly playAllButton: HTMLButtonElement;
+  private readonly recordTargetSelect: HTMLSelectElement;
+  /** Track 清單容器（issue #33）——`setTracks` 每次整份重建裡面的列。 */
+  private readonly trackListEl: HTMLElement;
+  private readonly onTrackStartTimeChange: (id: string, seconds: number) => void;
+  private readonly onDeleteTrack: (id: string) => void;
+  /** 目前清單有幾條 Track——`setTracks` 維護，空清單時「播放全部」變灰。 */
+  private trackCount = 0;
+  /** 正在錄製中——`setRecordingActive` 維護；錄製與播放互斥，錄製中「播放全部」與清單編輯鎖住。 */
+  private recording = false;
+  /** Demo／Track 播放中鎖住——`setPlaybackControlsEnabled` 維護。 */
   private playbackLocked = false;
   private readonly perfStatus: HTMLElement;
   /** `setPerfStatus` 比對用；避免值沒變時每幀重寫 DOM。 */
   private lastPerfText: string | null = null;
 
   constructor(opts: ControlPanelOptions) {
+    this.onTrackStartTimeChange = opts.onTrackStartTimeChange;
+    this.onDeleteTrack = opts.onDeleteTrack;
+
     const panel = document.createElement('div');
     panel.className = 'jelly-control-panel';
 
@@ -124,47 +157,74 @@ export class ControlPanel {
       this.trackHeading(),
     );
 
-    const track = this.trackRow(opts.onToggleRecording, opts.onPlayTrack);
+    const target = this.recordTargetRow(opts.initial.recordTarget, opts.onRecordTargetChange);
+    this.recordTargetSelect = target.select;
+    const track = this.trackRow(opts.onToggleRecording, opts.onPlayAll);
     this.recordButton = track.recordButton;
-    this.playTrackButton = track.playTrackButton;
-    panel.append(track.row, this.buttonRow('停止／重設', opts.onReset));
+    this.playAllButton = track.playAllButton;
+    this.trackListEl = document.createElement('div');
+    this.trackListEl.className = 'jelly-track-list';
+
+    panel.append(
+      target.row,
+      track.row,
+      this.trackListEl,
+      this.buttonRow('停止／重設', opts.onReset),
+    );
 
     this.element = panel;
+    this.updateTrackControlsState();
   }
 
   /**
-   * Demo／Track 播放中呼叫 `setPlaybackControlsEnabled(false)` 鎖住所有 Demo 按鈕
-   * 跟「開始錄製」「播放 Track」（issue #15、issue #29）——不然疊加按下另一個
-   * Demo，前一個 Demo 已經建立的 Pin/Grab 不會被清掉（`DemoRunner.start` 只換
-   * 排程，不會回頭釋放已生效的約束），會留下一個永遠釘住卻沒人記得的 Pin；
-   * Track 重播跟 Demo 共用同一個 `DemoRunner`，同樣的理由也適用。播完或按
-   * 「停止／重設」都要解鎖，見 `JellySandbox.frame`／`setPlaybackLocked`。
+   * Demo／Track 播放中呼叫 `setPlaybackControlsEnabled(false)` 鎖住所有 Demo 按鈕、
+   * 「開始錄製」、「▶ 播放全部」、「錄製目標」選擇器與 Track 清單的所有編輯欄位
+   * （issue #15、issue #29、issue #33）——不然疊加按下另一個 Demo，前一個已建立的
+   * Pin/Grab 不會被清掉（`DemoRunner.start` 只換排程、不回頭釋放約束），會留下沒人
+   * 記得的殘留；Track 疊加播放跟 Demo 共用同一個 `DemoRunner`，同樣的理由也適用。
+   * 播完或按「停止／重設」都要解鎖，見 `JellySandbox.frame`／`setPlaybackLocked`。
    */
   setPlaybackControlsEnabled(enabled: boolean): void {
     for (const button of this.demoButtons) button.disabled = !enabled;
-    this.recordButton.disabled = !enabled;
     this.playbackLocked = !enabled;
-    this.updatePlayTrackButtonState();
+    this.updateTrackControlsState();
   }
 
   /**
    * 錄製中／已停止的視覺切換（issue #29）——比照 Pin 模式的手法：按鈕文字變色
    * 加粗＋脈動（`.jelly-recording-active`，樣式見 `style.css`），低頭一眼就知道
-   * 現在正在錄。
+   * 現在正在錄。錄製中「▶ 播放全部」與清單編輯一併鎖住（錄製／播放互斥，issue #33）。
    */
   setRecordingActive(active: boolean): void {
+    this.recording = active;
     this.recordButton.classList.toggle('jelly-recording-active', active);
     this.recordButton.textContent = active ? '■ 停止錄製' : '● 開始錄製 Track';
+    this.updateTrackControlsState();
   }
 
-  /** 是否已經錄過至少一次（哪怕是空 Track）——決定「播放 Track」按鈕能不能按（issue #29）。 */
-  setTrackPlaybackEnabled(ready: boolean): void {
-    this.trackReady = ready;
-    this.updatePlayTrackButtonState();
+  /**
+   * 用最新的 Track 清單整份重建列 UI（issue #33）。每列：種類標記、簡短標籤、
+   * 可編輯的「起始秒數」數字欄位、刪除鈕。清單空時「▶ 播放全部」變灰。
+   */
+  setTracks(rows: readonly TrackListRow[]): void {
+    this.trackCount = rows.length;
+    this.trackListEl.replaceChildren(...rows.map((row) => this.trackRowEl(row)));
+    this.updateTrackControlsState();
   }
 
-  private updatePlayTrackButtonState(): void {
-    this.playTrackButton.disabled = this.playbackLocked || !this.trackReady;
+  /**
+   * 依 `playbackLocked` / `recording` / `trackCount` 重算 Track 區塊每個控制項的
+   * 可用狀態，集中一處免得各方法各自漏掉一顆按鈕。
+   */
+  private updateTrackControlsState(): void {
+    const busy = this.playbackLocked || this.recording;
+    // 錄製中「開始錄製」要保持可按（它此時是「停止錄製」）；只有播放中才鎖它。
+    this.recordButton.disabled = this.playbackLocked;
+    this.recordTargetSelect.disabled = busy;
+    this.playAllButton.disabled = busy || this.trackCount === 0;
+    for (const el of this.trackListEl.querySelectorAll('input, button')) {
+      (el as HTMLInputElement | HTMLButtonElement).disabled = busy;
+    }
   }
 
   /**
@@ -320,16 +380,41 @@ export class ControlPanel {
     return heading;
   }
 
+  /** 「錄製目標」選擇器（issue #33）：只錄動作／只錄運鏡／兩者同時。按下錄製前選定。 */
+  private recordTargetRow(
+    initial: RecordTarget,
+    onChange: (target: RecordTarget) => void,
+  ): { row: HTMLElement; select: HTMLSelectElement } {
+    const row = document.createElement('label');
+    row.className = 'jelly-control-row';
+
+    const select = document.createElement('select');
+    for (const [value, text] of [
+      ['action', '只錄動作'],
+      ['camera', '只錄運鏡'],
+      ['both', '兩者同時'],
+    ] as const) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      option.selected = value === initial;
+      select.appendChild(option);
+    }
+    select.addEventListener('change', () => onChange(select.value as RecordTarget));
+
+    row.append('錄製目標', select);
+    return { row, select };
+  }
+
   /**
-   * 「開始錄製／停止錄製」切換鈕 + 「播放 Track」按鈕（issue #29）。回傳個別按鈕
-   * 讓建構子能直接賦值給欄位（`recordButton`/`playTrackButton` 是 `readonly`，
-   * 賦值要發生在建構子本體才能通過 TS 的明確賦值檢查）。「播放 Track」初始鎖住——
-   * 還沒錄過，沒有東西可以播（見 `setTrackPlaybackEnabled`）。
+   * 「開始錄製／停止錄製」切換鈕 + 「▶ 播放全部」按鈕（issue #29 / issue #33）。
+   * 回傳個別按鈕讓建構子能直接賦值給 `readonly` 欄位（明確賦值檢查要求賦值發生
+   * 在建構子本體）。可用狀態一律交給 `updateTrackControlsState` 算，這裡不預設。
    */
   private trackRow(
     onToggleRecording: () => void,
-    onPlayTrack: () => void,
-  ): { row: HTMLElement; recordButton: HTMLButtonElement; playTrackButton: HTMLButtonElement } {
+    onPlayAll: () => void,
+  ): { row: HTMLElement; recordButton: HTMLButtonElement; playAllButton: HTMLButtonElement } {
     const row = document.createElement('div');
     row.className = 'jelly-control-row';
 
@@ -338,14 +423,53 @@ export class ControlPanel {
     recordButton.textContent = '● 開始錄製 Track';
     recordButton.addEventListener('click', onToggleRecording);
 
-    const playTrackButton = document.createElement('button');
-    playTrackButton.type = 'button';
-    playTrackButton.textContent = '▶ 播放 Track';
-    playTrackButton.disabled = true;
-    playTrackButton.addEventListener('click', onPlayTrack);
+    const playAllButton = document.createElement('button');
+    playAllButton.type = 'button';
+    playAllButton.textContent = '▶ 播放全部';
+    playAllButton.addEventListener('click', onPlayAll);
 
-    row.append(recordButton, playTrackButton);
-    return { row, recordButton, playTrackButton };
+    row.append(recordButton, playAllButton);
+    return { row, recordButton, playAllButton };
+  }
+
+  /**
+   * Track 清單的一列（issue #33）：種類標記（動作／相機）、簡短標籤、可編輯的
+   * 「起始秒數」數字欄位、刪除鈕。編輯欄位的鎖定由 `updateTrackControlsState`
+   * 在錄製／播放中統一關掉。
+   */
+  private trackRowEl(row: TrackListRow): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'jelly-track-row';
+
+    const badge = document.createElement('span');
+    badge.className = 'jelly-track-badge';
+    badge.textContent = row.kind === 'camera' ? '相機' : '動作';
+
+    const label = document.createElement('span');
+    label.className = 'jelly-track-label';
+    label.textContent = row.label;
+
+    const startInput = document.createElement('input');
+    startInput.type = 'number';
+    startInput.className = 'jelly-track-start';
+    startInput.min = '0';
+    startInput.step = '0.1';
+    startInput.value = String(row.startSeconds);
+    startInput.title = '起始秒數';
+    startInput.addEventListener('change', () => {
+      const seconds = Math.max(0, Number(startInput.value) || 0);
+      startInput.value = String(seconds);
+      this.onTrackStartTimeChange(row.id, seconds);
+    });
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'jelly-track-delete';
+    deleteButton.textContent = '刪除';
+    deleteButton.addEventListener('click', () => this.onDeleteTrack(row.id));
+
+    el.append(badge, label, '起始', startInput, '秒', deleteButton);
+    return el;
   }
 
   private buttonRow(labelText: string, onClick: () => void): HTMLElement {

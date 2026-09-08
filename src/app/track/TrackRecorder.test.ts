@@ -3,56 +3,98 @@ import { describe, expect, it } from 'vitest';
 import { TrackRecorder } from './TrackRecorder';
 
 describe('TrackRecorder', () => {
-  it('錄下的事件時間戳記是相對錄製起點的 step 計數，隨 tick() 前進', () => {
+  it('stop() 把混合事件序列依種類拆成 action／camera 兩份，各自相對錄製起點', () => {
     const recorder = new TrackRecorder();
-    recorder.start();
+    recorder.start('both');
 
     recorder.record({ type: 'grab', id: 'a', x: 0, y: 0 }); // step 0
+    recorder.record({ type: 'panBy', dxScreen: 5, dyScreen: 0 }); // step 0
     recorder.tick();
     recorder.tick();
     recorder.record({ type: 'moveGrab', id: 'a', x: 1, y: 1 }); // step 2
-    recorder.record({ type: 'panBy', dxScreen: 5, dyScreen: 0 }); // step 2，同一 step 可以有多個事件
+    recorder.record({ type: 'zoomBy', factor: 1.2, pivotScreen: { x: 0, y: 0 } }); // step 2
     recorder.tick();
     recorder.record({ type: 'release', id: 'a' }); // step 3
 
-    const track = recorder.stop();
-    expect(track).toEqual([
+    const { action, camera } = recorder.stop();
+    expect(action).toEqual([
       { atStep: 0, event: { type: 'grab', id: 'a', x: 0, y: 0 } },
       { atStep: 2, event: { type: 'moveGrab', id: 'a', x: 1, y: 1 } },
-      { atStep: 2, event: { type: 'panBy', dxScreen: 5, dyScreen: 0 } },
       { atStep: 3, event: { type: 'release', id: 'a' } },
     ]);
+    expect(camera).toEqual([
+      { atStep: 0, event: { type: 'panBy', dxScreen: 5, dyScreen: 0 } },
+      { atStep: 2, event: { type: 'zoomBy', factor: 1.2, pivotScreen: { x: 0, y: 0 } } },
+    ]);
+  });
+
+  it('錄製目標為 action 時只回傳 action 那份，camera 那份為空（相機操作即時生效但不錄）', () => {
+    const recorder = new TrackRecorder();
+    recorder.start('action');
+    recorder.record({ type: 'grab', id: 'a', x: 0, y: 0 });
+    recorder.record({ type: 'panBy', dxScreen: 5, dyScreen: 0 });
+
+    const { action, camera } = recorder.stop();
+    expect(action).toEqual([{ atStep: 0, event: { type: 'grab', id: 'a', x: 0, y: 0 } }]);
+    expect(camera).toEqual([]);
+  });
+
+  it('錄製目標為 camera 時只回傳 camera 那份，action 那份為空', () => {
+    const recorder = new TrackRecorder();
+    recorder.start('camera');
+    recorder.record({ type: 'grab', id: 'a', x: 0, y: 0 });
+    recorder.record({ type: 'frame' });
+
+    const { action, camera } = recorder.stop();
+    expect(action).toEqual([]);
+    expect(camera).toEqual([{ atStep: 0, event: { type: 'frame' } }]);
+  });
+
+  it('start() 預設目標為 both，兩份都回傳', () => {
+    const recorder = new TrackRecorder();
+    recorder.start();
+    recorder.record({ type: 'tap', x: 0, y: 0 });
+    recorder.record({ type: 'setFollow', enabled: false });
+
+    const { action, camera } = recorder.stop();
+    expect(action).toEqual([{ atStep: 0, event: { type: 'tap', x: 0, y: 0 } }]);
+    expect(camera).toEqual([{ atStep: 0, event: { type: 'setFollow', enabled: false } }]);
+  });
+
+  it('空錄製（start 後立刻 stop，沒有任何操作）兩份都空', () => {
+    const recorder = new TrackRecorder();
+    recorder.start('both');
+    expect(recorder.stop()).toEqual({ action: [], camera: [] });
   });
 
   it('stop() 後不再接受新事件，tick() 也不再前進錄製時間軸', () => {
     const recorder = new TrackRecorder();
-    recorder.start();
+    recorder.start('both');
     recorder.record({ type: 'tap', x: 0, y: 0 });
-    const track = recorder.stop();
+    const first = recorder.stop();
     expect(recorder.isRecording).toBe(false);
 
     recorder.tick();
     recorder.record({ type: 'tap', x: 9, y: 9 });
 
-    expect(track).toEqual([{ atStep: 0, event: { type: 'tap', x: 0, y: 0 } }]);
-  });
-
-  it('空錄製（start 後立刻 stop，沒有任何操作）回傳空 Track', () => {
-    const recorder = new TrackRecorder();
-    recorder.start();
-    expect(recorder.stop()).toEqual([]);
+    // stop() 後的 record()/tick() 都沒生效——重新 stop() 拿到的還是同一份內容。
+    expect(first).toEqual({ action: [{ atStep: 0, event: { type: 'tap', x: 0, y: 0 } }], camera: [] });
+    expect(recorder.stop()).toEqual(first);
   });
 
   it('start() 會取代進行中的錄製，時間軸從 step 0 重新算', () => {
     const recorder = new TrackRecorder();
-    recorder.start();
+    recorder.start('both');
     recorder.tick();
     recorder.tick();
     recorder.record({ type: 'tap', x: 1, y: 1 }); // 第一段錄製的 step 2
 
-    recorder.start(); // 取代第一段，重新從 step 0 開始
+    recorder.start('both'); // 取代第一段，重新從 step 0 開始
     recorder.record({ type: 'tap', x: 2, y: 2 });
 
-    expect(recorder.stop()).toEqual([{ atStep: 0, event: { type: 'tap', x: 2, y: 2 } }]);
+    expect(recorder.stop()).toEqual({
+      action: [{ atStep: 0, event: { type: 'tap', x: 2, y: 2 } }],
+      camera: [],
+    });
   });
 });
