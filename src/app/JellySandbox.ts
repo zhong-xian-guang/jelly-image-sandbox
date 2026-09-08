@@ -116,7 +116,15 @@ import {
 } from '../sim';
 import { ControlPanel } from './ControlPanel';
 import { createDefaultJelly } from './defaultJelly';
-import { DEMOS, DemoRunner, mergeTracks, STEP_SECONDS, secondsToStep, stepToSeconds } from './demos';
+import {
+  cameraTrackGlobalRange,
+  DEMOS,
+  DemoRunner,
+  mergeTracks,
+  STEP_SECONDS,
+  secondsToStep,
+  stepToSeconds,
+} from './demos';
 import { DropImportInput } from './DropImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { PerfMonitor } from './PerfMonitor';
@@ -400,7 +408,7 @@ export class JellySandbox {
       const { action, camera, startCamera } = this.trackRecorder.stop();
       this.controlPanel.setRecordingActive(false);
       if (action.length > 0) this.addTrack('action', action, null);
-      if (camera.length > 0) this.addTrack('camera', camera, startCamera);
+      if (camera.length > 0) this.addTrack('camera', camera, startCamera ?? null);
     } else {
       this.trackRecorder.start(this.recordTarget, cloneCameraState(this.cameraState));
       this.controlPanel.setRecordingActive(true);
@@ -418,7 +426,9 @@ export class JellySandbox {
       id: `t${num}`,
       kind,
       label:
-        kind === 'camera' ? summarizeCameraTrack(num, steps) : summarizeActionTrack(num, steps),
+        kind === 'camera'
+          ? summarizeTrack(`相機軌 ${num}`, steps, CAMERA_TRACK_KIND_LABELS)
+          : summarizeTrack(`動作軌 ${num}`, steps, ACTION_TRACK_KIND_LABELS),
       startStep: 0,
       inStep: 0,
       outStep: lastEventStep(steps),
@@ -494,20 +504,16 @@ export class JellySandbox {
   /**
    * 在全域時間軸上作用區間彼此相交的相機軌 id 集合（issue #36）——面板把這些列
    * 標紅（軟警告：允許暫時重疊，播放時重疊區間只認先列那條，見 `mergeTracks`）。
-   * 一條相機軌的作用區間 = `[startStep, startStep + (min(outStep, 最後一筆) − inStep)]`。
+   * 作用區間由 `cameraTrackGlobalRange`（`demos/overlay.ts`）算——跟 `mergeTracks`
+   * 播放時「認先列」丟事件用的是同一份，警告不會跟實際播放結果對不上。
    */
   private overlappingCameraTrackIds(): Set<string> {
     const cameras = this.tracks.filter((t) => t.kind === 'camera');
-    const interval = (t: RecordedTrack): [number, number] => {
-      const inStep = Math.min(t.inStep, t.outStep);
-      const endLocal = Math.min(t.outStep, lastEventStep(t.steps));
-      return [t.startStep, Math.max(t.startStep, t.startStep + (endLocal - inStep))];
-    };
     const flagged = new Set<string>();
     for (let i = 0; i < cameras.length; i++) {
       for (let j = i + 1; j < cameras.length; j++) {
-        const [aLo, aHi] = interval(cameras[i]!);
-        const [bLo, bHi] = interval(cameras[j]!);
+        const [aLo, aHi] = cameraTrackGlobalRange(cameras[i]!);
+        const [bLo, bHi] = cameraTrackGlobalRange(cameras[j]!);
         if (aLo <= bHi && bLo <= aHi) {
           flagged.add(cameras[i]!.id);
           flagged.add(cameras[j]!.id);
@@ -529,15 +535,25 @@ export class JellySandbox {
    * 決定性驗收條件），不受「播放前場景被怎麼動過」影響。
    *
    * 相機：整段沒有任何 Camera Track 時，重設後推一個一次性 `frame` 指令把鏡頭
-   * 框回果凍靜止狀態（不停在上一次亂動到的位置）。有 Camera Track 時不推 `frame`
-   * ——每條相機軌自帶的 `setState` 硬切會在它的起始 step 把鏡頭瞬間設回錄製起點，
-   * 不管播放前鏡頭在哪都一致（issue #36 決定性驗收條件）。
+   * 框回果凍靜止狀態（不停在上一次亂動到的位置）。有 Camera Track 時改成把
+   * `cameraState` 同步重設成剛框好的靜止狀態——這樣第一條相機軌起始秒數若被
+   * 調到 > 0，它生效前那段的鏡頭是從一個固定鏡位開始（決定性），而不是承接
+   * 播放前手動亂動到的鏡位；相機軌一生效，自帶的 `setState` 硬切就接管
+   * （issue #36 決定性驗收條件：不管播放前鏡頭在哪、重複播放鏡頭路徑都一致）。
    */
   private playAll(): void {
     if (this.tracks.length === 0) return;
     this.sim.reset();
     const hasCameraTrack = this.tracks.some((t) => t.kind === 'camera');
-    if (!hasCameraTrack) this.cameraCommands.push({ type: 'frame' });
+    if (hasCameraTrack) {
+      this.cameraState = createCameraState(
+        { centroid: this.sim.centroid(), bbox: this.sim.bbox() },
+        this.canvasSize(),
+      );
+      this.cameraCommands = [];
+    } else {
+      this.cameraCommands.push({ type: 'frame' });
+    }
     this.demoRunner.start(
       mergeTracks(
         this.tracks.map((t) => ({
@@ -546,7 +562,7 @@ export class JellySandbox {
           steps: t.steps,
           inStep: t.inStep,
           outStep: t.outStep,
-          ...(t.startCamera ? { startCamera: t.startCamera } : {}),
+          startCamera: t.startCamera,
         })),
       ),
     );
@@ -893,40 +909,42 @@ export class JellySandbox {
   }
 }
 
+/** 事件 `type` → 清單標籤上的操作分類字；沒列到的 type 不進標籤。 */
+const ACTION_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
+  grab: '拖曳',
+  moveGrab: '拖曳',
+  release: '拖曳',
+  tap: '輕拍',
+  pin: 'Pin',
+  movePin: 'Pin',
+  unpin: 'Pin',
+};
+const CAMERA_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
+  panBy: '平移',
+  zoomBy: '縮放',
+  frame: '框住',
+  setFollow: '鎖定跟隨',
+};
+
 /**
- * 一段 Action Track 的簡短標籤（issue #33）：`動作軌 N` 後面括號列出這條錄到
- * 哪幾類操作（拖曳／輕拍／Pin），讓使用者在清單上一眼分得出哪條是哪條。
+ * 一段 Track 的簡短標籤（issue #33 動作軌 / issue #36 相機軌）：`<name>` 後面括號
+ * 列出這條錄到哪幾類操作（依 `labels` 把 `event.type` 對成分類字、去重、保留出現
+ * 順序），讓使用者在清單上一眼分得出哪條是哪條。沒有可辨識的操作就只回 `name`。
  */
-function summarizeActionTrack(num: number, steps: Track): string {
+function summarizeTrack(name: string, steps: Track, labels: Readonly<Record<string, string>>): string {
   const kinds = new Set<string>();
   for (const { event } of steps) {
-    if (event.type === 'grab' || event.type === 'moveGrab' || event.type === 'release') {
-      kinds.add('拖曳');
-    } else if (event.type === 'tap') {
-      kinds.add('輕拍');
-    } else if (event.type === 'pin' || event.type === 'movePin' || event.type === 'unpin') {
-      kinds.add('Pin');
-    }
+    const label = labels[event.type];
+    if (label !== undefined) kinds.add(label);
   }
-  return kinds.size > 0 ? `動作軌 ${num}（${[...kinds].join(' · ')}）` : `動作軌 ${num}`;
+  return kinds.size > 0 ? `${name}（${[...kinds].join(' · ')}）` : name;
 }
 
 /**
- * 一段 Camera Track 的簡短標籤（issue #36）：`相機軌 N` 後面括號列出這條錄到哪幾
- * 類運鏡（平移／縮放／框住／鎖定跟隨），對照 `summarizeActionTrack`。
+ * 深拷貝一份相機狀態當快照（欄位形狀綁死 `CameraState`：`transform` 是唯一的巢狀
+ * 物件，其餘是純量）——錄製起點傳給 `TrackRecorder`，之後 `updateCamera` 每幀回傳
+ * 新物件不會動到它。
  */
-function summarizeCameraTrack(num: number, steps: Track): string {
-  const kinds = new Set<string>();
-  for (const { event } of steps) {
-    if (event.type === 'panBy') kinds.add('平移');
-    else if (event.type === 'zoomBy') kinds.add('縮放');
-    else if (event.type === 'frame') kinds.add('框住');
-    else if (event.type === 'setFollow') kinds.add('鎖定跟隨');
-  }
-  return kinds.size > 0 ? `相機軌 ${num}（${[...kinds].join(' · ')}）` : `相機軌 ${num}`;
-}
-
-/** 深拷貝一份相機狀態當快照——錄製起點傳給 `TrackRecorder`，之後 `updateCamera` 每幀回傳新物件不會動到它。 */
 function cloneCameraState(state: CameraState): CameraState {
   return { ...state, transform: { ...state.transform } };
 }

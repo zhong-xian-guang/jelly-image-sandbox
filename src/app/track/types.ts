@@ -31,7 +31,8 @@ export interface SplitTracks {
   /**
    * 錄製「開始」當下的鏡頭快照（issue #36 / V2 T1-4）——相機軌播放到起始時間時
    * 由 `mergeTracks` 插一個絕對相機指令「硬切」進場用。由 `JellySandbox` 在
-   * `start()` 當下傳入；沒帶（或只錄動作）時為 `null`。
+   * `start()` 當下傳入；沒帶（或只錄動作）時為 `null`。純增欄位（issue #29 的
+   * `SplitTracks` 消費端不受影響），標為選用。
    */
-  startCamera: CameraState | null;
+  startCamera?: CameraState | null;
 }

@@ -150,12 +150,15 @@ export function updateCamera(
   const step = dt > 0 ? dt : 0;
   sinceManual = Math.min(sinceManual + step, resumeDelaySeconds);
 
+  if (hardCut) {
+    // 絕對指令（相機軌硬切，issue #36）：直接停在快照狀態，framing／follow 的 ease
+    // 全部略過；下一幀起再照常從快照繼續（follow 沒關就恢復跟隨）。
+    return { transform: { x, y, scale }, followEnabled, framing, sinceManualSeconds: sinceManual };
+  }
+
   const fit = fitTransform(target.bbox, canvasSize, config);
 
-  if (hardCut) {
-    // 絕對指令（相機軌硬切，issue #36）：這一幀就停在快照狀態，framing／follow 的
-    // ease 全部略過；下一幀起再照常從快照繼續（follow 沒關就恢復跟隨）。
-  } else if (framing) {
+  if (framing) {
     const a = 1 - Math.exp(-frameLambda * step);
     x += (fit.x - x) * a;
     y += (fit.y - y) * a;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CameraState } from '../../camera';
-import { mergeTracks, type OverlayTrack } from './overlay';
+import { cameraTrackGlobalRange, mergeTracks, type OverlayTrack } from './overlay';
 
 /** 一份最小合法的相機起點快照。 */
 function snapshot(x: number): CameraState {
@@ -571,6 +571,60 @@ describe('mergeTracks', () => {
         { atStep: 0, event: { type: 'setState', state: snapshot(1) } },
         { atStep: 10, event: { type: 'tap', x: 1, y: 1 } },
         { atStep: 100, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+      ]);
+    });
+
+    it('cameraTrackGlobalRange：起始 = startStep，結束 = 修剪後最後一筆重錨到全域軸的 step', () => {
+      expect(
+        cameraTrackGlobalRange({
+          startStep: 10,
+          steps: [
+            { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+            { atStep: 8, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } },
+          ],
+        }),
+      ).toEqual([10, 18]);
+      // 尾修剪把最後一筆切掉 → 結束跟著往前（落在修剪後最後一筆留下來的那筆上）
+      expect(
+        cameraTrackGlobalRange({
+          startStep: 10,
+          outStep: 4,
+          steps: [
+            { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+            { atStep: 4, event: { type: 'panBy', dxScreen: 3, dyScreen: 0 } }, // = out，留 → 全域 14
+            { atStep: 8, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } }, // > out，不算進區間
+          ],
+        }),
+      ).toEqual([10, 14]);
+      // 沒有排程項 → 結束 = 起始
+      expect(cameraTrackGlobalRange({ startStep: 7, steps: [] })).toEqual([7, 7]);
+    });
+
+    it('claimedCameraRanges 用 cameraTrackGlobalRange 算：尾修剪切掉後段事件後，先前落在其中的後列軌不再被壓', () => {
+      const first: OverlayTrack = {
+        startStep: 0,
+        idPrefix: 'c1/',
+        startCamera: snapshot(1),
+        outStep: 3, // 把 atStep 30 那筆切掉 → 作用區間只到最後一筆「留下來的」（全域 2）
+        steps: [
+          { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+          { atStep: 2, event: { type: 'panBy', dxScreen: 5, dyScreen: 0 } }, // 留，全域 2
+          { atStep: 30, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } }, // > out，切掉
+        ],
+      };
+      const second: OverlayTrack = {
+        startStep: 5, // 在「到最後一筆原始事件」的舊算法下會落在 [0,30] 內被壓；新算法 [0,2] 不壓
+        idPrefix: 'c2/',
+        startCamera: snapshot(9),
+        steps: [{ atStep: 0, event: { type: 'panBy', dxScreen: 8, dyScreen: 0 } }],
+      };
+      expect(cameraTrackGlobalRange(first)).toEqual([0, 2]);
+      expect(mergeTracks([first, second])).toEqual([
+        { atStep: 0, event: { type: 'setState', state: snapshot(1) } },
+        { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+        { atStep: 2, event: { type: 'panBy', dxScreen: 5, dyScreen: 0 } },
+        { atStep: 5, event: { type: 'setState', state: snapshot(9) } },
+        { atStep: 5, event: { type: 'panBy', dxScreen: 8, dyScreen: 0 } },
       ]);
     });
 
