@@ -151,11 +151,17 @@ const REDUCED_TARGET_PARTICLE_COUNT = Math.round(DEFAULT_PARAMS.targetParticleCo
  * 時間軸，`startStep` 是它在疊加時間軸上的起始 sim step（UI 以「秒」編輯，
  * `STEP_SECONDS` 換算），`label` 是清單上顯示的簡短標籤，`id` 兼作 `mergeTracks`
  * 的 `PointerId` 前綴來源（各條唯一）。
+ *
+ * `inStep`／`outStep`（issue #35 / V2 T1-3）是本地時間的頭尾修剪範圍（同樣以
+ * step 存、UI 以「秒」編輯）：播放時只取 `[inStep, outStep]` 之間的排程項，其餘
+ * 頭尾各切掉。錄好時 `inStep = 0`、`outStep = ` 最後一筆操作的 step（涵蓋整條）。
  */
 interface RecordedActionTrack {
   id: string;
   label: string;
   startStep: number;
+  inStep: number;
+  outStep: number;
   steps: Track;
 }
 
@@ -268,6 +274,8 @@ export class JellySandbox {
       onPlayAll: () => this.playAll(),
       onTogglePause: () => this.togglePause(),
       onTrackStartTimeChange: (id, seconds) => this.setTrackStartTime(id, seconds),
+      onTrackTrimInChange: (id, seconds) => this.setTrackTrimIn(id, seconds),
+      onTrackTrimOutChange: (id, seconds) => this.setTrackTrimOut(id, seconds),
       onDeleteTrack: (id) => this.deleteTrack(id),
     });
     root.appendChild(this.controlPanel.element);
@@ -373,29 +381,62 @@ export class JellySandbox {
     }
   }
 
-  /** 把剛錄好的一段 Action Track 加進清單（預設起始 0 秒），並同步到面板。 */
+  /**
+   * 把剛錄好的一段 Action Track 加進清單，並同步到面板。預設起始 0 秒、修剪範圍
+   * 涵蓋整條（`inStep = 0`、`outStep = ` 最後一筆操作的 step）。
+   */
   private addActionTrack(steps: Track): void {
     const num = this.nextTrackNum++;
     this.actionTracks.push({
       id: `t${num}`,
       label: summarizeActionTrack(num, steps),
       startStep: 0,
+      inStep: 0,
+      outStep: lastEventStep(steps),
       steps,
     });
     this.syncTrackList();
   }
 
   /**
-   * 某條 Track 的「起始秒數」欄位被改（issue #33）。內部存的是量化過的 step
-   * 計數，改完 `syncTrackList()` 把欄位重寫成量化後的秒數——使用者輸入 0.11 秒
-   * （不是 1/60 的整數倍）時，欄位會校正成實際生效的 0.1167 秒，看到的即是播放
-   * 時用的值。負數 clamp 到 0。
+   * 找到 `id` 那條 Track、跑 `mutate` 改它的 step 欄位、再 `syncTrackList()` 把
+   * 欄位重寫成量化後的秒數——三個「秒數欄位被改」的處理共用這層 find／防呆／同步
+   * （issue #35 code review）。內部一律存量化過的 step 計數：使用者輸入 0.11 秒
+   *（不是 1/60 的整數倍）時，欄位會校正成實際生效的 0.1167 秒，看到的即是播放
+   * 時用的值。
    */
-  private setTrackStartTime(id: string, seconds: number): void {
+  private updateTrack(id: string, mutate: (track: RecordedActionTrack) => void): void {
     const track = this.actionTracks.find((t) => t.id === id);
     if (!track) return;
-    track.startStep = Math.max(0, secondsToStep(seconds));
+    mutate(track);
     this.syncTrackList();
+  }
+
+  /** 「起始秒數」欄位（issue #33）——這條在片段時間軸上從第幾秒開始。負數 clamp 到 0。 */
+  private setTrackStartTime(id: string, seconds: number): void {
+    this.updateTrack(id, (track) => {
+      track.startStep = Math.max(0, secondsToStep(seconds));
+    });
+  }
+
+  /**
+   * 「從 X 秒」（頭修剪）欄位（issue #35）——clamp 到 `[0, outStep]`，不讓 in 越過
+   * out（`in > out` 的防呆，UI 這層先擋住，`mergeTracks` 那層另有一道）。
+   */
+  private setTrackTrimIn(id: string, seconds: number): void {
+    this.updateTrack(id, (track) => {
+      track.inStep = Math.min(Math.max(0, secondsToStep(seconds)), track.outStep);
+    });
+  }
+
+  /**
+   * 「到 Y 秒」（尾修剪）欄位（issue #35）——不小於 `inStep`（同上防呆）。超過最後
+   * 一筆操作的秒數不特別 clamp——尾端多留一點空白不影響播放內容。
+   */
+  private setTrackTrimOut(id: string, seconds: number): void {
+    this.updateTrack(id, (track) => {
+      track.outStep = Math.max(secondsToStep(seconds), track.inStep);
+    });
   }
 
   private deleteTrack(id: string): void {
@@ -410,6 +451,10 @@ export class JellySandbox {
         kind: 'action' as const,
         label: t.label,
         startSeconds: stepToSeconds(t.startStep),
+        inSeconds: stepToSeconds(t.inStep),
+        outSeconds: stepToSeconds(t.outStep),
+        firstEventSeconds: stepToSeconds(firstEventStep(t.steps)),
+        lastEventSeconds: stepToSeconds(lastEventStep(t.steps)),
       })),
     );
   }
@@ -436,6 +481,8 @@ export class JellySandbox {
           startStep: t.startStep,
           idPrefix: `${t.id}/`,
           steps: t.steps,
+          inStep: t.inStep,
+          outStep: t.outStep,
         })),
       ),
     );
@@ -801,6 +848,19 @@ function summarizeActionTrack(num: number, steps: Track): string {
     }
   }
   return kinds.size > 0 ? `動作軌 ${num}（${[...kinds].join(' · ')}）` : `動作軌 ${num}`;
+}
+
+/**
+ * 一段 Track 第一筆／最後一筆操作的 step（issue #35）——`steps` 由 `TrackRecorder`
+ * 逐格 push，依 `atStep` 升冪，所以取頭尾即可。空 Track 回 0（`addActionTrack`
+ * 只在非空時才建列，這裡只是防呆）。清單上顯示成秒數，幫使用者抓修剪起訖值。
+ */
+function firstEventStep(steps: Track): number {
+  return steps[0]?.atStep ?? 0;
+}
+
+function lastEventStep(steps: Track): number {
+  return steps[steps.length - 1]?.atStep ?? 0;
 }
 
 /** PNG 位元組 → `HTMLImageElement`（Renderer 的貼圖來源）。走 Blob URL，載入完即釋放。 */

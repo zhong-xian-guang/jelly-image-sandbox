@@ -55,6 +55,14 @@ export interface TrackListRow {
   label: string;
   /** 這條 Track 在片段時間軸上的起始秒數（可編輯）。 */
   startSeconds: number;
+  /** 頭修剪：這條 Track 本地時間中，從第幾秒開始播（可編輯，issue #35）。 */
+  inSeconds: number;
+  /** 尾修剪：這條 Track 本地時間中，播到第幾秒為止（可編輯，issue #35）。 */
+  outSeconds: number;
+  /** 這條 Track 第一筆操作的本地秒數（唯讀顯示，幫使用者抓修剪起訖值）。 */
+  firstEventSeconds: number;
+  /** 這條 Track 最後一筆操作的本地秒數（唯讀顯示）。 */
+  lastEventSeconds: number;
 }
 
 export interface ControlPanelInitial {
@@ -98,6 +106,10 @@ export interface ControlPanelOptions {
   onTogglePause: () => void;
   /** 某條 Track 的「起始秒數」欄位被改（issue #33）。 */
   onTrackStartTimeChange: (id: string, seconds: number) => void;
+  /** 某條 Track 的「從 X 秒」（頭修剪）欄位被改（issue #35）。 */
+  onTrackTrimInChange: (id: string, seconds: number) => void;
+  /** 某條 Track 的「到 Y 秒」（尾修剪）欄位被改（issue #35）。 */
+  onTrackTrimOutChange: (id: string, seconds: number) => void;
   /** 某條 Track 的刪除鈕被按（issue #33）。 */
   onDeleteTrack: (id: string) => void;
 }
@@ -118,6 +130,8 @@ export class ControlPanel {
   /** Track 清單容器（issue #33）——`setTracks` 每次整份重建裡面的列。 */
   private readonly trackListEl: HTMLElement;
   private readonly onTrackStartTimeChange: (id: string, seconds: number) => void;
+  private readonly onTrackTrimInChange: (id: string, seconds: number) => void;
+  private readonly onTrackTrimOutChange: (id: string, seconds: number) => void;
   private readonly onDeleteTrack: (id: string) => void;
   /** 目前清單有幾條 Track——`setTracks` 維護，空清單時「播放全部」變灰。 */
   private trackCount = 0;
@@ -131,6 +145,8 @@ export class ControlPanel {
 
   constructor(opts: ControlPanelOptions) {
     this.onTrackStartTimeChange = opts.onTrackStartTimeChange;
+    this.onTrackTrimInChange = opts.onTrackTrimInChange;
+    this.onTrackTrimOutChange = opts.onTrackTrimOutChange;
     this.onDeleteTrack = opts.onDeleteTrack;
 
     const panel = document.createElement('div');
@@ -217,8 +233,10 @@ export class ControlPanel {
   }
 
   /**
-   * 用最新的 Track 清單整份重建列 UI（issue #33）。每列：種類標記、簡短標籤、
-   * 可編輯的「起始秒數」數字欄位、刪除鈕。清單空時「▶ 播放全部」變灰。
+   * 用最新的 Track 清單整份重建列 UI（issue #33；issue #35 加頭尾修剪）。每列兩行：
+   * 種類標記＋簡短標籤＋刪除鈕，下一行可編輯的「起始／從／到」秒數欄位＋唯讀的
+   * 「錄到 X–Y 秒」提示。清單空時「▶ 播放全部」變灰；錄製／播放中整列欄位鎖住
+   *（見 `updateTrackControlsState`）。
    */
   setTracks(rows: readonly TrackListRow[]): void {
     this.trackCount = rows.length;
@@ -262,7 +280,7 @@ export class ControlPanel {
    * 秒數字串真的變了才寫 DOM（同 `setPerfStatus`）。
    */
   setPlaybackTime(seconds: number): void {
-    const text = `目前 ${seconds.toFixed(2)} 秒`;
+    const text = `目前 ${formatSeconds(seconds)} 秒`;
     if (text === this.lastPlaybackText) return;
     this.lastPlaybackText = text;
     this.playbackTimeEl.textContent = text;
@@ -510,9 +528,12 @@ export class ControlPanel {
   }
 
   /**
-   * Track 清單的一列（issue #33）：種類標記（動作／相機）、簡短標籤、可編輯的
-   * 「起始秒數」數字欄位、刪除鈕。編輯欄位的鎖定由 `updateTrackControlsState`
-   * 在錄製／播放中統一關掉。
+   * Track 清單的一列（issue #33；issue #35 加頭尾修剪）。兩行：
+   * 第一行 種類標記（動作／相機）＋簡短標籤＋刪除鈕；
+   * 第二行 可編輯的「起始 / 從 / 到」秒數欄位，加一段唯讀的「錄到 X–Y 秒」提示
+   * （第一筆～最後一筆操作的本地秒數，幫使用者抓修剪起訖值）。
+   * 所有 `input`／`button` 的鎖定由 `updateTrackControlsState` 在錄製／播放中統一關掉
+   *（「修剪欄位在播放中鎖住」的驗收條件）。
    */
   private trackRowEl(row: TrackListRow): HTMLElement {
     const el = document.createElement('div');
@@ -526,27 +547,64 @@ export class ControlPanel {
     label.className = 'jelly-track-label';
     label.textContent = row.label;
 
-    const startInput = document.createElement('input');
-    startInput.type = 'number';
-    startInput.className = 'jelly-track-start';
-    startInput.min = '0';
-    startInput.step = '0.1';
-    startInput.value = String(row.startSeconds);
-    startInput.title = '起始秒數';
-    startInput.addEventListener('change', () => {
-      const seconds = Math.max(0, Number(startInput.value) || 0);
-      startInput.value = String(seconds);
-      this.onTrackStartTimeChange(row.id, seconds);
-    });
-
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
     deleteButton.className = 'jelly-track-delete';
     deleteButton.textContent = '刪除';
     deleteButton.addEventListener('click', () => this.onDeleteTrack(row.id));
 
-    el.append(badge, label, '起始', startInput, '秒', deleteButton);
+    const top = document.createElement('div');
+    top.className = 'jelly-track-row-top';
+    top.append(badge, label, deleteButton);
+
+    const startInput = this.trackNumberInput(row.startSeconds, '起始秒數（在片段時間軸上）', (s) =>
+      this.onTrackStartTimeChange(row.id, s),
+    );
+    const inInput = this.trackNumberInput(row.inSeconds, '從第幾秒開始播（頭修剪）', (s) =>
+      this.onTrackTrimInChange(row.id, s),
+    );
+    const outInput = this.trackNumberInput(row.outSeconds, '播到第幾秒為止（尾修剪）', (s) =>
+      this.onTrackTrimOutChange(row.id, s),
+    );
+
+    const recorded = document.createElement('span');
+    recorded.className = 'jelly-track-recorded';
+    recorded.textContent = `錄到 ${formatSeconds(row.firstEventSeconds)}–${formatSeconds(
+      row.lastEventSeconds,
+    )} 秒`;
+    recorded.title = '第一筆～最後一筆操作的秒數';
+
+    const fields = document.createElement('div');
+    fields.className = 'jelly-track-row-fields';
+    fields.append('起始', startInput, '秒　從', inInput, '到', outInput, '秒', recorded);
+
+    el.append(top, fields);
     return el;
+  }
+
+  /**
+   * Track 列裡一個「秒數」數字欄位（起始／從／到共用）：change 時把輸入 clamp 到
+   * ≥ 0、呼叫 `onChange`；欄位值的量化校正（step 對齊）由 `JellySandbox` 收到後
+   * `syncTrackList()` 重繪整列時完成。
+   */
+  private trackNumberInput(
+    value: number,
+    title: string,
+    onChange: (seconds: number) => void,
+  ): HTMLInputElement {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'jelly-track-seconds';
+    input.min = '0';
+    input.step = '0.1';
+    input.value = String(value);
+    input.title = title;
+    input.addEventListener('change', () => {
+      const seconds = Math.max(0, Number(input.value) || 0);
+      input.value = String(seconds);
+      onChange(seconds);
+    });
+    return input;
   }
 
   private buttonRow(labelText: string, onClick: () => void): HTMLElement {
@@ -576,4 +634,9 @@ export class ControlPanel {
     this.demoButtons.push(button);
     return row;
   }
+}
+
+/** 面板上顯示秒數的統一格式（兩位小數）——播放讀出與 Track 列「錄到 X–Y 秒」共用。 */
+function formatSeconds(seconds: number): string {
+  return seconds.toFixed(2);
 }
