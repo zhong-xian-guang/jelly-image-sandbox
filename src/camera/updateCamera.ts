@@ -19,6 +19,9 @@
  *    沒鎖定時 fit 完照常恢復自動跟隨（因為原本就是開的，framing 只是搶著先動一次）。
  *    一次性按鈕不該偷偷改動「鎖定跟隨」勾選框背後的狀態，否則畫面上的勾選框會
  *    跟實際狀態對不上。
+ *  - **絕對指令**（`setState`，issue #36）：把相機瞬間設成指令帶的快照，這一幀
+ *    完全跳過 framing／follow 的平滑（「硬切」）。之後的幀照常從快照狀態繼續
+ *    （follow 沒被關的話會恢復跟隨）。相機軌播放到起始時間時的進場方式。
  */
 
 import type {
@@ -96,6 +99,8 @@ export function updateCamera(
   let followEnabled = state.followEnabled;
   let framing = state.framing;
   let sinceManual = state.sinceManualSeconds;
+  /** 這一幀收過 `setState`——硬切，跳過下面 framing／follow 的平滑（issue #36）。 */
+  let hardCut = false;
 
   for (const cmd of commands) {
     switch (cmd.type) {
@@ -129,6 +134,16 @@ export function updateCamera(
         framing = true;
         break;
       }
+      case 'setState': {
+        x = cmd.state.transform.x;
+        y = cmd.state.transform.y;
+        scale = cmd.state.transform.scale;
+        followEnabled = cmd.state.followEnabled;
+        framing = cmd.state.framing;
+        sinceManual = cmd.state.sinceManualSeconds;
+        hardCut = true;
+        break;
+      }
     }
   }
 
@@ -137,7 +152,10 @@ export function updateCamera(
 
   const fit = fitTransform(target.bbox, canvasSize, config);
 
-  if (framing) {
+  if (hardCut) {
+    // 絕對指令（相機軌硬切，issue #36）：這一幀就停在快照狀態，framing／follow 的
+    // ease 全部略過；下一幀起再照常從快照繼續（follow 沒關就恢復跟隨）。
+  } else if (framing) {
     const a = 1 - Math.exp(-frameLambda * step);
     x += (fit.x - x) * a;
     y += (fit.y - y) * a;

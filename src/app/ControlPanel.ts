@@ -44,14 +44,14 @@ export interface DemoMenuItem {
 }
 
 /**
- * Track 清單裡的一列（issue #33 / V2 T1-1）——`ControlPanel` 只拿它畫 UI，實際
- * 的錄製內容／sim-step 換算都在 `JellySandbox`。目前只有動作軌（`kind: 'action'`），
- * 相機軌（`'camera'`）留給之後的票。
+ * Track 清單裡的一列（issue #33 / V2 T1-1；issue #36 加相機軌）——`ControlPanel`
+ * 只拿它畫 UI，實際的錄製內容／sim-step 換算／重疊判定都在 `JellySandbox`。
+ * `kind` 決定種類標記（動作／相機）。
  */
 export interface TrackListRow {
   id: string;
   kind: 'action' | 'camera';
-  /** 簡短標籤（例如「動作軌 1（拖曳 · 輕拍 · Pin）」）。 */
+  /** 簡短標籤（例如「動作軌 1（拖曳 · 輕拍 · Pin）」「相機軌 2（平移 · 縮放）」）。 */
   label: string;
   /** 這條 Track 在片段時間軸上的起始秒數（可編輯）。 */
   startSeconds: number;
@@ -63,6 +63,11 @@ export interface TrackListRow {
   firstEventSeconds: number;
   /** 這條 Track 最後一筆操作的本地秒數（唯讀顯示）。 */
   lastEventSeconds: number;
+  /**
+   * 相機軌才會為 `true`（issue #36）：這條在時間軸上跟另一條相機軌的作用區間
+   * 重疊——列標紅的軟警告（播放時重疊區間只認先列那條）。
+   */
+  overlapping?: boolean;
 }
 
 export interface ControlPanelInitial {
@@ -233,10 +238,11 @@ export class ControlPanel {
   }
 
   /**
-   * 用最新的 Track 清單整份重建列 UI（issue #33；issue #35 加頭尾修剪）。每列兩行：
-   * 種類標記＋簡短標籤＋刪除鈕，下一行可編輯的「起始／從／到」秒數欄位＋唯讀的
-   * 「錄到 X–Y 秒」提示。清單空時「▶ 播放全部」變灰；錄製／播放中整列欄位鎖住
-   *（見 `updateTrackControlsState`）。
+   * 用最新的 Track 清單整份重建列 UI（issue #33；issue #35 加頭尾修剪；issue #36
+   * 加相機軌 + 時間重疊警告）。每列兩行：種類標記（動作／相機）＋簡短標籤
+   * ＋（相機軌重疊時）⚠ 警告＋刪除鈕，下一行可編輯的「起始／從／到」秒數欄位
+   * ＋唯讀的「錄到 X–Y 秒」提示。清單空時「▶ 播放全部」變灰；錄製／播放中整列
+   * 欄位鎖住（見 `updateTrackControlsState`）。
    */
   setTracks(rows: readonly TrackListRow[]): void {
     this.trackCount = rows.length;
@@ -538,6 +544,8 @@ export class ControlPanel {
   private trackRowEl(row: TrackListRow): HTMLElement {
     const el = document.createElement('div');
     el.className = 'jelly-track-row';
+    // 相機軌時間重疊的軟警告（issue #36）——整列標紅，播放時重疊區間只認先列那條。
+    el.classList.toggle('jelly-track-row-overlap', row.overlapping === true);
 
     const badge = document.createElement('span');
     badge.className = 'jelly-track-badge';
@@ -555,7 +563,15 @@ export class ControlPanel {
 
     const top = document.createElement('div');
     top.className = 'jelly-track-row-top';
-    top.append(badge, label, deleteButton);
+    top.append(badge, label);
+    if (row.overlapping === true) {
+      const warn = document.createElement('span');
+      warn.className = 'jelly-track-warn';
+      warn.textContent = '⚠ 時間重疊';
+      warn.title = '相機軌之間不該重疊——播放時重疊區間只認清單中較前面那條';
+      top.append(warn);
+    }
+    top.append(deleteButton);
 
     const startInput = this.trackNumberInput(row.startSeconds, '起始秒數（在片段時間軸上）', (s) =>
       this.onTrackStartTimeChange(row.id, s),

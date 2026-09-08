@@ -92,9 +92,15 @@ export interface CameraState {
  *   不改 `followEnabled`：鎖定跟隨時 fit 完停在原地，沒鎖定時 fit 完照常繼續
  *   自動跟隨（因為本來就是開的）。不會讓「鎖定跟隨」勾選框背後的狀態跟畫面
  *   對不上。
+ * - `setState`：絕對指令（issue #36 / V2 T1-4）——把相機瞬間設成 `state`，這一幀
+ *   **不做任何平滑**（framing／follow 的 ease 全部略過）。即時輸入層不會產生它；
+ *   只有 v2 素材工具的相機軌（Camera Track）用得到：`mergeTracks` 在每條相機軌的
+ *   起始 step 插一個 `setState`「硬切」到錄製當下的鏡頭快照，之後再放它自己錄下的
+ *   `panBy`／`zoomBy`——不管播放前鏡頭在哪，重播出來的運鏡路徑都跟錄製當下一致。
  */
 export type CameraCommand =
   | { type: 'panBy'; dxScreen: number; dyScreen: number }
   | { type: 'zoomBy'; factor: number; pivotScreen: Point }
   | { type: 'setFollow'; enabled: boolean }
-  | { type: 'frame' };
+  | { type: 'frame' }
+  | { type: 'setState'; state: CameraState };

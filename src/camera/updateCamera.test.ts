@@ -319,6 +319,90 @@ describe('updateCamera — 自訂 config', () => {
   });
 });
 
+describe('updateCamera — 絕對指令 setState（issue #36 / V2 T1-4）', () => {
+  const SNAPSHOT: CameraState = {
+    transform: { x: 123, y: -45, scale: 3.5 },
+    followEnabled: false,
+    framing: false,
+    sinceManualSeconds: CFG.resumeDelaySeconds,
+  };
+
+  it('收到 setState 就立刻回傳該狀態（dt = 0，逐欄位相等）', () => {
+    const s0 = createCameraState(targetAt(0, 0), CANVAS);
+    const s = updateCamera(s0, targetAt(9999, 9999), CANVAS, [{ type: 'setState', state: SNAPSHOT }], 0);
+    expect(s).toEqual(SNAPSHOT);
+  });
+
+  it('不平滑：即使 dt > 0 且質心遠在天邊，transform 仍精確等於快照（沒有 ease 分量）', () => {
+    const s0 = createCameraState(targetAt(0, 0), CANVAS);
+    const s = updateCamera(
+      s0,
+      targetAt(50000, -40000),
+      CANVAS,
+      [{ type: 'setState', state: SNAPSHOT }],
+      1 / 60,
+    );
+    expect(s.transform).toEqual(SNAPSHOT.transform);
+    expect(s.followEnabled).toBe(false);
+    expect(s.framing).toBe(false);
+  });
+
+  it('硬切後下一幀照常從快照繼續（follow 沒關 → 恢復朝質心跟隨）', () => {
+    const followingSnapshot: CameraState = { ...SNAPSHOT, followEnabled: true };
+    const s0 = createCameraState(targetAt(0, 0), CANVAS);
+    let s = updateCamera(
+      s0,
+      targetAt(0, 0),
+      CANVAS,
+      [{ type: 'setState', state: followingSnapshot }],
+      1 / 60,
+    );
+    expect(s.transform).toEqual(followingSnapshot.transform);
+    // 之後幾秒沒有任何指令：從快照位置朝靜止在原點的果凍收斂。
+    s = run(s, targetAt(0, 0), 3);
+    const fit = fitTransform(targetAt(0, 0).bbox, CANVAS);
+    expect(s.transform.x).toBeCloseTo(fit.x, 2);
+    expect(s.transform.y).toBeCloseTo(fit.y, 2);
+  });
+
+  it('同一幀 setState 之後還有 panBy → 硬切到快照，再套 panBy（相機軌硬切後接位移）', () => {
+    const s0 = createCameraState(targetAt(0, 0), CANVAS);
+    const s = updateCamera(
+      s0,
+      targetAt(0, 0),
+      CANVAS,
+      [
+        { type: 'setState', state: SNAPSHOT },
+        { type: 'panBy', dxScreen: SNAPSHOT.transform.scale * 10, dyScreen: 0 },
+      ],
+      0,
+    );
+    // panBy：相機朝反向移動 dxScreen / scale = 10 世界單位。
+    expect(s.transform.x).toBeCloseTo(SNAPSHOT.transform.x - 10, 9);
+    expect(s.transform.scale).toBe(SNAPSHOT.transform.scale);
+  });
+
+  it('沒有 setState 時其餘指令行為不變（panBy 迴歸）', () => {
+    const s0: CameraState = {
+      transform: { x: 0, y: 0, scale: 2 },
+      followEnabled: true,
+      framing: false,
+      sinceManualSeconds: CFG.resumeDelaySeconds,
+    };
+    const s = updateCamera(s0, targetAt(0, 0), CANVAS, [{ type: 'panBy', dxScreen: 10, dyScreen: -4 }], 0);
+    expect(s.transform.x).toBeCloseTo(-5, 9);
+    expect(s.transform.y).toBeCloseTo(2, 9);
+  });
+
+  it('不變異傳入的 state 與指令帶的快照', () => {
+    const s0 = createCameraState(targetAt(0, 0), CANVAS);
+    const snap = JSON.parse(JSON.stringify(SNAPSHOT));
+    const cmdState: CameraState = JSON.parse(JSON.stringify(SNAPSHOT));
+    updateCamera(s0, targetAt(300, 0), CANVAS, [{ type: 'setState', state: cmdState }], 1 / 60);
+    expect(cmdState).toEqual(snap);
+  });
+});
+
 describe('updateCamera — 防禦', () => {
   it('dt ≤ 0 不動、不產生 NaN（即使目標離硬上限很遠）', () => {
     const s0 = createCameraState(targetAt(0, 0), CANVAS);

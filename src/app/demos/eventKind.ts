@@ -22,6 +22,7 @@ const CAMERA_COMMAND_TYPE_SET: Record<CameraCommand['type'], true> = {
   zoomBy: true,
   setFollow: true,
   frame: true,
+  setState: true,
 };
 
 /** `CameraCommand` 所有的 `type` 字面值（衍生自 `CAMERA_COMMAND_TYPE_SET`）。 */

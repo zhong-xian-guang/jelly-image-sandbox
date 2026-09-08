@@ -205,6 +205,26 @@ body {
   cursor: not-allowed;
 }
 
+/**
+ * 相機軌時間重疊的軟警告（issue #36 追加）——相機軌之間不該重疊（同一時刻只有
+ * 一個鏡頭），重疊的幾列整列標紅、加一個 ⚠ 提示；播放時重疊區間只認清單中較前
+ * 面那條（見 `demos/overlay.ts` 的 `mergeTracks`）。允許暫時重疊、不擋播放。
+ */
+.jelly-track-row.jelly-track-row-overlap {
+  color: #ff5a5a;
+}
+
+.jelly-track-row.jelly-track-row-overlap .jelly-track-badge {
+  background: rgba(255, 90, 90, 0.28);
+}
+
+.jelly-track-warn {
+  flex: none;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #ff5a5a;
+}
+
 .jelly-track-badge {
   flex: none;
   padding: 1px 5px;
