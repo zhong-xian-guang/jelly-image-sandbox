@@ -94,6 +94,8 @@ export interface ControlPanelOptions {
   onToggleRecording: () => void;
   /** 「▶ 播放全部」按鈕（issue #33）——把所有 Track 依起始時間疊加重播。 */
   onPlayAll: () => void;
+  /** 「⏸ 暫停／▶ 繼續」切換鈕（issue #34）——只在播放中有作用。 */
+  onTogglePause: () => void;
   /** 某條 Track 的「起始秒數」欄位被改（issue #33）。 */
   onTrackStartTimeChange: (id: string, seconds: number) => void;
   /** 某條 Track 的刪除鈕被按（issue #33）。 */
@@ -107,6 +109,12 @@ export class ControlPanel {
   private readonly recordButton: HTMLButtonElement;
   private readonly playAllButton: HTMLButtonElement;
   private readonly recordTargetSelect: HTMLSelectElement;
+  /** 「⏸ 暫停／▶ 繼續」鈕 + 「目前 X.XX 秒」讀出（issue #34）——同一列，只在播放中顯示。 */
+  private readonly playbackStatusRow: HTMLElement;
+  private readonly pauseButton: HTMLButtonElement;
+  private readonly playbackTimeEl: HTMLElement;
+  /** `setPlaybackTime` 比對用；避免秒數字串沒變時每幀重寫 DOM（同 `lastPerfText`）。 */
+  private lastPlaybackText: string | null = null;
   /** Track 清單容器（issue #33）——`setTracks` 每次整份重建裡面的列。 */
   private readonly trackListEl: HTMLElement;
   private readonly onTrackStartTimeChange: (id: string, seconds: number) => void;
@@ -165,9 +173,15 @@ export class ControlPanel {
     this.trackListEl = document.createElement('div');
     this.trackListEl.className = 'jelly-track-list';
 
+    const playback = this.playbackStatusRowEl(opts.onTogglePause);
+    this.playbackStatusRow = playback.row;
+    this.pauseButton = playback.pauseButton;
+    this.playbackTimeEl = playback.timeEl;
+
     panel.append(
       target.row,
       track.row,
+      this.playbackStatusRow,
       this.trackListEl,
       this.buttonRow('停止／重設', opts.onReset),
     );
@@ -225,6 +239,42 @@ export class ControlPanel {
     for (const el of this.trackListEl.querySelectorAll('input, button')) {
       (el as HTMLInputElement | HTMLButtonElement).disabled = busy;
     }
+  }
+
+  /**
+   * 播放中／未播放的切換（issue #34）——`JellySandbox` 在 Demo／Track 播放開始
+   * 與結束時各呼叫一次。播放中「⏸ 暫停／▶ 繼續」鈕與「目前 X.XX 秒」讀出才
+   * 出現；結束時整列藏起來（「沒有在播放時暫停鈕隱藏」的驗收條件），並把讀出
+   * 歸零、暫停鈕文字重設回「⏸ 暫停」。
+   */
+  setPlaybackActive(active: boolean): void {
+    this.playbackStatusRow.hidden = !active;
+    if (active) {
+      this.setPaused(false);
+      this.lastPlaybackText = null;
+      this.setPlaybackTime(0);
+    }
+  }
+
+  /**
+   * `JellySandbox` 每幀同步一次目前的播放秒數（issue #34）——由 `DemoRunner`
+   * 的全域 sim step 計數換算而來，暫停時 step 不前進、這個讀出跟著定住。只在
+   * 秒數字串真的變了才寫 DOM（同 `setPerfStatus`）。
+   */
+  setPlaybackTime(seconds: number): void {
+    const text = `目前 ${seconds.toFixed(2)} 秒`;
+    if (text === this.lastPlaybackText) return;
+    this.lastPlaybackText = text;
+    this.playbackTimeEl.textContent = text;
+  }
+
+  /**
+   * 「⏸ 暫停／▶ 繼續」鈕的視覺狀態（issue #34）——`JellySandbox` 切換暫停旗標
+   * 時呼叫；暫停中按鈕變成「▶ 繼續」並加上 `.jelly-paused-active` 提示色。
+   */
+  setPaused(paused: boolean): void {
+    this.pauseButton.textContent = paused ? '▶ 繼續' : '⏸ 暫停';
+    this.pauseButton.classList.toggle('jelly-paused-active', paused);
   }
 
   /**
@@ -430,6 +480,33 @@ export class ControlPanel {
 
     row.append(recordButton, playAllButton);
     return { row, recordButton, playAllButton };
+  }
+
+  /**
+   * 「⏸ 暫停／▶ 繼續」鈕 + 「目前 X.XX 秒」讀出（issue #34）——同一列，建構時
+   * 先 `hidden`，由 `setPlaybackActive` 在播放開始／結束時顯示／隱藏。回傳個別
+   * 節點讓建構子直接賦值給 `readonly` 欄位。
+   */
+  private playbackStatusRowEl(onTogglePause: () => void): {
+    row: HTMLElement;
+    pauseButton: HTMLButtonElement;
+    timeEl: HTMLElement;
+  } {
+    const row = document.createElement('div');
+    row.className = 'jelly-control-row jelly-playback-status';
+    row.hidden = true;
+
+    const pauseButton = document.createElement('button');
+    pauseButton.type = 'button';
+    pauseButton.textContent = '⏸ 暫停';
+    pauseButton.addEventListener('click', onTogglePause);
+
+    const timeEl = document.createElement('span');
+    timeEl.className = 'jelly-playback-time';
+    timeEl.textContent = '目前 0.00 秒';
+
+    row.append(pauseButton, timeEl);
+    return { row, pauseButton, timeEl };
   }
 
   /**

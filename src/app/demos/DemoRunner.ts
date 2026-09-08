@@ -32,6 +32,16 @@ export class DemoRunner {
     return this.running;
   }
 
+  /**
+   * 目前已經推進過的全域 sim step 數（issue #34 / V2 T1-2）——每呼叫一次
+   * `advance()` 加一，`start()`／`stop()` 歸零。`JellySandbox` 用它換算成秒
+   * 顯示「目前播放到第幾秒」；暫停時主迴圈不呼叫 `advance()`，這個數字自然
+   * 定住，讀出跟著停。
+   */
+  get elapsedSteps(): number {
+    return this.stepIndex;
+  }
+
   /** 開始播放一段時間軸；已在播放中的 Demo（若有）直接被取代。 */
   start(schedule: readonly DemoStep[]): void {
     this.schedule = [...schedule].sort((a, b) => a.atStep - b.atStep);

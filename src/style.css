@@ -212,6 +212,26 @@ body {
 }
 
 /**
+ * 播放狀態列（issue #34 追加）——「⏸ 暫停／▶ 繼續」鈕 + 「目前 X.XX 秒」讀出。
+ * `.jelly-control-row` 是 flex，`hidden` 屬性的預設 `display:none` 會被蓋過，
+ * 這裡明確補一條讓「沒在播放時整列隱藏」成立。
+ */
+.jelly-playback-status[hidden] {
+  display: none;
+}
+
+.jelly-playback-status button.jelly-paused-active {
+  color: #ffb400;
+  font-weight: 600;
+}
+
+.jelly-playback-time {
+  font-family: monospace;
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+/**
  * Pin 位置標記層（issue #14 追加）：疊在畫布上、跟著每個 Pin 的目前世界座標
  * 走。`pointer-events: none`——不擋手勢，點掉特定 Pin 是靠世界座標鄰近判定
  * （見 `src/input/pinModeRouting.ts`），不是點中這個 DOM 節點。
