@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CameraState } from '../../camera';
-import { cameraTrackGlobalRange, mergeTracks, type OverlayTrack } from './overlay';
+
+import {
+  cameraTrackGlobalRange,
+  mergeTracks,
+  overlappingCameraTrackIds,
+  type OverlayTrack,
+} from './overlay';
 
 /** 一份最小合法的相機起點快照。 */
 function snapshot(x: number): CameraState {
@@ -638,6 +644,71 @@ describe('mergeTracks', () => {
         steps: [{ atStep: 10, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } }],
       };
       expect(mergeTracks([cam])).toEqual([]);
+    });
+  });
+
+  describe('overlappingCameraTrackIds（issue #36 標紅；issue #37 對開啟中群組聯集判定）', () => {
+    /** 一條只帶重疊判定會用到的欄位的相機軌。 */
+    const cam = (
+      id: string,
+      startStep: number,
+      lastAtStep: number,
+      trim: { inStep?: number; outStep?: number } = {},
+    ) => ({
+      id,
+      startStep,
+      steps: [{ atStep: lastAtStep, event: { type: 'panBy' as const, dxScreen: 1, dyScreen: 0 } }],
+      ...trim,
+    });
+
+    it('兩條作用區間相交 → 兩條 id 都標記', () => {
+      const a = cam('c1', 0, 10); // 作用區間 [0, 10]
+      const b = cam('c2', 5, 4); // [5, 9]
+      expect([...overlappingCameraTrackIds([a, b])].sort()).toEqual(['c1', 'c2']);
+    });
+
+    it('作用區間不相交 → 空集合', () => {
+      const a = cam('c1', 0, 4); // [0, 4]
+      const b = cam('c2', 10, 4); // [10, 14]
+      expect(overlappingCameraTrackIds([a, b]).size).toBe(0);
+    });
+
+    it('三條、只有其中兩條相交 → 只標那兩條', () => {
+      const a = cam('c1', 0, 4); // [0, 4]
+      const b = cam('c2', 3, 4); // [3, 7] 與 a 相交
+      const c = cam('c3', 100, 4); // [100, 104] 獨立
+      expect([...overlappingCameraTrackIds([a, b, c])].sort()).toEqual(['c1', 'c2']);
+    });
+
+    it('尾修剪把作用區間縮短 → 原本相交變不相交', () => {
+      const a = cam('c1', 0, 30); // 未修剪 [0, 30]
+      const b = cam('c2', 20, 4); // [20, 24]
+      expect([...overlappingCameraTrackIds([a, b])].sort()).toEqual(['c1', 'c2']);
+      // a 尾修剪到 atStep 5 → 作用區間縮成 [0, 0]（那筆 atStep 30 被切掉），不再與 b 相交
+      const trimmed = cam('c1', 0, 30, { outStep: 5 });
+      expect(overlappingCameraTrackIds([trimmed, b]).size).toBe(0);
+    });
+
+    it('作用區間僅在端點接觸（aHi === bLo）→ 視為相交（跟 mergeTracks 認先列的閉區間一致）', () => {
+      const a = cam('c1', 0, 10); // [0, 10]
+      const b = cam('c2', 10, 4); // [10, 14]
+      expect([...overlappingCameraTrackIds([a, b])].sort()).toEqual(['c1', 'c2']);
+    });
+
+    it('空清單 / 只有一條 → 空集合', () => {
+      expect(overlappingCameraTrackIds([]).size).toBe(0);
+      expect(overlappingCameraTrackIds([cam('c1', 0, 10)]).size).toBe(0);
+    });
+
+    it('只判定傳入的子集（issue #37：呼叫端先濾成「開啟中群組聯集」的相機軌）', () => {
+      // 三條在時間上兩兩重疊，但呼叫端只把 c1、c2 當作「會一起播」傳進來
+      // （c3 屬於關閉的群組，`JellySandbox.overlappingEnabledCameraTrackIds` 已濾掉）。
+      const c1 = cam('c1', 0, 20);
+      const c2 = cam('c2', 5, 20);
+      expect([...overlappingCameraTrackIds([c1, c2])].sort()).toEqual(['c1', 'c2']);
+      // c3 也重疊，一旦進到子集就一起被標——「開啟／關閉群組」這層過濾在呼叫端。
+      const c3 = cam('c3', 8, 20);
+      expect([...overlappingCameraTrackIds([c1, c2, c3])].sort()).toEqual(['c1', 'c2', 'c3']);
     });
   });
 

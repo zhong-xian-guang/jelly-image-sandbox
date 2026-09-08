@@ -1,8 +1,8 @@
 /**
  * `ControlPanel` 的 DOM 測試（issue #43 / V2 T1-8）——聚焦「依群組分區的 Track
  * 清單」：每個群組一段標頭 + 底下該群組的成員卡片、一條 Track 屬多組就多次出現、
- * 相機軌不畫 `群組 ▾`、空群組放提示、鎖定狀態涵蓋整區。`ControlPanel` 是純 DOM
- * 接線層，jsdom 下可直接建。
+ * 動作軌與相機軌都畫 `群組 ▾`（issue #37 把相機軌接進分群 UI）、空群組放提示、
+ * 鎖定狀態涵蓋整區。`ControlPanel` 是純 DOM 接線層，jsdom 下可直接建。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -139,15 +139,24 @@ describe('ControlPanel — 依群組分區的 Track 清單（issue #43）', () =
     expect(g1Sec!.textContent).toContain('動作軌 t2');
   });
 
-  it('動作軌卡片有 `群組 ▾`，相機軌沒有', () => {
+  it('動作軌與相機軌卡片都有 `群組 ▾`（issue #37：相機軌接進分群 UI）', () => {
     panel.setGroups(groupRows());
     panel.setTracks([actionRow('a1', ['default'], GROUPS_META), cameraRow('c1', GROUPS_META)]);
     const [defaultSec] = sections();
     const cards = [...defaultSec!.querySelectorAll('.jelly-track-row')];
     expect(cards).toHaveLength(2);
     const withMenu = cards.filter((c) => c.querySelector('.jelly-track-groups'));
-    expect(withMenu).toHaveLength(1);
-    expect(withMenu[0]!.textContent).toContain('動作軌 a1');
+    expect(withMenu).toHaveLength(2);
+  });
+
+  it('勾相機軌的 `群組 ▾` → onTrackGroupsChange 收到該相機軌 id + 勾好的群組', () => {
+    panel.setGroups(groupRows());
+    panel.setTracks([cameraRow('c1', GROUPS_META)]);
+    const menu = panel.element.querySelector('.jelly-track-groups')!;
+    const boxes = [...menu.querySelectorAll('input[type=checkbox]')] as HTMLInputElement[];
+    boxes[1]!.checked = true; // g1
+    boxes[1]!.dispatchEvent(new Event('change'));
+    expect(opts.onTrackGroupsChange).toHaveBeenCalledWith('c1', ['default', 'g1']);
   });
 
   it('沒有成員的群組 → 標頭底下放一行提示', () => {

@@ -2,7 +2,7 @@
 
 export { DemoRunner } from './DemoRunner';
 export { isCameraCommand } from './eventKind';
-export { cameraTrackGlobalRange, mergeTracks } from './overlay';
+export { cameraTrackGlobalRange, mergeTracks, overlappingCameraTrackIds } from './overlay';
 export type { OverlayTrack } from './overlay';
 export { DEMOS } from './scripts';
 export { STEP_SECONDS, secondsToStep, stepToSeconds } from './time';
