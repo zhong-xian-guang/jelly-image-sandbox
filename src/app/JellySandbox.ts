@@ -117,10 +117,10 @@ import {
 import { ControlPanel } from './ControlPanel';
 import { createDefaultJelly } from './defaultJelly';
 import {
-  cameraTrackGlobalRange,
   DEMOS,
   DemoRunner,
   mergeTracks,
+  overlappingCameraTrackIds,
   STEP_SECONDS,
   secondsToStep,
   stepToSeconds,
@@ -186,7 +186,7 @@ const REDUCED_TARGET_PARTICLE_COUNT = Math.round(DEFAULT_PARAMS.targetParticleCo
  * `{ 預設群組 }`；不變式「每條 Track 永遠至少在一個群組」由 `withGroupInvariant`
  * 維持。播放時 `playAll` 只取「至少屬於一個開啟中群組」的子集
  * （`tracksInEnabledGroups`），順序照清單順序（決定性、`mergeTracks` 認先列不變）。
- * 本票 `群組 ▾` UI 只掛在動作軌列上，相機軌保持在預設群組（之後 #37 再接進）。
+ * `群組 ▾` UI（issue #43 動作軌；issue #37 相機軌一併接進，見 ADR-0008）兩種軌都掛。
  */
 interface RecordedTrack {
   id: string;
@@ -593,11 +593,11 @@ export class JellySandbox {
 
   /**
    * 把 `tracks` 清單、群組區、與「▶ 播放」的可用狀態一次同步到 `ControlPanel`
-   *（issue #33 起；issue #43 加群組區）。動作軌列帶 `群組 ▾` 多選資料；相機軌
-   * 不帶（本票只對動作軌做分群 UI，見 ADR-0008，相機軌 #37 才接進）。
+   *（issue #33 起；issue #43 加群組區）。動作軌與相機軌兩種列都帶 `群組 ▾` 多選
+   * 資料（issue #37 把相機軌一併接進分群 UI，見 ADR-0008）。
    */
   private syncPanelTracks(): void {
-    const overlapping = this.overlappingCameraTrackIds();
+    const overlapping = this.overlappingEnabledCameraTrackIds();
     this.controlPanel.setGroups(
       this.groups.map((g) => ({
         id: g.id,
@@ -619,39 +619,32 @@ export class JellySandbox {
         firstEventSeconds: stepToSeconds(firstEventStep(t.steps)),
         lastEventSeconds: stepToSeconds(lastEventStep(t.steps)),
         overlapping: overlapping.has(t.id),
-        // 兩種軌都帶群組歸屬（清單依此分區顯示）；相機軌不畫 `群組 ▾` 編輯器、
-        // 固定屬預設群組（見 ADR-0008，#37 才接進分群 UI）。
+        // 兩種軌都帶群組歸屬：清單依此分區顯示 + 畫 `群組 ▾` 編輯器（issue #37
+        // 把相機軌一併接進，見 ADR-0008）。
         groups: this.trackGroupChoices(t),
       })),
     );
     this.controlPanel.setPlayableTrackCount(tracksInEnabledGroups(this.tracks, this.groups).length);
   }
 
-  /** 一條動作軌的 `群組 ▾` 勾選資料（issue #43）——每個群組一項 + 這條是否屬於它。 */
+  /** 一條 Track 的 `群組 ▾` 勾選資料（issue #43 動作軌；issue #37 相機軌）——每個群組一項 + 這條是否屬於它。 */
   private trackGroupChoices(track: RecordedTrack): { id: string; name: string; member: boolean }[] {
     return this.groups.map((g) => ({ id: g.id, name: g.name, member: track.groupIds.has(g.id) }));
   }
 
   /**
-   * 在全域時間軸上作用區間彼此相交的相機軌 id 集合（issue #36）——面板把這些列
-   * 標紅（軟警告：允許暫時重疊，播放時重疊區間只認先列那條，見 `mergeTracks`）。
-   * 作用區間由 `cameraTrackGlobalRange`（`demos/overlay.ts`）算——跟 `mergeTracks`
-   * 播放時「認先列」丟事件用的是同一份，警告不會跟實際播放結果對不上。
+   * 要在面板標紅的相機軌 id 集合（issue #36 起的軟警告：允許暫時重疊，播放時
+   * 重疊區間只認先列那條，見 `mergeTracks`）。issue #37 / ADR-0008：只對「開啟中
+   * 群組聯集」裡的相機軌判定——`tracksInEnabledGroups` 先濾成播放時真的會一起
+   * 出現的子集（`playAll` 餵給 `mergeTracks` 的也是同一個子集），關掉某群組後
+   * 那條相機軌不再跟別條衝突，紅框就消失。重疊判定本身在純函式
+   * `overlappingCameraTrackIds`（`demos/overlay.ts`）。
    */
-  private overlappingCameraTrackIds(): Set<string> {
-    const cameras = this.tracks.filter((t) => t.kind === 'camera');
-    const flagged = new Set<string>();
-    for (let i = 0; i < cameras.length; i++) {
-      for (let j = i + 1; j < cameras.length; j++) {
-        const [aLo, aHi] = cameraTrackGlobalRange(cameras[i]!);
-        const [bLo, bHi] = cameraTrackGlobalRange(cameras[j]!);
-        if (aLo <= bHi && bLo <= aHi) {
-          flagged.add(cameras[i]!.id);
-          flagged.add(cameras[j]!.id);
-        }
-      }
-    }
-    return flagged;
+  private overlappingEnabledCameraTrackIds(): Set<string> {
+    const cameras = tracksInEnabledGroups(this.tracks, this.groups).filter(
+      (t) => t.kind === 'camera',
+    );
+    return overlappingCameraTrackIds(cameras);
   }
 
   /**

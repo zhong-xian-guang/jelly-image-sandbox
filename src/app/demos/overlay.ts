@@ -73,15 +73,20 @@ export interface OverlayTrack {
 }
 
 /**
+ * `cameraTrackGlobalRange`／`overlappingCameraTrackIds` 算相機軌作用區間只需要的
+ * 欄位——一條 `OverlayTrack` 的時間軸位置 + 內容 + 修剪範圍，不含 `startCamera`
+ * ／`idPrefix`。
+ */
+export type CameraRangeInput = Pick<OverlayTrack, 'startStep' | 'steps' | 'inStep' | 'outStep'>;
+
+/**
  * 一條相機軌在全域時間軸上「佔用」的 step 區間 `[起始, 作用結束]`（issue #36）——
  * 起始 = 重錨後的 `startStep`（硬切就落在這裡）；結束 = 修剪後最後一筆排程項重錨到
  * 全域軸的 step（沒有排程項時＝起始）。`mergeTracks` 用它決定「認先列」要丟後列
  * 相機軌的哪些事件，`ControlPanel` 的時間重疊警告也用同一份——兩邊不會各算各的。
  * 假設 `steps` 依 `atStep` 升冪。
  */
-export function cameraTrackGlobalRange(
-  track: Pick<OverlayTrack, 'startStep' | 'steps' | 'inStep' | 'outStep'>,
-): [number, number] {
+export function cameraTrackGlobalRange(track: CameraRangeInput): [number, number] {
   const inStep = track.inStep ?? 0;
   const outStep = track.outStep ?? Number.POSITIVE_INFINITY;
   let end = track.startStep;
@@ -90,6 +95,34 @@ export function cameraTrackGlobalRange(
     end = Math.max(end, track.startStep + (step.atStep - inStep));
   }
   return [track.startStep, end];
+}
+
+/**
+ * `cameraTracks` 之中作用區間彼此相交的那些的 `id` 集合——`ControlPanel` 把這些列
+ * 標紅的軟警告（issue #36）。呼叫端負責決定「哪些相機軌算會一起播」：`JellySandbox`
+ * 傳的是「開啟中群組聯集」裡的相機軌子集（issue #37 / ADR-0008），因此屬於關閉
+ * 群組、播放時不會一起出現的相機軌不進來、不被誤標。
+ *
+ * 作用區間用 `cameraTrackGlobalRange` 算——跟 `mergeTracks` 播放時「認先列」丟事件
+ * 用的是同一份，警告不會跟實際播放結果對不上。閉區間相交（端點接觸也算重疊，
+ * 對齊 `mergeTracks` 裡 `claimedByEarlierCamera` 的 `>= lo && <= hi`）。純函式、
+ * `O(n²)` 兩兩測試；相機軌通常個位數，夠用。傳入順序不影響結果（相交是對稱的）。
+ */
+export function overlappingCameraTrackIds(
+  cameraTracks: readonly (CameraRangeInput & { id: string })[],
+): Set<string> {
+  const flagged = new Set<string>();
+  for (let i = 0; i < cameraTracks.length; i++) {
+    for (let j = i + 1; j < cameraTracks.length; j++) {
+      const [aLo, aHi] = cameraTrackGlobalRange(cameraTracks[i]!);
+      const [bLo, bHi] = cameraTrackGlobalRange(cameraTracks[j]!);
+      if (aLo <= bHi && bLo <= aHi) {
+        flagged.add(cameraTracks[i]!.id);
+        flagged.add(cameraTracks[j]!.id);
+      }
+    }
+  }
+  return flagged;
 }
 
 /** 把 `event` 的 `PointerId`（若有）加上 `prefix`；`tap`／相機指令沒有 `id`，原樣回傳。 */

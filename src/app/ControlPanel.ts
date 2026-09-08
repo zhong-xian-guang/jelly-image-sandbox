@@ -64,15 +64,16 @@ export interface TrackListRow {
   /** 這條 Track 最後一筆操作的本地秒數（唯讀顯示）。 */
   lastEventSeconds: number;
   /**
-   * 相機軌才會為 `true`（issue #36）：這條在時間軸上跟另一條相機軌的作用區間
-   * 重疊——列標紅的軟警告（播放時重疊區間只認先列那條）。
+   * 相機軌才會為 `true`（issue #36）：這條在時間軸上跟另一條**開啟中群組聯集裡的**
+   * 相機軌作用區間重疊（issue #37 / ADR-0008）——列標紅的軟警告（播放時重疊區間
+   * 只認先列那條）。關掉某群組後，只屬於它的相機軌不再跟別條衝突，紅框消失。
    */
   overlapping?: boolean;
   /**
    * 這條 Track 的群組歸屬（issue #43 / V2 T1-8）——每個群組一項 + 是否屬於它。
    * 兩種用途：(1) Track 清單依此**分區顯示**（每條列在它所屬的每個群組底下，
-   * 多屬則多次出現）；(2) 動作軌的 `群組 ▾` 多選勾選狀態。相機軌一樣帶（固定
-   * 屬預設群組），只是不畫 `群組 ▾` 編輯器（見 #37）。
+   * 多屬則多次出現）；(2) `群組 ▾` 多選勾選狀態。動作軌（issue #43）與相機軌
+   * （issue #37，見 ADR-0008）兩種都畫 `群組 ▾` 編輯器。
    */
   groups: readonly TrackGroupChoice[];
 }
@@ -330,8 +331,8 @@ export class ControlPanel {
   /**
    * 最新的 Track 清單（issue #33；issue #35 頭尾修剪；issue #36 相機軌 + 重疊警告；
    * issue #43 改成依群組分區顯示）。每張卡兩行：種類標記＋簡短標籤＋（相機軌重疊
-   * 時）⚠＋刪除鈕，下一行「起始／從／到」秒數欄位＋唯讀「錄到 X–Y 秒」；動作軌
-   * 再加一個 `群組 ▾` 多選。清單空時「▶ 播放」變灰；錄製／播放中整區鎖住
+   * 時）⚠＋刪除鈕，下一行「起始／從／到」秒數欄位＋唯讀「錄到 X–Y 秒」，再加一個
+   * `群組 ▾` 多選（issue #37 起動作軌／相機軌都有）。清單空時「▶ 播放」變灰；錄製／播放中整區鎖住
    * （見 `updateTrackControlsState`）。
    */
   setTracks(rows: readonly TrackListRow[]): void {
@@ -846,8 +847,8 @@ export class ControlPanel {
     fields.append('起始', startInput, '秒　從', inInput, '到', outInput, '秒', recorded);
 
     el.append(top, fields);
-    // 動作軌的 `群組 ▾` 多選（issue #43）——相機軌固定屬預設群組、不給編輯器（見 #37）。
-    if (row.kind === 'action') el.append(this.trackGroupsMenu(row.id, row.groups));
+    // 兩種軌都有 `群組 ▾` 多選（issue #43 動作軌；issue #37 相機軌一併接進，見 ADR-0008）。
+    el.append(this.trackGroupsMenu(row.id, row.groups));
     return el;
   }
 
