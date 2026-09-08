@@ -162,21 +162,42 @@ body {
 }
 
 /**
- * 已錄好的 Track 清單（issue #33 追加）——每列一條 Action Track：種類標記、
- * 簡短標籤、可編輯的「起始秒數」欄位、刪除鈕。錄製中／播放中整列的欄位會被
- * `disabled`（錄製與播放互斥）。
+ * 已錄好的 Track 清單（issue #33 追加；issue #35 加頭尾修剪）——每列一條 Action
+ * Track，分兩行：第一行 種類標記＋簡短標籤＋刪除鈕；第二行 可編輯的「起始／從／
+ * 到」秒數欄位＋唯讀的「錄到 X–Y 秒」提示。錄製中／播放中整列的欄位會被
+ * `disabled`（錄製與播放互斥，也涵蓋「修剪欄位在播放中鎖住」）。
  */
 .jelly-track-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
 .jelly-track-row {
   display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 320px;
+  font-size: 0.8rem;
+}
+
+.jelly-track-row-top,
+.jelly-track-row-fields {
+  display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.8rem;
+}
+
+.jelly-track-row-fields {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.jelly-track-recorded {
+  flex: none;
+  margin-left: auto;
+  opacity: 0.65;
+  font-size: 0.72rem;
 }
 
 .jelly-track-row :disabled {
@@ -200,7 +221,7 @@ body {
   text-overflow: ellipsis;
 }
 
-.jelly-track-row input.jelly-track-start {
+.jelly-track-row input.jelly-track-seconds {
   flex: none;
   width: 3.5em;
   font: inherit;
