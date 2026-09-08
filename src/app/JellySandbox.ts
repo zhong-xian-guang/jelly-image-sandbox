@@ -79,10 +79,11 @@
  * 確保「連按播放全部結果逐格一致」（issue #33 / #36 決定性驗收條件）不受播放前
  * 場景／相機被怎麼動過影響。
  *
- * 換 Jelly（`replaceJelly`）會中斷錄製並**清空整份 Track 清單**，因為座標是
- * 對著舊網格算的；單純「停止／重設」（`resetSim`）**保留清單**，只中斷播放與
- * 仍在進行中的錄製。錄製中與播放中互斥（`ControlPanel` 依 `setRecordingActive`
- * ／`setPlaybackControlsEnabled` 互相鎖住對方的按鈕）。
+ * **場景狀態整合**（issue #38 / V2 T1-6）：「停止／重設」（`resetSim`）與「重新
+ * 匯入 PNG」（`replaceJelly`）共用 `haltPlaybackAndRecording()` 把場景收束成
+ * 一致的乾淨狀態；「Track 清單保留 vs 清空」的分野見那個方法的說明。錄製中與
+ * 播放中互斥（`ControlPanel` 依 `setRecordingActive`／`setPlaybackControlsEnabled`
+ * 互相鎖住對方的按鈕）。
  *
  * **substep 自動降級 + 網格解析度退路**（issue #16 / T15）：`PerfMonitor`（純
  * 狀態機，見該檔）每幀吃「這幀花了幾毫秒」，持續超標（弱裝置／背景分頁搶資源）
@@ -730,19 +731,38 @@ export class JellySandbox {
   }
 
   /**
-   * 「停止／重設」（issue #14；issue #15 追加停 Demo）：先停掉排程中的 Demo
-   * 事件（否則 `sim.reset()` 後、還沒播完的排程繼續把事件砸進去，看起來像
-   * 「重設沒生效」），再重設 Jelly 本身。
+   * 「停止／重設」與「重新匯入 PNG」共用的場景狀態收束（issue #38 / V2 T1-6）——
+   * 兩條路徑對「正在進行的疊加播放／錄製／播放鎖定」要處理得一模一樣，這裡集中
+   * 一處保證一致：
+   * 1. `demoRunner.stop()` 立即中斷排程中的 Demo／Track 事件——否則場景重設或換
+   *    網格後，還沒播完的排程繼續把事件砸進去（看起來像「重設沒生效」，或讓舊
+   *    網格算的座標砸進新網格）。
+   * 2. `setPlaybackLocked(false)` 解鎖被播放鎖住的所有控制項（Demo 鈕、開始錄製、
+   *    ▶ 播放、錄製目標選擇器、Track 清單編輯、群組區），並把暫停旗標歸零、收起
+   *    播放狀態列（見 `setPlaybackLocked`）。
+   * 3. 仍在進行中的錄製一併中斷並**丟棄**（不進清單）——「中斷」不是「存檔」。
+   *
+   * 差別只在呼叫端各自接的下一步：`resetSim` 呼 `sim.reset()` 但**保留** Track／
+   * 群組清單；`replaceJelly` 連清單一起清空、換上新網格（ADR-0007 生命週期：
+   * `停止／重設` 保留、重新匯入清空）。
    */
-  private resetSim(): void {
+  private haltPlaybackAndRecording(): void {
     this.demoRunner.stop();
     this.setPlaybackLocked(false);
     if (this.trackRecorder.isRecording) {
-      // 中斷仍在進行中的錄製；已經錄好、存在 `tracks` 清單裡的 Track 不受影響
-      // （拓撲沒變，還能疊加播放）——「停止／重設」保留清單，只有重新匯入 PNG 才清空。
       this.trackRecorder.stop();
       this.controlPanel.setRecordingActive(false);
     }
+  }
+
+  /**
+   * 「停止／重設」（issue #14；issue #15 追加停 Demo；issue #38 收束播放／錄製）：
+   * 先 `haltPlaybackAndRecording()`，再 `sim.reset()` 把 Jelly 回 rest 座標、速度
+   * 歸零、清掉所有 Grab／Pin。Track／群組清單**保留**（拓撲沒變，錄好的還能疊加
+   * 播放）——只有 `replaceJelly` 才清空。
+   */
+  private resetSim(): void {
+    this.haltPlaybackAndRecording();
     this.sim.reset();
   }
 
@@ -864,17 +884,21 @@ export class JellySandbox {
    * 不用重套）。
    */
   private async replaceJelly(mesh: SimMesh, texture: HTMLImageElement): Promise<void> {
-    this.demoRunner.stop(); // 舊 Jelly 的座標對新網格沒意義，換 Jelly 時中斷排程中的 Demo
-    this.setPlaybackLocked(false);
-    // 同樣理由：錄製中／已錄好的 Track 座標都是對著舊 Jelly 算的，換 Jelly 時一併中斷並清空整份清單（issue #33）。
-    if (this.trackRecorder.isRecording) this.trackRecorder.stop();
+    // 換網格時的場景收束跟「停止／重設」走同一條路（issue #38）：中斷疊加播放
+    // （排程中的舊座標事件不會砸進新網格）、解鎖播放鎖定的控制項、中斷仍在進行
+    // 中的錄製。
+    this.haltPlaybackAndRecording();
+    // 「停止／重設」到此為止；重新匯入 PNG 另外**清空**整份 Track／群組清單——座標
+    // 與鏡頭快照都是對著舊網格算的，套到新網格沒意義（issue #33 / #38；ADR-0007
+    // 生命週期）。
     this.tracks = [];
     this.nextTrackNum = 1;
-    // 群組隨片段保存：重新匯入 PNG 一併清空、重建成只剩預設群組（issue #43，比照 Track 清單）。
     this.groups = [createDefaultGroup()];
     this.nextGroupNum = 1;
     this.soloState = null;
-    this.controlPanel.setRecordingActive(false);
+    // 「錄製目標」選擇器是按下錄製前選的 per-take 偏好、不是對著舊網格的狀態，
+    // 兩條收束路徑都刻意**不動**它的選值（`haltPlaybackAndRecording` 只還原它的
+    // 鎖定狀態，不改選值）。
     this.syncPanelTracks();
     const sim = new SimCore(mesh);
     sim.params.cellFrac = this.sim.params.cellFrac;
