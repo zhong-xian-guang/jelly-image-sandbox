@@ -1,14 +1,16 @@
 /**
- * Action Track 疊加播放（issue #33 / V2 T1-1，見 CONTEXT.md「Overlay」詞條、
- * ADR-0007）——把「多條各自單指標錄下的 Action Track ＋ 各自的起始 step」壓成
- * **一條**全域時間軸，交給既有的 `DemoRunner` 精準重播。
+ * Track 疊加播放（issue #33 / V2 T1-1，issue #36 / V2 T1-4 加相機軌，見
+ * CONTEXT.md「Overlay」詞條、ADR-0007）——把「多條 Action Track ＋ 多條 Camera
+ * Track ＋ 各自的起始 step 與頭尾修剪」壓成**一條**全域時間軸，交給既有的
+ * `DemoRunner` 精準重播。
  *
  * 這裡刻意只認 `DemoStep[]`（時間軸），不認 `TrackRecorder`（錄製層）——疊起來的
  * 是時間軸，「這串 step 來自使用者錄的 Track」是呼叫端（`JellySandbox`）的框架。
  * 放在 `demos/` 而非 `track/`，讓 `demos/` 維持自足的低層時間軸執行層、`track/`
  * 疊在其上。
  *
- * 三件事：
+ * 動作軌與相機軌共用同一套修剪／平移邏輯（相機指令沒有 `id`，前綴與 Grab 補洞
+ * 對它是 no-op）；相機軌再多兩件事：
  *
  * 1. **頭尾修剪**（issue #35 / V2 T1-3）：只保留 `atStep` 落在 `[inStep, outStep]`
  *    之間的排程項，其餘丟掉；保留下來的 `atStep` 先減去 `inStep`（修掉的開頭不留
@@ -24,15 +26,28 @@
  *    同一條 Track 內引用同一個原始 id 的事件套同一個前綴 → 條內關聯保住；不同
  *    Track 前綴不同 → 跨 Track 不再碰撞（否則 TrackA 的 `release` 會誤中 TrackB
  *    的 Grab，疊加就不是真正的同時多點抓取）。`tap` 與相機指令沒有 `id`，原樣通過。
+ * 4. **相機軌硬切**（issue #36）：帶 `startCamera` 的 Track 視為相機軌——在它的
+ *    （修剪、重錨後）起始 step 插一個 `setState` 絕對相機指令，把鏡頭瞬間設回
+ *    錄製當下的快照，之後才放它自己的 `panBy`／`zoomBy`。這樣不管播放前鏡頭在
+ *    哪、前一條相機軌把鏡頭帶到哪，重播出來的運鏡起點永遠一致。硬切一律用
+ *    **錄製起點**的快照（`startCamera`）——即使頭修剪（`inStep > 0`）切掉了開頭
+ *    幾秒運鏡：`panBy`／`zoomBy` 是相對位移，硬切到起點後剩下那段運鏡的「動作」
+ *    照樣重現，只是絕對起點回到錄製起點而非修剪點當下的鏡位（跟 spec / #28
+ *    Testing Decisions「帶正確 `startCamera` 快照」一致；修剪點鏡位補償屬未來的
+ *    「相鄰相機軌平滑銜接」選項，本版不做）。
+ * 5. **相機軌不重疊（認先列）**（issue #36）：相機軌之間在全域時間軸上若有重疊，
+ *    重疊區間只認**先列**那條——後列相機軌落在先列相機軌作用區間（起始 step ～
+ *    修剪後最後一筆的 step）內的排程項（含硬切）一律丟掉。動作軌不受此限。
  *
  * 疊起來後依全域 `atStep` 穩定排序：同一個 step 上，先列的 Track 事件排在前、
  * 條內原順序保留（進場點重建的 `grab`／`moveGrab` 排在同條該 step 的存活事件之前、
  * 出場點補的 `release` 排在之後）—— 每次疊加結果逐格一致（issue #33 驗收條件：決定性）。
  *
  * 假設 `steps` 依 `atStep` 升冪（`TrackRecorder` 逐格 push、`scripts.ts` 亦然）；
- * 橫跨修剪點 Grab 的補洞靠這個順序判斷「此刻是否還有沒放開的 Grab」。
+ * 橫跨修剪點 Grab 的補洞、相機軌作用區間都靠這個順序判斷。
  */
 
+import type { CameraState } from '../../camera';
 import type { PointerId } from '../../sim';
 
 import type { DemoEvent, DemoStep } from './types';
@@ -49,6 +64,32 @@ export interface OverlayTrack {
   inStep?: number;
   /** 尾修剪：本地時間中 `atStep > outStep` 的排程項不播。預設無限大（不修尾）。 */
   outStep?: number;
+  /**
+   * 非 `null`／非 `undefined` 即視為**相機軌**（issue #36）：錄製起點的鏡頭快照。
+   * `mergeTracks` 會在這條的（重錨後）起始 step 插一個 `setState` 絕對相機指令硬切
+   * 進場，並讓這條相機軌在全域時間軸上「佔用」它的作用區間，後列的相機軌不得重疊。
+   */
+  startCamera?: CameraState | null;
+}
+
+/**
+ * 一條相機軌在全域時間軸上「佔用」的 step 區間 `[起始, 作用結束]`（issue #36）——
+ * 起始 = 重錨後的 `startStep`（硬切就落在這裡）；結束 = 修剪後最後一筆排程項重錨到
+ * 全域軸的 step（沒有排程項時＝起始）。`mergeTracks` 用它決定「認先列」要丟後列
+ * 相機軌的哪些事件，`ControlPanel` 的時間重疊警告也用同一份——兩邊不會各算各的。
+ * 假設 `steps` 依 `atStep` 升冪。
+ */
+export function cameraTrackGlobalRange(
+  track: Pick<OverlayTrack, 'startStep' | 'steps' | 'inStep' | 'outStep'>,
+): [number, number] {
+  const inStep = track.inStep ?? 0;
+  const outStep = track.outStep ?? Number.POSITIVE_INFINITY;
+  let end = track.startStep;
+  for (const step of track.steps) {
+    if (step.atStep < inStep || step.atStep > outStep) continue;
+    end = Math.max(end, track.startStep + (step.atStep - inStep));
+  }
+  return [track.startStep, end];
 }
 
 /** 把 `event` 的 `PointerId`（若有）加上 `prefix`；`tap`／相機指令沒有 `id`，原樣回傳。 */
@@ -111,16 +152,32 @@ function openGrabs(
  */
 export function mergeTracks(tracks: readonly OverlayTrack[]): DemoStep[] {
   const overlaid: DemoStep[] = [];
+  /** 先列相機軌已「佔用」的全域區間 `[起始 step, 作用結束 step]`（issue #36：認先列）。 */
+  const claimedCameraRanges: Array<[number, number]> = [];
+
   for (const track of tracks) {
     const inStep = track.inStep ?? 0;
     const outStep = track.outStep ?? Number.POSITIVE_INFINITY;
     if (inStep > outStep) continue; // 修剪範圍為空 → 這條不貢獻任何事件（防呆）
 
+    const isCamera = track.startCamera != null;
+    /** 相機軌：落在先列相機軌作用區間內的排程項一律丟掉（重疊區間只認先列那條）。 */
+    const claimedByEarlierCamera = (globalStep: number): boolean =>
+      isCamera && claimedCameraRanges.some(([lo, hi]) => globalStep >= lo && globalStep <= hi);
+
     const push = (atStep: number, event: DemoEvent): void => {
+      if (claimedByEarlierCamera(atStep)) return;
       overlaid.push({ atStep, event: withPrefixedId(event, track.idPrefix) });
     };
 
+    // 相機軌硬切（issue #36）：在（重錨後）起始 step 把鏡頭瞬間設回錄製起點快照，
+    // 排在這條該 step 其餘事件之前。
+    if (isCamera) {
+      push(track.startStep, { type: 'setState', state: track.startCamera! });
+    }
+
     // 進場點（本地 inStep → 全域 startStep）重建橫跨的 Grab，排在存活事件之前。
+    // 相機軌沒有 Grab，`openGrabs` 回空 Map，這段自然略過。
     if (inStep > 0) {
       for (const [id, g] of openGrabs(track.steps, (s) => s < inStep)) {
         push(track.startStep, { type: 'grab', id, x: g.origin.x, y: g.origin.y });
@@ -141,6 +198,12 @@ export function mergeTracks(tracks: readonly OverlayTrack[]): DemoStep[] {
       for (const id of openGrabs(track.steps, (s) => s <= outStep).keys()) {
         push(track.startStep + (outStep - inStep), { type: 'release', id });
       }
+    }
+
+    // 這條相機軌佔用它的作用區間（跟 UI 重疊警告共用 `cameraTrackGlobalRange`）；
+    // 後列相機軌落在裡面的排程項會被丟掉。依 tracks 陣列順序 push，「先列」＝陣列在前。
+    if (isCamera) {
+      claimedCameraRanges.push(cameraTrackGlobalRange(track));
     }
   }
   // Array.prototype.sort 自 ES2019 起穩定：同 atStep 維持推入順序（先列的 Track 在前、條內原順序保留）。

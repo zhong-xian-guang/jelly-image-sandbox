@@ -51,30 +51,33 @@
  * Demo 已經建立的 Pin/Grab，疊加播放會留下一個沒人記得、永遠釘住的 Pin。
  *
  * **Track 錄製 + 疊加播放**（issue #29 / V2 T1a，issue #33 / V2 T1-1 依 ADR-0007
- * 改為多動作軌）：`./track` 提供 `TrackRecorder`——跟 `DemoRunner` 互補的純類別，
- * 依 sim-step 排程「錄」而非「播」事件。攔截點是 `attachInputHandlers` 裡既有的
- * 兩個派送點（`sim.applyInput(routed)` 之前、`cameraInput` 的 `emit` 推進
- * `cameraCommands` 之前）——錄製開啟時額外把同一個事件轉呼叫進
+ * 改為多動作軌，issue #36 / V2 T1-4 加相機軌）：`./track` 提供 `TrackRecorder`
+ * ——跟 `DemoRunner` 互補的純類別，依 sim-step 排程「錄」而非「播」事件。攔截點
+ * 是 `attachInputHandlers` 裡既有的兩個派送點（`sim.applyInput(routed)` 之前、
+ * `cameraInput` 的 `emit` 推進 `cameraCommands` 之前）＋ `emitCamera`（「框住果凍」
+ * ／「鎖定跟隨」按鈕）——錄製開啟時額外把同一個事件轉呼叫進
  * `trackRecorder.record()`，不新增輸入路徑（ADR-0005）。主迴圈每個固定 step
  * 呼叫一次 `trackRecorder.tick()`，讓錄下的時間戳記跟 `DemoRunner` 重播時的
  * step 計數對得上。
  *
  * 停止錄製時 `TrackRecorder.stop()` 依事件種類把錄到的內容拆成 `{ action, camera }`
- * 兩份（ADR-0007 的拆軌模型）；本票（issue #33）只消化 `action` 那一份——非空
- * 就新增一列 Action Track 到 `actionTracks` 清單，`camera` 那一份先丟棄（留給
- * 相機軌的票）。「▶ 播放全部」把清單裡所有 Action Track 依各自的 `startStep`
- * 用 `mergeTracks`（`demos/overlay.ts` 純函式）壓成一條全域時間軸——平移
- * `atStep`、每條的 `PointerId` 加軌別前綴避免跨軌 `release` 誤放別條的 Grab、
- * 依全域 `atStep` 穩定排序——交給 `demoRunner` 精準重播（Track 排程格式跟
- * `DemoStep[]` 相同，不需要另外寫播放器）。每條都是單指標錄的，疊起來等於
- * 同時多點抓取（Multi-grab）。
+ * 兩份 ＋ 錄製起點鏡頭快照 `startCamera`（ADR-0007 的拆軌模型）。「錄製目標」為
+ * `both` 時兩份都消化——各非空就新增一列（一條動作軌 + 一條相機軌）；單頻道
+ * 只消化被選那一份，另一路的操作即時生效但不錄進去。「▶ 播放全部」把清單裡
+ * 所有 Track 依各自的 `startStep`／頭尾修剪用 `mergeTracks`（`demos/overlay.ts`
+ * 純函式）壓成一條全域時間軸——平移 `atStep`、動作軌 `PointerId` 加軌別前綴避免
+ * 跨軌 `release` 誤放別條的 Grab、相機軌在起始 step 插 `setState` 硬切、相機軌
+ * 重疊區間只認先列那條、依全域 `atStep` 穩定排序——交給 `demoRunner` 精準重播
+ * （Track 排程格式跟 `DemoStep[]` 相同，不需要另外寫播放器）。多條各自單指標的
+ * 動作軌疊起來等於同時多點抓取（Multi-grab）。
  *
  * **Track 座標對齊**：Grab/Tap/Pin 記的是錄製當下的絕對世界座標，`playAll`
  * 因此在 `demoRunner.start` 之前先 `sim.reset()`（場景回 rest 狀態，絕對世界
- * 座標才準確落在果凍上），再推一個一次性 `frame` 指令把鏡頭框回果凍靜止狀態
- * ——兩者都是離散、決定性的瞬間對齊，確保「連按播放全部結果逐格一致」（issue
- * #33 決定性驗收條件）不受播放前場景／相機被怎麼動過影響。相機運鏡的重播
- * 留給相機軌的票（Camera Track）。
+ * 座標才準確落在果凍上）。相機：整段沒有相機軌時，重設後推一個一次性 `frame`
+ * 指令把鏡頭框回果凍靜止狀態；有相機軌時改由每條相機軌自帶的 `setState` 硬切
+ * 在它的起始 step 把鏡頭瞬間設回錄製起點——兩種都是離散、決定性的瞬間對齊，
+ * 確保「連按播放全部結果逐格一致」（issue #33 / #36 決定性驗收條件）不受播放前
+ * 場景／相機被怎麼動過影響。
  *
  * 換 Jelly（`replaceJelly`）會中斷錄製並**清空整份 Track 清單**，因為座標是
  * 對著舊網格算的；單純「停止／重設」（`resetSim`）**保留清單**，只中斷播放與
@@ -113,7 +116,15 @@ import {
 } from '../sim';
 import { ControlPanel } from './ControlPanel';
 import { createDefaultJelly } from './defaultJelly';
-import { DEMOS, DemoRunner, mergeTracks, STEP_SECONDS, secondsToStep, stepToSeconds } from './demos';
+import {
+  cameraTrackGlobalRange,
+  DEMOS,
+  DemoRunner,
+  mergeTracks,
+  STEP_SECONDS,
+  secondsToStep,
+  stepToSeconds,
+} from './demos';
 import { DropImportInput } from './DropImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { PerfMonitor } from './PerfMonitor';
@@ -147,22 +158,28 @@ const PIN_REMOVE_RADIUS_PX = 16;
 const REDUCED_TARGET_PARTICLE_COUNT = Math.round(DEFAULT_PARAMS.targetParticleCount / 2);
 
 /**
- * 一條已錄好的 Action Track（issue #33 / V2 T1-1）——`steps` 是相對自己起點的
- * 時間軸，`startStep` 是它在疊加時間軸上的起始 sim step（UI 以「秒」編輯，
- * `STEP_SECONDS` 換算），`label` 是清單上顯示的簡短標籤，`id` 兼作 `mergeTracks`
- * 的 `PointerId` 前綴來源（各條唯一）。
+ * 一條已錄好的 Track（issue #33 / V2 T1-1；issue #36 / V2 T1-4 加相機軌）——
+ * `steps` 是相對自己起點的時間軸，`startStep` 是它在疊加時間軸上的起始 sim step
+ * （UI 以「秒」編輯，`STEP_SECONDS` 換算），`label` 是清單上顯示的簡短標籤，`id`
+ * 兼作 `mergeTracks` 的 `PointerId` 前綴來源（各條唯一）。
  *
  * `inStep`／`outStep`（issue #35 / V2 T1-3）是本地時間的頭尾修剪範圍（同樣以
  * step 存、UI 以「秒」編輯）：播放時只取 `[inStep, outStep]` 之間的排程項，其餘
  * 頭尾各切掉。錄好時 `inStep = 0`、`outStep = ` 最後一筆操作的 step（涵蓋整條）。
+ *
+ * `kind` 分動作軌／相機軌。相機軌（`kind === 'camera'`）另帶 `startCamera`——錄製
+ * 起點的鏡頭快照，播放時由 `mergeTracks` 在起始 step 插一個絕對相機指令硬切進場
+ * （issue #36）。動作軌 `startCamera` 為 `null`。
  */
-interface RecordedActionTrack {
+interface RecordedTrack {
   id: string;
+  kind: 'action' | 'camera';
   label: string;
   startStep: number;
   inStep: number;
   outStep: number;
   steps: Track;
+  startCamera: CameraState | null;
 }
 
 export class JellySandbox {
@@ -205,10 +222,14 @@ export class JellySandbox {
    * 歸零（見 `setPlaybackLocked`）。
    */
   private paused = false;
-  /** 按下錄製前選定的錄製目標（issue #33）——本票只消化 `action` 那一路，`camera` 留給相機軌的票。 */
+  /** 按下錄製前選定的錄製目標（issue #33）——只錄動作／只錄運鏡／兩者同時。 */
   private recordTarget: RecordTarget = 'action';
-  /** 已錄好的 Action Track 清單（issue #33）——記憶體內，重新匯入 PNG 即清空；「停止／重設」保留。 */
-  private actionTracks: RecordedActionTrack[] = [];
+  /**
+   * 已錄好的 Track 清單（issue #33；issue #36 加相機軌）——記憶體內，重新匯入 PNG
+   * 即清空；「停止／重設」保留。陣列順序＝錄製順序＝清單顯示順序＝相機軌「認先列」
+   * 的先後（`mergeTracks`）。
+   */
+  private tracks: RecordedTrack[] = [];
   /** 下一條 Track 的流水號，兼作 `id`／`PointerId` 前綴（各條唯一）與預設標籤編號。 */
   private nextTrackNum = 1;
 
@@ -336,7 +357,7 @@ export class JellySandbox {
 
   /** 「鎖定跟隨」開關（issue #14 控制面板接這裡）——關掉自動跟隨，手動仍可動。 */
   setFollowLock(locked: boolean): void {
-    this.cameraCommands.push({ type: 'setFollow', enabled: !locked });
+    this.emitCamera({ type: 'setFollow', enabled: !locked });
   }
 
   /**
@@ -345,7 +366,19 @@ export class JellySandbox {
    * 按這顆鈕不會讓控制面板的「鎖定跟隨」勾選框跟實際狀態對不上。
    */
   frameJelly(): void {
-    this.cameraCommands.push({ type: 'frame' });
+    this.emitCamera({ type: 'frame' });
+  }
+
+  /**
+   * 送一個相機指令：進佇列給 `updateCamera`，同時（錄製開著時）轉呼叫
+   * `trackRecorder.record()`——「框住果凍」「鎖定跟隨」按鈕的操作在錄運鏡時
+   * 也要一起錄進 Camera Track（issue #36 / US15）。走的還是 `CameraCommand`
+   * 窄介面（ADR-0005），不新增輸入路徑。`CameraInput` 的 `emit` 回呼另外自己
+   * 做了同樣兩件事（見 `attachInputHandlers`）。
+   */
+  private emitCamera(cmd: CameraCommand): void {
+    this.cameraCommands.push(cmd);
+    this.trackRecorder.record(cmd); // no-op 除非正在錄製
   }
 
   /**
@@ -360,40 +393,47 @@ export class JellySandbox {
   }
 
   /**
-   * 「開始錄製／停止錄製」切換鈕（issue #29 / issue #33 拆軌）：開始時依目前的
-   * 「錄製目標」`this.recordTarget` 起錄；停止時取回 `TrackRecorder.stop()` 拆好
-   * 的 `action` 那一份，非空就新增一列 Action Track 到清單（`camera` 那一份本票
-   * 先丟棄，留給相機軌的票）。錄製中的事件本身不是在這裡送出的——是
-   * `attachInputHandlers` 的兩個既有派送點在錄製旗標開著時順手轉呼叫
-   * `trackRecorder.record()`。
+   * 「開始錄製／停止錄製」切換鈕（issue #29 / issue #33 拆軌 / issue #36 加相機軌）：
+   * 開始時依「錄製目標」`this.recordTarget` 起錄，並把當下的鏡頭狀態快照傳給
+   * `TrackRecorder`（相機軌硬切進場用）；停止時取回 `TrackRecorder.stop()` 拆好的
+   * `action`／`camera` 兩份，非空的各新增一列到清單——「兩者同時」一次產出兩列。
+   * 錄製中的事件本身不是在這裡送出的——是 `attachInputHandlers` 的兩個既有派送點
+   * ＋ `emitCamera` 在錄製旗標開著時順手轉呼叫 `trackRecorder.record()`。
    *
    * `ControlPanel` 那邊：`setRecordingActive` 會在錄製中把「▶ 播放全部」與清單
    * 編輯一併鎖住（錄製／播放互斥，issue #33），不用在這裡另外處理。
    */
   private toggleRecording(): void {
     if (this.trackRecorder.isRecording) {
-      const { action } = this.trackRecorder.stop();
+      const { action, camera, startCamera } = this.trackRecorder.stop();
       this.controlPanel.setRecordingActive(false);
-      if (action.length > 0) this.addActionTrack(action);
+      if (action.length > 0) this.addTrack('action', action, null);
+      if (camera.length > 0) this.addTrack('camera', camera, startCamera ?? null);
     } else {
-      this.trackRecorder.start(this.recordTarget);
+      this.trackRecorder.start(this.recordTarget, cloneCameraState(this.cameraState));
       this.controlPanel.setRecordingActive(true);
     }
   }
 
   /**
-   * 把剛錄好的一段 Action Track 加進清單，並同步到面板。預設起始 0 秒、修剪範圍
-   * 涵蓋整條（`inStep = 0`、`outStep = ` 最後一筆操作的 step）。
+   * 把剛錄好的一段 Track 加進清單，並同步到面板。預設起始 0 秒、修剪範圍涵蓋
+   * 整條（`inStep = 0`、`outStep = ` 最後一筆操作的 step）。相機軌額外帶
+   * `startCamera` 快照。
    */
-  private addActionTrack(steps: Track): void {
+  private addTrack(kind: 'action' | 'camera', steps: Track, startCamera: CameraState | null): void {
     const num = this.nextTrackNum++;
-    this.actionTracks.push({
+    this.tracks.push({
       id: `t${num}`,
-      label: summarizeActionTrack(num, steps),
+      kind,
+      label:
+        kind === 'camera'
+          ? summarizeTrack(`相機軌 ${num}`, steps, CAMERA_TRACK_KIND_LABELS)
+          : summarizeTrack(`動作軌 ${num}`, steps, ACTION_TRACK_KIND_LABELS),
       startStep: 0,
       inStep: 0,
       outStep: lastEventStep(steps),
       steps,
+      startCamera,
     });
     this.syncTrackList();
   }
@@ -405,8 +445,8 @@ export class JellySandbox {
    *（不是 1/60 的整數倍）時，欄位會校正成實際生效的 0.1167 秒，看到的即是播放
    * 時用的值。
    */
-  private updateTrack(id: string, mutate: (track: RecordedActionTrack) => void): void {
-    const track = this.actionTracks.find((t) => t.id === id);
+  private updateTrack(id: string, mutate: (track: RecordedTrack) => void): void {
+    const track = this.tracks.find((t) => t.id === id);
     if (!track) return;
     mutate(track);
     this.syncTrackList();
@@ -440,49 +480,89 @@ export class JellySandbox {
   }
 
   private deleteTrack(id: string): void {
-    this.actionTracks = this.actionTracks.filter((t) => t.id !== id);
+    this.tracks = this.tracks.filter((t) => t.id !== id);
     this.syncTrackList();
   }
 
   private syncTrackList(): void {
+    const overlapping = this.overlappingCameraTrackIds();
     this.controlPanel.setTracks(
-      this.actionTracks.map((t) => ({
+      this.tracks.map((t) => ({
         id: t.id,
-        kind: 'action' as const,
+        kind: t.kind,
         label: t.label,
         startSeconds: stepToSeconds(t.startStep),
         inSeconds: stepToSeconds(t.inStep),
         outSeconds: stepToSeconds(t.outStep),
         firstEventSeconds: stepToSeconds(firstEventStep(t.steps)),
         lastEventSeconds: stepToSeconds(lastEventStep(t.steps)),
+        overlapping: overlapping.has(t.id),
       })),
     );
   }
 
   /**
-   * 「▶ 播放全部」按鈕（issue #33）：把所有 Action Track 依各自的 `startStep`
-   * 疊加成一條全域時間軸（`mergeTracks` 純函式——平移 `atStep`、每條的
-   * `PointerId` 加軌別前綴避免跨軌碰撞、依全域 `atStep` 穩定排序），交給
+   * 在全域時間軸上作用區間彼此相交的相機軌 id 集合（issue #36）——面板把這些列
+   * 標紅（軟警告：允許暫時重疊，播放時重疊區間只認先列那條，見 `mergeTracks`）。
+   * 作用區間由 `cameraTrackGlobalRange`（`demos/overlay.ts`）算——跟 `mergeTracks`
+   * 播放時「認先列」丟事件用的是同一份，警告不會跟實際播放結果對不上。
+   */
+  private overlappingCameraTrackIds(): Set<string> {
+    const cameras = this.tracks.filter((t) => t.kind === 'camera');
+    const flagged = new Set<string>();
+    for (let i = 0; i < cameras.length; i++) {
+      for (let j = i + 1; j < cameras.length; j++) {
+        const [aLo, aHi] = cameraTrackGlobalRange(cameras[i]!);
+        const [bLo, bHi] = cameraTrackGlobalRange(cameras[j]!);
+        if (aLo <= bHi && bLo <= aHi) {
+          flagged.add(cameras[i]!.id);
+          flagged.add(cameras[j]!.id);
+        }
+      }
+    }
+    return flagged;
+  }
+
+  /**
+   * 「▶ 播放全部」按鈕（issue #33；issue #36 加相機軌）：把清單裡所有 Track 依
+   * 各自的 `startStep`／頭尾修剪疊加成一條全域時間軸（`mergeTracks` 純函式——平移
+   * `atStep`、動作軌 `PointerId` 加軌別前綴避免跨軌碰撞、相機軌在起始 step 插
+   * `setState` 硬切、相機軌重疊區間只認先列那條、依全域 `atStep` 穩定排序），交給
    * `demoRunner` 精準重播。
    *
    * 播放前先 `sim.reset()`：Track 裡 Grab/Tap/Pin 記的是錄製當下的絕對世界座標，
    * 場景回到 rest 狀態它們才會準確落在果凍上、每次疊加結果才逐格一致（issue #33
-   * 決定性驗收條件），不受「播放前場景被怎麼動過」影響。相機沒有 Camera Track
-   * 時（本票都還沒有），重設後推一個一次性 `frame` 指令把鏡頭框回果凍靜止狀態，
-   * 不停在上一次亂動到的位置（相機軌的票會接手這段）。
+   * 決定性驗收條件），不受「播放前場景被怎麼動過」影響。
+   *
+   * 相機：整段沒有任何 Camera Track 時，重設後推一個一次性 `frame` 指令把鏡頭
+   * 框回果凍靜止狀態（不停在上一次亂動到的位置）。有 Camera Track 時改成把
+   * `cameraState` 同步重設成剛框好的靜止狀態——這樣第一條相機軌起始秒數若被
+   * 調到 > 0，它生效前那段的鏡頭是從一個固定鏡位開始（決定性），而不是承接
+   * 播放前手動亂動到的鏡位；相機軌一生效，自帶的 `setState` 硬切就接管
+   * （issue #36 決定性驗收條件：不管播放前鏡頭在哪、重複播放鏡頭路徑都一致）。
    */
   private playAll(): void {
-    if (this.actionTracks.length === 0) return;
+    if (this.tracks.length === 0) return;
     this.sim.reset();
-    this.cameraCommands.push({ type: 'frame' });
+    const hasCameraTrack = this.tracks.some((t) => t.kind === 'camera');
+    if (hasCameraTrack) {
+      this.cameraState = createCameraState(
+        { centroid: this.sim.centroid(), bbox: this.sim.bbox() },
+        this.canvasSize(),
+      );
+      this.cameraCommands = [];
+    } else {
+      this.cameraCommands.push({ type: 'frame' });
+    }
     this.demoRunner.start(
       mergeTracks(
-        this.actionTracks.map((t) => ({
+        this.tracks.map((t) => ({
           startStep: t.startStep,
           idPrefix: `${t.id}/`,
           steps: t.steps,
           inStep: t.inStep,
           outStep: t.outStep,
+          startCamera: t.startCamera,
         })),
       ),
     );
@@ -529,7 +609,7 @@ export class JellySandbox {
     this.demoRunner.stop();
     this.setPlaybackLocked(false);
     if (this.trackRecorder.isRecording) {
-      // 中斷仍在進行中的錄製；已經錄好、存在 `actionTracks` 清單裡的 Track 不受影響
+      // 中斷仍在進行中的錄製；已經錄好、存在 `tracks` 清單裡的 Track 不受影響
       // （拓撲沒變，還能疊加播放）——「停止／重設」保留清單，只有重新匯入 PNG 才清空。
       this.trackRecorder.stop();
       this.controlPanel.setRecordingActive(false);
@@ -659,7 +739,7 @@ export class JellySandbox {
     this.setPlaybackLocked(false);
     // 同樣理由：錄製中／已錄好的 Track 座標都是對著舊 Jelly 算的，換 Jelly 時一併中斷並清空整份清單（issue #33）。
     if (this.trackRecorder.isRecording) this.trackRecorder.stop();
-    this.actionTracks = [];
+    this.tracks = [];
     this.nextTrackNum = 1;
     this.controlPanel.setRecordingActive(false);
     this.syncTrackList();
@@ -723,10 +803,7 @@ export class JellySandbox {
     const cameraInput = new CameraInput(canvas, {
       screenToWorld: project,
       hitTest,
-      emit: (cmd) => {
-        this.cameraCommands.push(cmd);
-        this.trackRecorder.record(cmd); // no-op 除非正在錄製（issue #29）
-      },
+      emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
     });
     return { input, cameraInput };
   }
@@ -799,6 +876,10 @@ export class JellySandbox {
       cmds,
       clampedElapsed,
     );
+    // 「鎖定跟隨」勾選框同步到相機實際狀態（issue #36）——相機軌播放的 `setState`
+    // 硬切、錄進去的 `setFollow`，或 `playAll` 重設鏡頭都會在使用者沒點勾選框時
+    // 改動 `followEnabled`，不同步就會脫鉤。`setFollowLocked` 值沒變不寫 DOM。
+    this.controlPanel.setFollowLocked(!this.cameraState.followEnabled);
 
     this.renderer.setPositions(this.sim.positions);
     this.renderer.setCamera(this.cameraState.transform);
@@ -832,27 +913,49 @@ export class JellySandbox {
   }
 }
 
+/** 事件 `type` → 清單標籤上的操作分類字；沒列到的 type 不進標籤。 */
+const ACTION_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
+  grab: '拖曳',
+  moveGrab: '拖曳',
+  release: '拖曳',
+  tap: '輕拍',
+  pin: 'Pin',
+  movePin: 'Pin',
+  unpin: 'Pin',
+};
+const CAMERA_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
+  panBy: '平移',
+  zoomBy: '縮放',
+  frame: '框住',
+  setFollow: '鎖定跟隨',
+};
+
 /**
- * 一段 Action Track 的簡短標籤（issue #33）：`動作軌 N` 後面括號列出這條錄到
- * 哪幾類操作（拖曳／輕拍／Pin），讓使用者在清單上一眼分得出哪條是哪條。
+ * 一段 Track 的簡短標籤（issue #33 動作軌 / issue #36 相機軌）：`<name>` 後面括號
+ * 列出這條錄到哪幾類操作（依 `labels` 把 `event.type` 對成分類字、去重、保留出現
+ * 順序），讓使用者在清單上一眼分得出哪條是哪條。沒有可辨識的操作就只回 `name`。
  */
-function summarizeActionTrack(num: number, steps: Track): string {
+function summarizeTrack(name: string, steps: Track, labels: Readonly<Record<string, string>>): string {
   const kinds = new Set<string>();
   for (const { event } of steps) {
-    if (event.type === 'grab' || event.type === 'moveGrab' || event.type === 'release') {
-      kinds.add('拖曳');
-    } else if (event.type === 'tap') {
-      kinds.add('輕拍');
-    } else if (event.type === 'pin' || event.type === 'movePin' || event.type === 'unpin') {
-      kinds.add('Pin');
-    }
+    const label = labels[event.type];
+    if (label !== undefined) kinds.add(label);
   }
-  return kinds.size > 0 ? `動作軌 ${num}（${[...kinds].join(' · ')}）` : `動作軌 ${num}`;
+  return kinds.size > 0 ? `${name}（${[...kinds].join(' · ')}）` : name;
+}
+
+/**
+ * 深拷貝一份相機狀態當快照（欄位形狀綁死 `CameraState`：`transform` 是唯一的巢狀
+ * 物件，其餘是純量）——錄製起點傳給 `TrackRecorder`，之後 `updateCamera` 每幀回傳
+ * 新物件不會動到它。
+ */
+function cloneCameraState(state: CameraState): CameraState {
+  return { ...state, transform: { ...state.transform } };
 }
 
 /**
  * 一段 Track 第一筆／最後一筆操作的 step（issue #35）——`steps` 由 `TrackRecorder`
- * 逐格 push，依 `atStep` 升冪，所以取頭尾即可。空 Track 回 0（`addActionTrack`
+ * 逐格 push，依 `atStep` 升冪，所以取頭尾即可。空 Track 回 0（`addTrack`
  * 只在非空時才建列，這裡只是防呆）。清單上顯示成秒數，幫使用者抓修剪起訖值。
  */
 function firstEventStep(steps: Track): number {

@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { mergeTracks, type OverlayTrack } from './overlay';
+import type { CameraState } from '../../camera';
+import { cameraTrackGlobalRange, mergeTracks, type OverlayTrack } from './overlay';
+
+/** 一份最小合法的相機起點快照。 */
+function snapshot(x: number): CameraState {
+  return {
+    transform: { x, y: 0, scale: 1 },
+    followEnabled: true,
+    framing: false,
+    sinceManualSeconds: 2,
+  };
+}
 
 describe('mergeTracks', () => {
   it('把每條 Track 的 atStep 依各自的 startStep 平移，合併成一條全域時間軸', () => {
@@ -406,6 +417,227 @@ describe('mergeTracks', () => {
         { atStep: 3, event: { type: 'tap', x: 8, y: 8 } },
         { atStep: 11, event: { type: 'tap', x: 1, y: 1 } },
       ]);
+    });
+  });
+
+  describe('相機軌硬切 + 不重疊解析（issue #36 / V2 T1-4）', () => {
+    it('相機軌在（重錨後）起始 step 插一個帶 startCamera 快照的 setState 絕對指令', () => {
+      const snap = snapshot(7);
+      const cam: OverlayTrack = {
+        startStep: 30,
+        idPrefix: 'c1/',
+        startCamera: snap,
+        steps: [
+          { atStep: 0, event: { type: 'panBy', dxScreen: 10, dyScreen: 0 } },
+          { atStep: 6, event: { type: 'zoomBy', factor: 1.2, pivotScreen: { x: 0, y: 0 } } },
+        ],
+      };
+      expect(mergeTracks([cam])).toEqual([
+        { atStep: 30, event: { type: 'setState', state: snap } },
+        { atStep: 30, event: { type: 'panBy', dxScreen: 10, dyScreen: 0 } },
+        { atStep: 36, event: { type: 'zoomBy', factor: 1.2, pivotScreen: { x: 0, y: 0 } } },
+      ]);
+    });
+
+    it('頭修剪把 setState 重錨到 startStep（跟修剪後的第一筆位移同一個 step）', () => {
+      const snap = snapshot(1);
+      const cam: OverlayTrack = {
+        startStep: 100,
+        idPrefix: 'c1/',
+        startCamera: snap,
+        inStep: 10,
+        steps: [
+          { atStep: 2, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } }, // < in，丟
+          { atStep: 10, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } }, // = in，重錨到 100
+          { atStep: 25, event: { type: 'panBy', dxScreen: 3, dyScreen: 0 } }, // → 115
+        ],
+      };
+      expect(mergeTracks([cam])).toEqual([
+        { atStep: 100, event: { type: 'setState', state: snap } },
+        { atStep: 100, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } },
+        { atStep: 115, event: { type: 'panBy', dxScreen: 3, dyScreen: 0 } },
+      ]);
+    });
+
+    it('兩條相機軌重疊 → 重疊區間只保留先列那條的排程項（含後列的硬切）', () => {
+      const first: OverlayTrack = {
+        startStep: 0,
+        idPrefix: 'c1/',
+        startCamera: snapshot(1),
+        steps: [
+          { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+          { atStep: 10, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } }, // 作用區間到全域 step 10
+        ],
+      };
+      const second: OverlayTrack = {
+        startStep: 5, // 落在 first 的 [0,10] 內
+        idPrefix: 'c2/',
+        startCamera: snapshot(9),
+        steps: [
+          { atStep: 0, event: { type: 'panBy', dxScreen: 8, dyScreen: 0 } }, // 全域 5，被 first 佔用 → 丟
+          { atStep: 8, event: { type: 'panBy', dxScreen: 9, dyScreen: 0 } }, // 全域 13，> 10 → 留
+        ],
+      };
+      expect(mergeTracks([first, second])).toEqual([
+        { atStep: 0, event: { type: 'setState', state: snapshot(1) } },
+        { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+        { atStep: 10, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } },
+        { atStep: 13, event: { type: 'panBy', dxScreen: 9, dyScreen: 0 } },
+      ]);
+      // second 的硬切（全域 step 5）落在重疊區間，被丟掉——這正是「認先列」的軟警告場景。
+    });
+
+    it('相機軌不重疊 → 兩條都完整貢獻，各自硬切', () => {
+      const a: OverlayTrack = {
+        startStep: 0,
+        idPrefix: 'c1/',
+        startCamera: snapshot(1),
+        steps: [{ atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } }],
+      };
+      const b: OverlayTrack = {
+        startStep: 50,
+        idPrefix: 'c2/',
+        startCamera: snapshot(2),
+        steps: [{ atStep: 0, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } }],
+      };
+      expect(mergeTracks([a, b])).toEqual([
+        { atStep: 0, event: { type: 'setState', state: snapshot(1) } },
+        { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+        { atStep: 50, event: { type: 'setState', state: snapshot(2) } },
+        { atStep: 50, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } },
+      ]);
+    });
+
+    it('「認先列」是陣列順序：把時間上較晚的相機軌排在前，較早的反而被它壓', () => {
+      const listedFirst: OverlayTrack = {
+        startStep: 20,
+        idPrefix: 'c1/',
+        startCamera: snapshot(1),
+        steps: [{ atStep: 10, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } }], // 作用區間 [20,30]
+      };
+      const listedSecond: OverlayTrack = {
+        startStep: 0,
+        idPrefix: 'c2/',
+        startCamera: snapshot(2),
+        steps: [{ atStep: 40, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } }], // 作用區間 [0,40]，與 [20,30] 重疊
+      };
+      const merged = mergeTracks([listedFirst, listedSecond]);
+      // listedSecond 的硬切（全域 0）與位移（全域 40）都落在 listedFirst 的 [20,30] 外 → 保留；
+      // 但若它有事件落在 [20,30] 內會被丟。這裡驗證先列那條完整、後列那條沒被反過來壓掉區間外的事件。
+      expect(merged).toEqual([
+        { atStep: 0, event: { type: 'setState', state: snapshot(2) } },
+        { atStep: 20, event: { type: 'setState', state: snapshot(1) } },
+        { atStep: 30, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+        { atStep: 40, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } },
+      ]);
+    });
+
+    it('動作軌與相機軌混合 → 依全域 atStep 穩定排序合併成一條', () => {
+      const action: OverlayTrack = {
+        startStep: 0,
+        idPrefix: 't1/',
+        steps: [
+          { atStep: 0, event: { type: 'grab', id: 'g', x: 0, y: 0 } },
+          { atStep: 20, event: { type: 'release', id: 'g' } },
+        ],
+      };
+      const cam: OverlayTrack = {
+        startStep: 5,
+        idPrefix: 't2/',
+        startCamera: snapshot(3),
+        steps: [{ atStep: 5, event: { type: 'panBy', dxScreen: 4, dyScreen: 0 } }],
+      };
+      expect(mergeTracks([action, cam])).toEqual([
+        { atStep: 0, event: { type: 'grab', id: 't1/g', x: 0, y: 0 } },
+        { atStep: 5, event: { type: 'setState', state: snapshot(3) } },
+        { atStep: 10, event: { type: 'panBy', dxScreen: 4, dyScreen: 0 } },
+        { atStep: 20, event: { type: 'release', id: 't1/g' } },
+      ]);
+    });
+
+    it('動作軌不受相機軌不重疊規則影響（可自由與相機軌、彼此重疊）', () => {
+      const cam: OverlayTrack = {
+        startStep: 0,
+        idPrefix: 'c1/',
+        startCamera: snapshot(1),
+        steps: [{ atStep: 100, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } }], // 佔用 [0,100]
+      };
+      const action: OverlayTrack = {
+        startStep: 10,
+        idPrefix: 't1/',
+        steps: [{ atStep: 0, event: { type: 'tap', x: 1, y: 1 } }], // 全域 10，落在相機軌區間內——動作軌不受影響
+      };
+      expect(mergeTracks([cam, action])).toEqual([
+        { atStep: 0, event: { type: 'setState', state: snapshot(1) } },
+        { atStep: 10, event: { type: 'tap', x: 1, y: 1 } },
+        { atStep: 100, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+      ]);
+    });
+
+    it('cameraTrackGlobalRange：起始 = startStep，結束 = 修剪後最後一筆重錨到全域軸的 step', () => {
+      expect(
+        cameraTrackGlobalRange({
+          startStep: 10,
+          steps: [
+            { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+            { atStep: 8, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } },
+          ],
+        }),
+      ).toEqual([10, 18]);
+      // 尾修剪把最後一筆切掉 → 結束跟著往前（落在修剪後最後一筆留下來的那筆上）
+      expect(
+        cameraTrackGlobalRange({
+          startStep: 10,
+          outStep: 4,
+          steps: [
+            { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+            { atStep: 4, event: { type: 'panBy', dxScreen: 3, dyScreen: 0 } }, // = out，留 → 全域 14
+            { atStep: 8, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } }, // > out，不算進區間
+          ],
+        }),
+      ).toEqual([10, 14]);
+      // 沒有排程項 → 結束 = 起始
+      expect(cameraTrackGlobalRange({ startStep: 7, steps: [] })).toEqual([7, 7]);
+    });
+
+    it('claimedCameraRanges 用 cameraTrackGlobalRange 算：尾修剪切掉後段事件後，先前落在其中的後列軌不再被壓', () => {
+      const first: OverlayTrack = {
+        startStep: 0,
+        idPrefix: 'c1/',
+        startCamera: snapshot(1),
+        outStep: 3, // 把 atStep 30 那筆切掉 → 作用區間只到最後一筆「留下來的」（全域 2）
+        steps: [
+          { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+          { atStep: 2, event: { type: 'panBy', dxScreen: 5, dyScreen: 0 } }, // 留，全域 2
+          { atStep: 30, event: { type: 'panBy', dxScreen: 2, dyScreen: 0 } }, // > out，切掉
+        ],
+      };
+      const second: OverlayTrack = {
+        startStep: 5, // 在「到最後一筆原始事件」的舊算法下會落在 [0,30] 內被壓；新算法 [0,2] 不壓
+        idPrefix: 'c2/',
+        startCamera: snapshot(9),
+        steps: [{ atStep: 0, event: { type: 'panBy', dxScreen: 8, dyScreen: 0 } }],
+      };
+      expect(cameraTrackGlobalRange(first)).toEqual([0, 2]);
+      expect(mergeTracks([first, second])).toEqual([
+        { atStep: 0, event: { type: 'setState', state: snapshot(1) } },
+        { atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } },
+        { atStep: 2, event: { type: 'panBy', dxScreen: 5, dyScreen: 0 } },
+        { atStep: 5, event: { type: 'setState', state: snapshot(9) } },
+        { atStep: 5, event: { type: 'panBy', dxScreen: 8, dyScreen: 0 } },
+      ]);
+    });
+
+    it('相機軌套頭尾修剪範圍為空（in > out）→ 不貢獻任何事件，連硬切都不插', () => {
+      const cam: OverlayTrack = {
+        startStep: 0,
+        idPrefix: 'c1/',
+        startCamera: snapshot(1),
+        inStep: 20,
+        outStep: 5,
+        steps: [{ atStep: 10, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } }],
+      };
+      expect(mergeTracks([cam])).toEqual([]);
     });
   });
 

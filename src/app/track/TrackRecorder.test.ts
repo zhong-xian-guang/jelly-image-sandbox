@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
+import type { CameraState } from '../../camera';
 import { TrackRecorder } from './TrackRecorder';
+
+/** 一份最小合法的相機狀態，當錄製起點快照用。 */
+const SNAPSHOT: CameraState = {
+  transform: { x: 12, y: -3, scale: 2 },
+  followEnabled: false,
+  framing: false,
+  sinceManualSeconds: 2,
+};
 
 describe('TrackRecorder', () => {
   it('stop() 把混合事件序列依種類拆成 action／camera 兩份，各自相對錄製起點', () => {
@@ -64,7 +73,7 @@ describe('TrackRecorder', () => {
   it('空錄製（start 後立刻 stop，沒有任何操作）兩份都空', () => {
     const recorder = new TrackRecorder();
     recorder.start('both');
-    expect(recorder.stop()).toEqual({ action: [], camera: [] });
+    expect(recorder.stop()).toEqual({ action: [], camera: [], startCamera: null });
   });
 
   it('stop() 後不再接受新事件，tick() 也不再前進錄製時間軸', () => {
@@ -78,7 +87,11 @@ describe('TrackRecorder', () => {
     recorder.record({ type: 'tap', x: 9, y: 9 });
 
     // stop() 後的 record()/tick() 都沒生效——重新 stop() 拿到的還是同一份內容。
-    expect(first).toEqual({ action: [{ atStep: 0, event: { type: 'tap', x: 0, y: 0 } }], camera: [] });
+    expect(first).toEqual({
+      action: [{ atStep: 0, event: { type: 'tap', x: 0, y: 0 } }],
+      camera: [],
+      startCamera: null,
+    });
     expect(recorder.stop()).toEqual(first);
   });
 
@@ -95,6 +108,29 @@ describe('TrackRecorder', () => {
     expect(recorder.stop()).toEqual({
       action: [{ atStep: 0, event: { type: 'tap', x: 2, y: 2 } }],
       camera: [],
+      startCamera: null,
+    });
+  });
+
+  describe('起點鏡頭快照 startCamera（issue #36 / V2 T1-4）', () => {
+    it('start() 帶進來的快照原樣夾帶在 stop() 回傳裡', () => {
+      const recorder = new TrackRecorder();
+      recorder.start('camera', SNAPSHOT);
+      recorder.record({ type: 'panBy', dxScreen: 3, dyScreen: 0 });
+      expect(recorder.stop().startCamera).toBe(SNAPSHOT);
+    });
+
+    it('沒帶 startCamera 時為 null', () => {
+      const recorder = new TrackRecorder();
+      recorder.start('camera');
+      expect(recorder.stop().startCamera).toBeNull();
+    });
+
+    it('start() 取代進行中的錄製時，快照也換成新的（沒帶則清成 null）', () => {
+      const recorder = new TrackRecorder();
+      recorder.start('both', SNAPSHOT);
+      recorder.start('both'); // 取代，這次沒帶快照
+      expect(recorder.stop().startCamera).toBeNull();
     });
   });
 });

@@ -11,6 +11,7 @@
  * `TrackRecorder.stop()` 因此回傳 `SplitTracks`（兩份都在，單頻道模式下另一份為空）。
  */
 
+import type { CameraState } from '../../camera';
 import type { DemoStep } from '../demos/types';
 
 export type Track = readonly DemoStep[];
@@ -21,10 +22,17 @@ export type Track = readonly DemoStep[];
  */
 export type RecordTarget = 'action' | 'camera' | 'both';
 
-/** `TrackRecorder.stop()` 的回傳：錄到的事件依種類拆成的兩份時間軸。 */
+/** `TrackRecorder.stop()` 的回傳：錄到的事件依種類拆成的兩份時間軸 ＋ 起點鏡頭快照。 */
 export interface SplitTracks {
   /** 指標事件（Grab／moveGrab／release／Tap／Pin／unpin／movePin）。 */
   action: Track;
-  /** 相機指令（panBy／zoomBy／setFollow／frame）＋（相機軌的票才會用到的）起點快照。 */
+  /** 相機指令（panBy／zoomBy／setFollow／frame）。 */
   camera: Track;
+  /**
+   * 錄製「開始」當下的鏡頭快照（issue #36 / V2 T1-4）——相機軌播放到起始時間時
+   * 由 `mergeTracks` 插一個絕對相機指令「硬切」進場用。由 `JellySandbox` 在
+   * `start()` 當下傳入；沒帶（或只錄動作）時為 `null`。純增欄位（issue #29 的
+   * `SplitTracks` 消費端不受影響），標為選用。
+   */
+  startCamera?: CameraState | null;
 }
