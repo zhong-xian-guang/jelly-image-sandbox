@@ -126,6 +126,13 @@ export class ControlPanel {
   private readonly recordButton: HTMLButtonElement;
   private readonly playAllButton: HTMLButtonElement;
   private readonly recordTargetSelect: HTMLSelectElement;
+  /**
+   * 「鎖定跟隨」勾選框（issue #36 追加把手）——`setFollowLocked` 讓 `JellySandbox`
+   * 每幀把它同步到相機實際的 `followEnabled`，這樣相機軌播放（`setState` 硬切、
+   * 錄進去的 `setFollow`）或 `playAll` 重設鏡頭改動了跟隨狀態時，勾選框不會跟
+   * 實際狀態脫鉤。
+   */
+  private readonly followLockCheckbox: HTMLInputElement;
   /** 「⏸ 暫停／▶ 繼續」鈕 + 「目前 X.XX 秒」讀出（issue #34）——同一列，只在播放中顯示。 */
   private readonly playbackStatusRow: HTMLElement;
   private readonly pauseButton: HTMLButtonElement;
@@ -159,6 +166,9 @@ export class ControlPanel {
 
     this.perfStatus = this.perfStatusRow();
 
+    const followLock = this.followLockRow(opts.initial.followLocked, opts.onFollowLockChange);
+    this.followLockCheckbox = followLock.checkbox;
+
     panel.append(
       this.perfStatus,
       this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange),
@@ -179,7 +189,7 @@ export class ControlPanel {
         opts.onClearPins,
         opts.onShowPinsChange,
       ),
-      this.checkboxRow('鎖定跟隨', opts.initial.followLocked, opts.onFollowLockChange),
+      followLock.row,
       this.buttonRow('框住果凍', opts.onFrameJelly),
       this.demoHeading(),
       ...opts.demos.map((demo) => this.demoButtonRow(demo.label, () => opts.onRunDemo(demo.id))),
@@ -299,6 +309,16 @@ export class ControlPanel {
   setPaused(paused: boolean): void {
     this.pauseButton.textContent = paused ? '▶ 繼續' : '⏸ 暫停';
     this.pauseButton.classList.toggle('jelly-paused-active', paused);
+  }
+
+  /**
+   * `JellySandbox` 每幀同步一次「鎖定跟隨」勾選框到相機實際的鎖定狀態（issue #36）
+   * ——相機軌播放（`setState` 硬切、錄進去的 `setFollow`）或 `playAll` 重設鏡頭會
+   * 在使用者沒點勾選框的情況下改動 `followEnabled`，同步後勾選框不會脫鉤。值沒變
+   * 就不寫 DOM。
+   */
+  setFollowLocked(locked: boolean): void {
+    if (this.followLockCheckbox.checked !== locked) this.followLockCheckbox.checked = locked;
   }
 
   /**
@@ -428,6 +448,26 @@ export class ControlPanel {
 
     row.append(checkbox, labelText);
     return row;
+  }
+
+  /**
+   * 「鎖定跟隨」列（issue #36）——跟 `checkboxRow` 同構，但回傳勾選框本身，讓
+   * `setFollowLocked` 能把它同步到相機實際狀態（相機軌播放會改 `followEnabled`）。
+   */
+  private followLockRow(
+    locked: boolean,
+    onChange: (locked: boolean) => void,
+  ): { row: HTMLElement; checkbox: HTMLInputElement } {
+    const row = document.createElement('label');
+    row.className = 'jelly-control-row';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = locked;
+    checkbox.addEventListener('change', () => onChange(checkbox.checked));
+
+    row.append(checkbox, '鎖定跟隨');
+    return { row, checkbox };
   }
 
   /** 唯讀 debug 讀出列，文字由 `setPerfStatus` 填入（建構時先放預設值）。 */

@@ -876,6 +876,10 @@ export class JellySandbox {
       cmds,
       clampedElapsed,
     );
+    // 「鎖定跟隨」勾選框同步到相機實際狀態（issue #36）——相機軌播放的 `setState`
+    // 硬切、錄進去的 `setFollow`，或 `playAll` 重設鏡頭都會在使用者沒點勾選框時
+    // 改動 `followEnabled`，不同步就會脫鉤。`setFollowLocked` 值沒變不寫 DOM。
+    this.controlPanel.setFollowLocked(!this.cameraState.followEnabled);
 
     this.renderer.setPositions(this.sim.positions);
     this.renderer.setCamera(this.cameraState.transform);
