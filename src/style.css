@@ -96,6 +96,12 @@ body {
   border-radius: 8px;
   color: #fff;
   font-size: 0.85rem;
+  /**
+   * Track／群組多起來時整個面板會比視窗還高（issue #43 回饋）——夾在視窗高度內、
+   * 內部捲動，不把畫面塞爆。
+   */
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
 }
 
 .jelly-control-row {
@@ -170,14 +176,22 @@ body {
 .jelly-track-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
+/**
+ * 每條 Track 一張獨立的小卡（issue #43 回饋：多條放一起時界線不清、容易混淆）——
+ * 淡框 + 淡底 + 內距把「這一列的設定」框起來，一眼看得出哪個欄位屬於哪條。
+ */
 .jelly-track-row {
   display: flex;
   flex-direction: column;
   gap: 3px;
   max-width: 320px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
   font-size: 0.8rem;
 }
 
@@ -212,6 +226,8 @@ body {
  */
 .jelly-track-row.jelly-track-row-overlap {
   color: #ff5a5a;
+  border-color: rgba(255, 90, 90, 0.55);
+  background: rgba(255, 90, 90, 0.08);
 }
 
 .jelly-track-row.jelly-track-row-overlap .jelly-track-badge {
