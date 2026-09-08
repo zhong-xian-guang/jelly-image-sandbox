@@ -96,6 +96,12 @@ body {
   border-radius: 8px;
   color: #fff;
   font-size: 0.85rem;
+  /**
+   * Track／群組多起來時整個面板會比視窗還高（issue #43 回饋）——夾在視窗高度內、
+   * 內部捲動，不把畫面塞爆。
+   */
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
 }
 
 .jelly-control-row {
@@ -162,22 +168,20 @@ body {
 }
 
 /**
- * 已錄好的 Track 清單（issue #33 追加；issue #35 加頭尾修剪）——每列一條 Action
- * Track，分兩行：第一行 種類標記＋簡短標籤＋刪除鈕；第二行 可編輯的「起始／從／
- * 到」秒數欄位＋唯讀的「錄到 X–Y 秒」提示。錄製中／播放中整列的欄位會被
- * `disabled`（錄製與播放互斥，也涵蓋「修剪欄位在播放中鎖住」）。
+ * 已錄好的一條 Track 一張獨立小卡（issue #33 追加；issue #35 加頭尾修剪；issue #43
+ * 回饋：多條放一起時界線不清、容易混淆 → 淡框 + 淡底 + 內距把「這一張的設定」框
+ * 起來）。分兩行：第一行 種類標記＋簡短標籤＋刪除鈕；第二行 可編輯的「起始／從／
+ * 到」秒數欄位＋唯讀的「錄到 X–Y 秒」提示；動作軌再加一個 `群組 ▾`。錄製中／
+ * 播放中整張卡的欄位會被 `disabled`（也涵蓋「修剪欄位在播放中鎖住」）。
  */
-.jelly-track-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .jelly-track-row {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-width: 320px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
   font-size: 0.8rem;
 }
 
@@ -212,6 +216,8 @@ body {
  */
 .jelly-track-row.jelly-track-row-overlap {
   color: #ff5a5a;
+  border-color: rgba(255, 90, 90, 0.55);
+  background: rgba(255, 90, 90, 0.08);
 }
 
 .jelly-track-row.jelly-track-row-overlap .jelly-track-badge {
@@ -270,6 +276,110 @@ body {
   font-family: monospace;
   font-size: 0.8rem;
   opacity: 0.85;
+}
+
+/**
+ * 依群組分區的 Track 清單（issue #43 / V2 T1-8）——夾在「▶ 播放」與「停止／
+ * 重設」之間。每個群組一段：標頭列 `[開啟▢] 名稱(可改)（N 條）[獨奏][刪除]`，
+ * 底下縮排接該群組的成員 Track 卡片（一條 Track 屬多組就每段各出現一次）。
+ * 播放取所有開啟中群組的成員聯集；錄製中／播放中整區 `disabled`（見
+ * `updateTrackControlsState`）。
+ */
+.jelly-grouped-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 320px;
+}
+
+.jelly-group-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/** 群組標頭列——比群組內的 Track 卡片略強調（底色 + 內距），一眼分出層級。 */
+.jelly-group-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.jelly-group-row input.jelly-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-weight: 600;
+}
+
+.jelly-group-count {
+  flex: none;
+  opacity: 0.65;
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.jelly-group-row button {
+  flex: none;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.jelly-group-row button.jelly-group-solo-active {
+  color: #ffb400;
+  font-weight: 600;
+}
+
+/** 群組內的 Track 卡片縮排，讓「屬於這個群組」的從屬關係讀得出來。 */
+.jelly-group-section .jelly-track-row {
+  margin-left: 10px;
+}
+
+/** 沒有成員的群組——標頭底下一行淡提示，不留空懸的標頭。 */
+.jelly-group-empty {
+  margin-left: 10px;
+  opacity: 0.5;
+  font-size: 0.72rem;
+}
+
+.jelly-grouped-tracks :disabled,
+.jelly-group-add:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/** Track 列裡的 `群組 ▾` 多選（issue #43）——收合的核取方塊清單。 */
+.jelly-track-groups {
+  font-size: 0.72rem;
+  opacity: 0.85;
+}
+
+.jelly-track-groups summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.jelly-track-groups[open] summary {
+  margin-bottom: 2px;
+}
+
+.jelly-track-groups-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  padding-left: 8px;
+}
+
+.jelly-track-groups-list label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
 }
 
 /**

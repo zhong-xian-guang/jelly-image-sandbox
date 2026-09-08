@@ -81,7 +81,10 @@ function buildTwist(positions: Float64Array): DemoStep[] {
     const angle = totalAngle * easeInOutCubic(s / twistDuration);
     const pointA = rotateAround(armA, angle, center);
     const pointB = rotateAround(armB, -angle, center);
-    steps.push({ atStep: at(0) + s, event: { type: 'moveGrab', id: GRAB_ID, x: pointA.x, y: pointA.y } });
+    steps.push({
+      atStep: at(0) + s,
+      event: { type: 'moveGrab', id: GRAB_ID, x: pointA.x, y: pointA.y },
+    });
     steps.push({
       atStep: at(0) + s,
       event: { type: 'moveGrab', id: GRAB_ID_B, x: pointB.x, y: pointB.y },

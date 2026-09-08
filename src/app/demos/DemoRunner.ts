@@ -64,9 +64,15 @@ export class DemoRunner {
    * （`CameraCommand`），再把內部 step 計數加一。播完排程最後一個事件後自動
    * 停止（`isRunning` 變 `false`）。
    */
-  advance(applyInput: (event: InputEvent) => void, applyCamera: (command: CameraCommand) => void): void {
+  advance(
+    applyInput: (event: InputEvent) => void,
+    applyCamera: (command: CameraCommand) => void,
+  ): void {
     if (!this.running) return;
-    while (this.cursor < this.schedule.length && this.schedule[this.cursor]!.atStep <= this.stepIndex) {
+    while (
+      this.cursor < this.schedule.length &&
+      this.schedule[this.cursor]!.atStep <= this.stepIndex
+    ) {
       const event = this.schedule[this.cursor]!.event;
       if (isCameraCommand(event)) applyCamera(event);
       else applyInput(event);

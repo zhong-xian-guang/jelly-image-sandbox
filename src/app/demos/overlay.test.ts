@@ -659,7 +659,11 @@ describe('mergeTracks', () => {
 
     expect(() => mergeTracks(tracks)).not.toThrow();
     expect(tracks).toEqual([
-      { startStep: 2, idPrefix: 'A/', steps: [{ atStep: 1, event: { type: 'grab', id: 'g', x: 0, y: 0 } }] },
+      {
+        startStep: 2,
+        idPrefix: 'A/',
+        steps: [{ atStep: 1, event: { type: 'grab', id: 'g', x: 0, y: 0 } }],
+      },
       { startStep: 0, idPrefix: 'B/', steps: [{ atStep: 4, event: { type: 'tap', x: 2, y: 2 } }] },
     ]);
   });

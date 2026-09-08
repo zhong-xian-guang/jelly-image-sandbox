@@ -129,7 +129,18 @@ import { DropImportInput } from './DropImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
-import { TrackRecorder, type RecordTarget, type Track } from './track';
+import {
+  createDefaultGroup,
+  DEFAULT_GROUP_ID,
+  type SoloState,
+  toggleSolo,
+  TrackRecorder,
+  type RecordTarget,
+  type Track,
+  type TrackGroup,
+  tracksInEnabledGroups,
+  withGroupInvariant,
+} from './track';
 import { computeWalledBounds } from './walledBounds';
 
 /** 相機平滑用的單幀時距上限（分頁切回來不會讓相機瞬移）。 */
@@ -170,6 +181,12 @@ const REDUCED_TARGET_PARTICLE_COUNT = Math.round(DEFAULT_PARAMS.targetParticleCo
  * `kind` 分動作軌／相機軌。相機軌（`kind === 'camera'`）另帶 `startCamera`——錄製
  * 起點的鏡頭快照，播放時由 `mergeTracks` 在起始 step 插一個絕對相機指令硬切進場
  * （issue #36）。動作軌 `startCamera` 為 `null`。
+ *
+ * `groupIds`（issue #43 / V2 T1-8）是這條屬於哪些群組（多對多）。新錄好時 =
+ * `{ 預設群組 }`；不變式「每條 Track 永遠至少在一個群組」由 `withGroupInvariant`
+ * 維持。播放時 `playAll` 只取「至少屬於一個開啟中群組」的子集
+ * （`tracksInEnabledGroups`），順序照清單順序（決定性、`mergeTracks` 認先列不變）。
+ * 本票 `群組 ▾` UI 只掛在動作軌列上，相機軌保持在預設群組（之後 #37 再接進）。
  */
 interface RecordedTrack {
   id: string;
@@ -180,6 +197,7 @@ interface RecordedTrack {
   outStep: number;
   steps: Track;
   startCamera: CameraState | null;
+  groupIds: Set<string>;
 }
 
 export class JellySandbox {
@@ -232,6 +250,16 @@ export class JellySandbox {
   private tracks: RecordedTrack[] = [];
   /** 下一條 Track 的流水號，兼作 `id`／`PointerId` 前綴（各條唯一）與預設標籤編號。 */
   private nextTrackNum = 1;
+  /**
+   * Track 群組清單（issue #43 / V2 T1-8，見 ADR-0008）——`groups[0]` 永遠是預設
+   * 群組（`DEFAULT_GROUP_ID`、不可刪、新錄好的 Track 自動加入）。生命週期比照
+   * `tracks`：`停止／重設` 保留、重新匯入 PNG 重建成只剩預設群組。
+   */
+  private groups: TrackGroup[] = [createDefaultGroup()];
+  /** 下一個使用者新建群組的流水號（`g1`／`g2`…，兼作預設名稱編號）。 */
+  private nextGroupNum = 1;
+  /** 目前的「獨奏」狀態（`null` = 沒在獨奏）——狀態轉移見 `track/groups` 的 `toggleSolo`。 */
+  private soloState: SoloState | null = null;
 
   private rafId = 0;
   private lastFrameMs = 0;
@@ -298,12 +326,22 @@ export class JellySandbox {
       onTrackTrimInChange: (id, seconds) => this.setTrackTrimIn(id, seconds),
       onTrackTrimOutChange: (id, seconds) => this.setTrackTrimOut(id, seconds),
       onDeleteTrack: (id) => this.deleteTrack(id),
+      onAddGroup: () => this.addGroup(),
+      onGroupEnabledChange: (id, enabled) => this.setGroupEnabled(id, enabled),
+      onGroupRename: (id, name) => this.renameGroup(id, name),
+      onGroupSolo: (id) => this.toggleGroupSolo(id),
+      onDeleteGroup: (id) => this.deleteGroup(id),
+      onTrackGroupsChange: (trackId, groupIds) => this.setTrackGroups(trackId, groupIds),
     });
     root.appendChild(this.controlPanel.element);
 
     this.pinMarkers = new PinMarkers();
     root.appendChild(this.pinMarkers.element);
     this.applyPinModeCursor();
+
+    // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
+    // 看到「群組」這個概念、按「＋ 新增群組」（issue #43）。
+    this.syncPanelTracks();
   }
 
   /** 建立預設 Jelly 並組裝好；呼叫 `start()` 開始跑。 */
@@ -434,12 +472,14 @@ export class JellySandbox {
       outStep: lastEventStep(steps),
       steps,
       startCamera,
+      // 新錄好的 Track 自動加入預設群組（issue #43 / ADR-0008）。
+      groupIds: new Set([DEFAULT_GROUP_ID]),
     });
-    this.syncTrackList();
+    this.syncPanelTracks();
   }
 
   /**
-   * 找到 `id` 那條 Track、跑 `mutate` 改它的 step 欄位、再 `syncTrackList()` 把
+   * 找到 `id` 那條 Track、跑 `mutate` 改它的 step 欄位、再 `syncPanelTracks()` 把
    * 欄位重寫成量化後的秒數——三個「秒數欄位被改」的處理共用這層 find／防呆／同步
    * （issue #35 code review）。內部一律存量化過的 step 計數：使用者輸入 0.11 秒
    *（不是 1/60 的整數倍）時，欄位會校正成實際生效的 0.1167 秒，看到的即是播放
@@ -449,7 +489,7 @@ export class JellySandbox {
     const track = this.tracks.find((t) => t.id === id);
     if (!track) return;
     mutate(track);
-    this.syncTrackList();
+    this.syncPanelTracks();
   }
 
   /** 「起始秒數」欄位（issue #33）——這條在片段時間軸上從第幾秒開始。負數 clamp 到 0。 */
@@ -481,11 +521,93 @@ export class JellySandbox {
 
   private deleteTrack(id: string): void {
     this.tracks = this.tracks.filter((t) => t.id !== id);
-    this.syncTrackList();
+    this.syncPanelTracks();
   }
 
-  private syncTrackList(): void {
+  /**
+   * 「＋ 新增群組」（issue #43）——新群組預設**開啟**（ADR-0008）；沒有成員，
+   * 使用者再用各條 Track 的 `群組 ▾` 指派進來。新增動作讓進行中的獨奏還原點作廢。
+   */
+  private addGroup(): void {
+    const num = this.nextGroupNum++;
+    this.groups.push({ id: `g${num}`, name: `群組 ${num}`, enabled: true });
+    this.soloState = null;
+    this.syncPanelTracks();
+  }
+
+  /** 某群組的開啟／關閉勾選框（issue #43）——手動動過開關，進行中的獨奏還原點作廢。 */
+  private setGroupEnabled(id: string, enabled: boolean): void {
+    const group = this.groups.find((g) => g.id === id);
+    if (!group || group.enabled === enabled) return;
+    group.enabled = enabled;
+    this.soloState = null;
+    this.syncPanelTracks();
+  }
+
+  /** 某群組改名（issue #43）——`ControlPanel` 已擋掉空字串。 */
+  private renameGroup(id: string, name: string): void {
+    const group = this.groups.find((g) => g.id === id);
+    if (!group || group.name === name) return;
+    group.name = name;
+    this.syncPanelTracks();
+  }
+
+  /**
+   * 「獨奏」鈕（issue #43）——只留該群組開、其餘關；對正在獨奏的群組再按一次
+   * 還原先前的開關狀態。狀態轉移在純函式 `toggleSolo`（見 `track/groups`）。
+   */
+  private toggleGroupSolo(id: string): void {
+    const { groups, solo } = toggleSolo(this.groups, this.soloState, id);
+    this.groups = groups;
+    this.soloState = solo;
+    this.syncPanelTracks();
+  }
+
+  /**
+   * 「刪除」群組（issue #43）——只從清單移除、解除所有 Track 對它的歸屬；成員
+   * Track 不刪。因此掉到 0 群組的 Track 由 `withGroupInvariant` 補回預設群組
+   * （不變式：每條 Track 永遠至少在一個群組）。預設群組不可刪（`ControlPanel`
+   * 不給它刪除鈕，這裡再擋一道）。
+   */
+  private deleteGroup(id: string): void {
+    if (id === DEFAULT_GROUP_ID) return;
+    this.groups = this.groups.filter((g) => g.id !== id);
+    for (const track of this.tracks) {
+      track.groupIds = withGroupInvariant(track.groupIds, this.groups);
+    }
+    this.soloState = null;
+    this.syncPanelTracks();
+  }
+
+  /**
+   * 某條 Track 的 `群組 ▾` 勾選變更（issue #43）——`groupIds` 是勾好的群組 id 清單，
+   * 過 `withGroupInvariant`：丟掉無效 id、全空時補回預設群組（取消勾選最後一個
+   * 群組 → 自動回預設群組）。
+   */
+  private setTrackGroups(trackId: string, groupIds: readonly string[]): void {
+    const track = this.tracks.find((t) => t.id === trackId);
+    if (!track) return;
+    track.groupIds = withGroupInvariant(groupIds, this.groups);
+    this.syncPanelTracks();
+  }
+
+  /**
+   * 把 `tracks` 清單、群組區、與「▶ 播放」的可用狀態一次同步到 `ControlPanel`
+   *（issue #33 起；issue #43 加群組區）。動作軌列帶 `群組 ▾` 多選資料；相機軌
+   * 不帶（本票只對動作軌做分群 UI，見 ADR-0008，相機軌 #37 才接進）。
+   */
+  private syncPanelTracks(): void {
     const overlapping = this.overlappingCameraTrackIds();
+    this.controlPanel.setGroups(
+      this.groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        enabled: g.enabled,
+        trackCount: this.tracks.filter((t) => t.groupIds.has(g.id)).length,
+        soloed: this.soloState?.soloId === g.id,
+        deletable: g.id !== DEFAULT_GROUP_ID,
+      })),
+    );
     this.controlPanel.setTracks(
       this.tracks.map((t) => ({
         id: t.id,
@@ -497,8 +619,17 @@ export class JellySandbox {
         firstEventSeconds: stepToSeconds(firstEventStep(t.steps)),
         lastEventSeconds: stepToSeconds(lastEventStep(t.steps)),
         overlapping: overlapping.has(t.id),
+        // 兩種軌都帶群組歸屬（清單依此分區顯示）；相機軌不畫 `群組 ▾` 編輯器、
+        // 固定屬預設群組（見 ADR-0008，#37 才接進分群 UI）。
+        groups: this.trackGroupChoices(t),
       })),
     );
+    this.controlPanel.setPlayableTrackCount(tracksInEnabledGroups(this.tracks, this.groups).length);
+  }
+
+  /** 一條動作軌的 `群組 ▾` 勾選資料（issue #43）——每個群組一項 + 這條是否屬於它。 */
+  private trackGroupChoices(track: RecordedTrack): { id: string; name: string; member: boolean }[] {
+    return this.groups.map((g) => ({ id: g.id, name: g.name, member: track.groupIds.has(g.id) }));
   }
 
   /**
@@ -524,11 +655,15 @@ export class JellySandbox {
   }
 
   /**
-   * 「▶ 播放全部」按鈕（issue #33；issue #36 加相機軌）：把清單裡所有 Track 依
-   * 各自的 `startStep`／頭尾修剪疊加成一條全域時間軸（`mergeTracks` 純函式——平移
-   * `atStep`、動作軌 `PointerId` 加軌別前綴避免跨軌碰撞、相機軌在起始 step 插
-   * `setState` 硬切、相機軌重疊區間只認先列那條、依全域 `atStep` 穩定排序），交給
-   * `demoRunner` 精準重播。
+   * 「▶ 播放」按鈕（issue #33；issue #36 加相機軌；issue #43 加群組過濾）：先把
+   * `tracks` 濾成「至少屬於一個開啟中群組」的子集（`tracksInEnabledGroups`，
+   * **保留清單順序** → `mergeTracks` 認先列語意不變），再依各自的 `startStep`／
+   * 頭尾修剪疊加成一條全域時間軸（`mergeTracks` 純函式——平移 `atStep`、動作軌
+   * `PointerId` 加軌別前綴避免跨軌碰撞、相機軌在起始 step 插 `setState` 硬切、
+   * 相機軌重疊區間只認先列那條、依全域 `atStep` 穩定排序），交給 `demoRunner`
+   * 精準重播。不手動分群時所有 Track 都在預設群組、預設開啟，子集＝全部，行為
+   * 跟 issue #33 的「播放全部」完全相同。開啟中群組成員聯集為空時直接返回
+   *（`ControlPanel` 那邊按鈕也已變灰）。
    *
    * 播放前先 `sim.reset()`：Track 裡 Grab/Tap/Pin 記的是錄製當下的絕對世界座標，
    * 場景回到 rest 狀態它們才會準確落在果凍上、每次疊加結果才逐格一致（issue #33
@@ -542,9 +677,10 @@ export class JellySandbox {
    * （issue #36 決定性驗收條件：不管播放前鏡頭在哪、重複播放鏡頭路徑都一致）。
    */
   private playAll(): void {
-    if (this.tracks.length === 0) return;
+    const active = tracksInEnabledGroups(this.tracks, this.groups);
+    if (active.length === 0) return;
     this.sim.reset();
-    const hasCameraTrack = this.tracks.some((t) => t.kind === 'camera');
+    const hasCameraTrack = active.some((t) => t.kind === 'camera');
     if (hasCameraTrack) {
       this.cameraState = createCameraState(
         { centroid: this.sim.centroid(), bbox: this.sim.bbox() },
@@ -556,7 +692,7 @@ export class JellySandbox {
     }
     this.demoRunner.start(
       mergeTracks(
-        this.tracks.map((t) => ({
+        active.map((t) => ({
           startStep: t.startStep,
           idPrefix: `${t.id}/`,
           steps: t.steps,
@@ -741,8 +877,12 @@ export class JellySandbox {
     if (this.trackRecorder.isRecording) this.trackRecorder.stop();
     this.tracks = [];
     this.nextTrackNum = 1;
+    // 群組隨片段保存：重新匯入 PNG 一併清空、重建成只剩預設群組（issue #43，比照 Track 清單）。
+    this.groups = [createDefaultGroup()];
+    this.nextGroupNum = 1;
+    this.soloState = null;
     this.controlPanel.setRecordingActive(false);
-    this.syncTrackList();
+    this.syncPanelTracks();
     const sim = new SimCore(mesh);
     sim.params.cellFrac = this.sim.params.cellFrac;
     sim.params.alphaSm = this.sim.params.alphaSm;
@@ -935,7 +1075,11 @@ const CAMERA_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
  * 列出這條錄到哪幾類操作（依 `labels` 把 `event.type` 對成分類字、去重、保留出現
  * 順序），讓使用者在清單上一眼分得出哪條是哪條。沒有可辨識的操作就只回 `name`。
  */
-function summarizeTrack(name: string, steps: Track, labels: Readonly<Record<string, string>>): string {
+function summarizeTrack(
+  name: string,
+  steps: Track,
+  labels: Readonly<Record<string, string>>,
+): string {
   const kinds = new Set<string>();
   for (const { event } of steps) {
     const label = labels[event.type];

@@ -119,7 +119,10 @@ function openGrabs(
     if (!keep(atStep)) continue;
     switch (event.type) {
       case 'grab':
-        open.set(event.id, { origin: { x: event.x, y: event.y }, target: { x: event.x, y: event.y } });
+        open.set(event.id, {
+          origin: { x: event.x, y: event.y },
+          target: { x: event.x, y: event.y },
+        });
         break;
       case 'moveGrab': {
         const g = open.get(event.id);

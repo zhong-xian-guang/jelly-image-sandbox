@@ -77,7 +77,10 @@ export function dragTargetFromCorner(
   const center = centroidOf(positions);
   const diag = bboxDiagonal(positions);
   const dir = normalize({ x: corner.x - center.x, y: corner.y - center.y });
-  return { corner, target: { x: corner.x + dir.x * diag * factor, y: corner.y + dir.y * diag * factor } };
+  return {
+    corner,
+    target: { x: corner.x + dir.x * diag * factor, y: corner.y + dir.y * diag * factor },
+  };
 }
 
 /** 把 `center + v` 繞 `center` 轉 `angle` 弧度後的點——雙點扭轉 Demo 用來畫圓弧軌跡。 */

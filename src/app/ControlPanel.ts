@@ -68,6 +68,38 @@ export interface TrackListRow {
    * 重疊——列標紅的軟警告（播放時重疊區間只認先列那條）。
    */
   overlapping?: boolean;
+  /**
+   * 這條 Track 的群組歸屬（issue #43 / V2 T1-8）——每個群組一項 + 是否屬於它。
+   * 兩種用途：(1) Track 清單依此**分區顯示**（每條列在它所屬的每個群組底下，
+   * 多屬則多次出現）；(2) 動作軌的 `群組 ▾` 多選勾選狀態。相機軌一樣帶（固定
+   * 屬預設群組），只是不畫 `群組 ▾` 編輯器（見 #37）。
+   */
+  groups: readonly TrackGroupChoice[];
+}
+
+/** Track 列 `群組 ▾` 裡的一個可勾選項（issue #43）：群組 id／名稱／這條是否屬於它。 */
+export interface TrackGroupChoice {
+  id: string;
+  name: string;
+  member: boolean;
+}
+
+/**
+ * 群組區的一列（issue #43 / V2 T1-8）——`ControlPanel` 只拿它畫 UI，歸屬計算／
+ * 不變式／獨奏狀態都在 `../app/track/groups` 純函式 + `JellySandbox`。
+ */
+export interface GroupListRow {
+  id: string;
+  /** 可編輯的群組名稱。 */
+  name: string;
+  /** 開啟／關閉狀態（播放取所有開啟中群組的成員聯集）。 */
+  enabled: boolean;
+  /** 目前有幾條 Track 屬於這個群組（顯示成「（N 條）」）。 */
+  trackCount: number;
+  /** 這個群組正被「獨奏」——獨奏鈕高亮。 */
+  soloed: boolean;
+  /** 可否刪除（預設群組不可刪）。 */
+  deletable: boolean;
 }
 
 export interface ControlPanelInitial {
@@ -105,8 +137,20 @@ export interface ControlPanelOptions {
   onRecordTargetChange: (target: RecordTarget) => void;
   /** 「開始錄製／停止錄製」切換鈕（issue #29）。 */
   onToggleRecording: () => void;
-  /** 「▶ 播放全部」按鈕（issue #33）——把所有 Track 依起始時間疊加重播。 */
+  /** 「▶ 播放」按鈕（issue #33；issue #43 改播「開啟中群組成員聯集」）——依起始時間疊加重播。 */
   onPlayAll: () => void;
+  /** 「＋ 新增群組」被按（issue #43）。 */
+  onAddGroup: () => void;
+  /** 某群組的開啟／關閉勾選框被切換（issue #43）。 */
+  onGroupEnabledChange: (id: string, enabled: boolean) => void;
+  /** 某群組被改名（issue #43）。 */
+  onGroupRename: (id: string, name: string) => void;
+  /** 某群組的「獨奏」鈕被按（issue #43）——只留它開／再按還原。 */
+  onGroupSolo: (id: string) => void;
+  /** 某群組的「刪除」鈕被按（issue #43）——只解除歸屬、不刪成員 Track。 */
+  onDeleteGroup: (id: string) => void;
+  /** 某條 Track 的 `群組 ▾` 勾選變更（issue #43）——傳回勾好的群組 id 清單。 */
+  onTrackGroupsChange: (trackId: string, groupIds: readonly string[]) => void;
   /** 「⏸ 暫停／▶ 繼續」切換鈕（issue #34）——只在播放中有作用。 */
   onTogglePause: () => void;
   /** 某條 Track 的「起始秒數」欄位被改（issue #33）。 */
@@ -139,14 +183,39 @@ export class ControlPanel {
   private readonly playbackTimeEl: HTMLElement;
   /** `setPlaybackTime` 比對用；避免秒數字串沒變時每幀重寫 DOM（同 `lastPerfText`）。 */
   private lastPlaybackText: string | null = null;
-  /** Track 清單容器（issue #33）——`setTracks` 每次整份重建裡面的列。 */
-  private readonly trackListEl: HTMLElement;
+  /**
+   * Track 清單容器（issue #33；issue #43 改成**依群組分區**）——每個群組一段
+   * `.jelly-group-section`：群組標頭列（開關／名稱／獨奏／刪除）+ 該群組的成員
+   * Track 卡片。一條 Track 屬多個群組就在每段各出現一次。`setGroups`／`setTracks`
+   * 任一被呼叫都整份重建（見 `renderGroupedTracks`）。
+   */
+  private readonly groupedTracksEl: HTMLElement;
+  private readonly addGroupButton: HTMLButtonElement;
+  /** 最近一次 `setGroups`／`setTracks` 收到的資料——`renderGroupedTracks` 兩者都要。 */
+  private lastGroups: readonly GroupListRow[] = [];
+  private lastTracks: readonly TrackListRow[] = [];
   private readonly onTrackStartTimeChange: (id: string, seconds: number) => void;
   private readonly onTrackTrimInChange: (id: string, seconds: number) => void;
   private readonly onTrackTrimOutChange: (id: string, seconds: number) => void;
   private readonly onDeleteTrack: (id: string) => void;
-  /** 目前清單有幾條 Track——`setTracks` 維護，空清單時「播放全部」變灰。 */
+  private readonly onAddGroup: () => void;
+  private readonly onGroupEnabledChange: (id: string, enabled: boolean) => void;
+  private readonly onGroupRename: (id: string, name: string) => void;
+  private readonly onGroupSolo: (id: string) => void;
+  private readonly onDeleteGroup: (id: string) => void;
+  private readonly onTrackGroupsChange: (trackId: string, groupIds: readonly string[]) => void;
+  /** 目前清單有幾條 Track——`setTracks` 維護；沒有任何 Track 時「▶ 播放」變灰。 */
   private trackCount = 0;
+  /**
+   * 目前展開著 `群組 ▾` 的 Track id（issue #43）——`setTracks` 每次整份重建列，
+   * 靠這個把展開狀態帶過去，勾一個群組後選單不會收合（多選要能連續勾）。
+   */
+  private readonly openTrackGroupMenus = new Set<string>();
+  /**
+   * 目前「開啟中群組成員聯集」有幾條 Track（issue #43）——`setPlayableTrackCount`
+   * 維護；為 0 時（所有群組都關／開啟中群組沒有成員）「▶ 播放」變灰。
+   */
+  private playableTrackCount = 0;
   /** 正在錄製中——`setRecordingActive` 維護；錄製與播放互斥，錄製中「播放全部」與清單編輯鎖住。 */
   private recording = false;
   /** Demo／Track 播放中鎖住——`setPlaybackControlsEnabled` 維護。 */
@@ -160,6 +229,12 @@ export class ControlPanel {
     this.onTrackTrimInChange = opts.onTrackTrimInChange;
     this.onTrackTrimOutChange = opts.onTrackTrimOutChange;
     this.onDeleteTrack = opts.onDeleteTrack;
+    this.onAddGroup = opts.onAddGroup;
+    this.onGroupEnabledChange = opts.onGroupEnabledChange;
+    this.onGroupRename = opts.onGroupRename;
+    this.onGroupSolo = opts.onGroupSolo;
+    this.onDeleteGroup = opts.onDeleteGroup;
+    this.onTrackGroupsChange = opts.onTrackGroupsChange;
 
     const panel = document.createElement('div');
     panel.className = 'jelly-control-panel';
@@ -201,8 +276,12 @@ export class ControlPanel {
     const track = this.trackRow(opts.onToggleRecording, opts.onPlayAll);
     this.recordButton = track.recordButton;
     this.playAllButton = track.playAllButton;
-    this.trackListEl = document.createElement('div');
-    this.trackListEl.className = 'jelly-track-list';
+
+    // 依群組分區的 Track 清單（issue #43）——群組標頭 + 底下該群組的成員卡片。
+    this.groupedTracksEl = document.createElement('div');
+    this.groupedTracksEl.className = 'jelly-grouped-tracks';
+    const addGroup = this.addGroupRow(() => this.onAddGroup());
+    this.addGroupButton = addGroup.button;
 
     const playback = this.playbackStatusRowEl(opts.onTogglePause);
     this.playbackStatusRow = playback.row;
@@ -213,7 +292,8 @@ export class ControlPanel {
       target.row,
       track.row,
       this.playbackStatusRow,
-      this.trackListEl,
+      this.groupedTracksEl,
+      addGroup.row,
       this.buttonRow('停止／重設', opts.onReset),
     );
 
@@ -248,30 +328,88 @@ export class ControlPanel {
   }
 
   /**
-   * 用最新的 Track 清單整份重建列 UI（issue #33；issue #35 加頭尾修剪；issue #36
-   * 加相機軌 + 時間重疊警告）。每列兩行：種類標記（動作／相機）＋簡短標籤
-   * ＋（相機軌重疊時）⚠ 警告＋刪除鈕，下一行可編輯的「起始／從／到」秒數欄位
-   * ＋唯讀的「錄到 X–Y 秒」提示。清單空時「▶ 播放全部」變灰；錄製／播放中整列
-   * 欄位鎖住（見 `updateTrackControlsState`）。
+   * 最新的 Track 清單（issue #33；issue #35 頭尾修剪；issue #36 相機軌 + 重疊警告；
+   * issue #43 改成依群組分區顯示）。每張卡兩行：種類標記＋簡短標籤＋（相機軌重疊
+   * 時）⚠＋刪除鈕，下一行「起始／從／到」秒數欄位＋唯讀「錄到 X–Y 秒」；動作軌
+   * 再加一個 `群組 ▾` 多選。清單空時「▶ 播放」變灰；錄製／播放中整區鎖住
+   * （見 `updateTrackControlsState`）。
    */
   setTracks(rows: readonly TrackListRow[]): void {
     this.trackCount = rows.length;
-    this.trackListEl.replaceChildren(...rows.map((row) => this.trackRowEl(row)));
+    const live = new Set(rows.map((r) => r.id));
+    for (const id of this.openTrackGroupMenus)
+      if (!live.has(id)) this.openTrackGroupMenus.delete(id);
+    this.lastTracks = rows;
+    this.renderGroupedTracks();
+  }
+
+  /**
+   * 最新的群組清單（issue #43 / V2 T1-8）——每個群組畫成一段：標頭列
+   * `[開啟▢] 名稱(可改)（N 條）[獨奏][刪除]`（預設群組不給刪除鈕），底下接該群組
+   * 的成員 Track 卡片。錄製／播放中整區鎖住（見 `updateTrackControlsState`）。
+   */
+  setGroups(rows: readonly GroupListRow[]): void {
+    this.lastGroups = rows;
+    this.renderGroupedTracks();
+  }
+
+  /**
+   * 依群組把 Track 清單整份重建（issue #43）——`setGroups`／`setTracks` 任一被
+   * 呼叫都跑一次。每個群組一段 `.jelly-group-section`：`groupRowEl` 標頭 + 屬於
+   * 該群組的每張 Track 卡片（依 `lastTracks` 原順序，即錄製順序 → `mergeTracks`
+   * 認先列語意不變）。一條 Track 屬多個群組就在每段各出現一次。群組沒有成員時
+   * 放一行淡提示。
+   */
+  private renderGroupedTracks(): void {
+    const sections = this.lastGroups.map((group) => {
+      const section = document.createElement('div');
+      section.className = 'jelly-group-section';
+      section.append(this.groupRowEl(group));
+
+      const members = this.lastTracks.filter((t) =>
+        t.groups.some((choice) => choice.id === group.id && choice.member),
+      );
+      if (members.length === 0) {
+        const hint = document.createElement('div');
+        hint.className = 'jelly-group-empty';
+        hint.textContent = '（尚無 Track）';
+        section.append(hint);
+      } else {
+        for (const member of members) section.append(this.trackRowEl(member));
+      }
+      return section;
+    });
+    this.groupedTracksEl.replaceChildren(...sections);
     this.updateTrackControlsState();
   }
 
   /**
-   * 依 `playbackLocked` / `recording` / `trackCount` 重算 Track 區塊每個控制項的
-   * 可用狀態，集中一處免得各方法各自漏掉一顆按鈕。
+   * `JellySandbox` 每次群組開關／歸屬變動後同步一次「開啟中群組成員聯集」的
+   * Track 數（issue #43）——為 0 時「▶ 播放」變灰（所有群組都關、或開啟中群組
+   * 沒有任何成員）。
+   */
+  setPlayableTrackCount(count: number): void {
+    this.playableTrackCount = count;
+    this.updateTrackControlsState();
+  }
+
+  /**
+   * 依 `playbackLocked` / `recording` / `trackCount` / `playableTrackCount` 重算
+   * Track 區塊每個控制項的可用狀態，集中一處免得各方法各自漏掉一顆按鈕。
+   * issue #43：群組區（`群組 ▾`、開關、名稱、獨奏、刪除、＋ 新增群組）在錄製中、
+   * 播放中一起鎖住。
    */
   private updateTrackControlsState(): void {
     const busy = this.playbackLocked || this.recording;
     // 錄製中「開始錄製」要保持可按（它此時是「停止錄製」）；只有播放中才鎖它。
     this.recordButton.disabled = this.playbackLocked;
     this.recordTargetSelect.disabled = busy;
-    this.playAllButton.disabled = busy || this.trackCount === 0;
-    for (const el of this.trackListEl.querySelectorAll('input, button')) {
-      (el as HTMLInputElement | HTMLButtonElement).disabled = busy;
+    // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
+    this.playAllButton.disabled = busy || this.trackCount === 0 || this.playableTrackCount === 0;
+    this.addGroupButton.disabled = busy;
+    // 分區清單裡的群組標頭控制項 + Track 卡片欄位 + `群組 ▾` 一起鎖住（issue #43）。
+    for (const el of this.groupedTracksEl.querySelectorAll('input, button, select')) {
+      (el as HTMLInputElement | HTMLButtonElement | HTMLSelectElement).disabled = busy;
     }
   }
 
@@ -494,6 +632,78 @@ export class ControlPanel {
     return heading;
   }
 
+  /** 「＋ 新增群組」列（issue #43）——新群組預設開啟，見 `JellySandbox.addGroup`。 */
+  private addGroupRow(onClick: () => void): { row: HTMLElement; button: HTMLButtonElement } {
+    const row = document.createElement('div');
+    row.className = 'jelly-control-row';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'jelly-group-add';
+    button.textContent = '＋ 新增群組';
+    button.addEventListener('click', onClick);
+
+    row.appendChild(button);
+    return { row, button };
+  }
+
+  /**
+   * 一段群組的標頭列（issue #43）：`[開啟▢] 名稱(可改)（N 條）[獨奏][刪除]`，
+   * 底下由 `renderGroupedTracks` 接該群組的成員 Track 卡片。名稱用 `change`
+   *（失焦／Enter）回報，避免逐字觸發重繪。獨奏鈕在該群組正被獨奏時加
+   * `.jelly-group-solo-active` 高亮。預設群組不給刪除鈕。
+   */
+  private groupRowEl(row: GroupListRow): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'jelly-group-row';
+
+    const enabled = document.createElement('input');
+    enabled.type = 'checkbox';
+    enabled.className = 'jelly-group-enabled';
+    enabled.checked = row.enabled;
+    enabled.title = '開啟／關閉（播放取所有開啟中群組的成員聯集）';
+    enabled.addEventListener('change', () => this.onGroupEnabledChange(row.id, enabled.checked));
+
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.className = 'jelly-group-name';
+    name.value = row.name;
+    name.addEventListener('change', () => {
+      const trimmed = name.value.trim();
+      if (trimmed === '') {
+        name.value = row.name; // 空名字不接受，還原
+        return;
+      }
+      this.onGroupRename(row.id, trimmed);
+    });
+
+    const count = document.createElement('span');
+    count.className = 'jelly-group-count';
+    count.textContent = `（${row.trackCount} 條）`;
+
+    const solo = document.createElement('button');
+    solo.type = 'button';
+    solo.className = 'jelly-group-solo';
+    solo.classList.toggle('jelly-group-solo-active', row.soloed);
+    solo.textContent = '獨奏';
+    solo.title = '只留這個群組開、其餘關；再按還原';
+    solo.addEventListener('click', () => this.onGroupSolo(row.id));
+
+    el.append(enabled, name, count, solo);
+
+    if (row.deletable) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'jelly-group-delete';
+      del.textContent = '刪除';
+      del.title = '只解除歸屬，不刪成員 Track';
+      del.addEventListener('click', () => this.onDeleteGroup(row.id));
+      el.append(del);
+    }
+
+    return el;
+  }
+
   /** 「錄製目標」選擇器（issue #33）：只錄動作／只錄運鏡／兩者同時。按下錄製前選定。 */
   private recordTargetRow(
     initial: RecordTarget,
@@ -539,7 +749,8 @@ export class ControlPanel {
 
     const playAllButton = document.createElement('button');
     playAllButton.type = 'button';
-    playAllButton.textContent = '▶ 播放全部';
+    // issue #43：改播「開啟中群組成員聯集」，不一定是「全部」，鈕名收斂成「▶ 播放」。
+    playAllButton.textContent = '▶ 播放';
     playAllButton.addEventListener('click', onPlayAll);
 
     row.append(recordButton, playAllButton);
@@ -635,7 +846,51 @@ export class ControlPanel {
     fields.append('起始', startInput, '秒　從', inInput, '到', outInput, '秒', recorded);
 
     el.append(top, fields);
+    // 動作軌的 `群組 ▾` 多選（issue #43）——相機軌固定屬預設群組、不給編輯器（見 #37）。
+    if (row.kind === 'action') el.append(this.trackGroupsMenu(row.id, row.groups));
     return el;
+  }
+
+  /**
+   * Track 列裡的 `群組 ▾` 多選（issue #43）——一個 `<details>` 收合核取方塊清單，
+   * 勾選＝這條屬於該群組。任一項變更就把「目前勾好的」全部 id 回報給
+   * `onTrackGroupsChange`；「每條 Track 至少在一個群組」的不變式由 `JellySandbox`
+   * 收到後補（取消勾選最後一個 → 自動回預設群組），重繪整列時勾選會校正回來。
+   */
+  private trackGroupsMenu(trackId: string, choices: readonly TrackGroupChoice[]): HTMLElement {
+    const details = document.createElement('details');
+    details.className = 'jelly-track-groups';
+    details.open = this.openTrackGroupMenus.has(trackId);
+    details.addEventListener('toggle', () => {
+      if (details.open) this.openTrackGroupMenus.add(trackId);
+      else this.openTrackGroupMenus.delete(trackId);
+    });
+
+    const summary = document.createElement('summary');
+    const memberNames = choices.filter((c) => c.member).map((c) => c.name);
+    summary.textContent = `群組 ▾${memberNames.length > 0 ? `（${memberNames.join('、')}）` : ''}`;
+    details.appendChild(summary);
+
+    const list = document.createElement('div');
+    list.className = 'jelly-track-groups-list';
+    const boxes: { id: string; checkbox: HTMLInputElement }[] = [];
+    for (const choice of choices) {
+      const label = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = choice.member;
+      checkbox.addEventListener('change', () => {
+        this.onTrackGroupsChange(
+          trackId,
+          boxes.filter((b) => b.checkbox.checked).map((b) => b.id),
+        );
+      });
+      boxes.push({ id: choice.id, checkbox });
+      label.append(checkbox, choice.name);
+      list.appendChild(label);
+    }
+    details.appendChild(list);
+    return details;
   }
 
   /**
