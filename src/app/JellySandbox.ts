@@ -619,8 +619,9 @@ export class JellySandbox {
         firstEventSeconds: stepToSeconds(firstEventStep(t.steps)),
         lastEventSeconds: stepToSeconds(lastEventStep(t.steps)),
         overlapping: overlapping.has(t.id),
-        // 相機軌本票不做分群 UI（見 ADR-0008，相機軌 #37 才接進）。
-        groups: t.kind === 'action' ? this.trackGroupChoices(t) : undefined,
+        // 兩種軌都帶群組歸屬（清單依此分區顯示）；相機軌不畫 `群組 ▾` 編輯器、
+        // 固定屬預設群組（見 ADR-0008，#37 才接進分群 UI）。
+        groups: this.trackGroupChoices(t),
       })),
     );
     this.controlPanel.setPlayableTrackCount(tracksInEnabledGroups(this.tracks, this.groups).length);
