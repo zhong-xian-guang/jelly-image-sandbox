@@ -99,6 +99,30 @@ describe('DemoRunner', () => {
     expect(log).toEqual([{ type: 'tap', x: 9, y: 9 }]);
   });
 
+  it('elapsedSteps：每 advance 一次加一，start／stop 歸零（issue #34）', () => {
+    const runner = new DemoRunner();
+    expect(runner.elapsedSteps).toBe(0);
+
+    runner.start([
+      { atStep: 0, event: { type: 'grab', id: 'a', x: 0, y: 0 } },
+      { atStep: 10, event: { type: 'release', id: 'a' } },
+    ]);
+    expect(runner.elapsedSteps).toBe(0);
+
+    collect(runner, 3);
+    expect(runner.elapsedSteps).toBe(3);
+
+    // 播完排程後（isRunning 已 false）advance 不再前進 elapsedSteps。
+    collect(runner, 20);
+    expect(runner.isRunning).toBe(false);
+    const settledAt = runner.elapsedSteps;
+    collect(runner, 5);
+    expect(runner.elapsedSteps).toBe(settledAt);
+
+    runner.stop();
+    expect(runner.elapsedSteps).toBe(0);
+  });
+
   it('CameraCommand 事件派送到相機回呼，InputEvent 派送到 applyInput，互不混淆（issue #29）', () => {
     const schedule: DemoStep[] = [
       { atStep: 0, event: { type: 'grab', id: 'a', x: 0, y: 0 } },

@@ -192,6 +192,13 @@ export class JellySandbox {
   private wireframeVisible = false;
   /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
   private playbackLocked = false;
+  /**
+   * 播放暫停旗標（issue #34 / V2 T1-2）——開著時 `frame()` 整個略過固定步迴圈與
+   * 相機更新，只保留算繪：果凍定格在當下形變、播放秒數不動、鏡頭不動、排定
+   * 事件不觸發。只在播放中（`demoRunner.isRunning`）能切換；播放結束會被強制
+   * 歸零（見 `setPlaybackLocked`）。
+   */
+  private paused = false;
   /** 按下錄製前選定的錄製目標（issue #33）——本票只消化 `action` 那一路，`camera` 留給相機軌的票。 */
   private recordTarget: RecordTarget = 'action';
   /** 已錄好的 Action Track 清單（issue #33）——記憶體內，重新匯入 PNG 即清空；「停止／重設」保留。 */
@@ -259,6 +266,7 @@ export class JellySandbox {
       },
       onToggleRecording: () => this.toggleRecording(),
       onPlayAll: () => this.playAll(),
+      onTogglePause: () => this.togglePause(),
       onTrackStartTimeChange: (id, seconds) => this.setTrackStartTime(id, seconds),
       onDeleteTrack: (id) => this.deleteTrack(id),
     });
@@ -434,11 +442,35 @@ export class JellySandbox {
     this.setPlaybackLocked(true); // 立即鎖住，理由同 runDemo
   }
 
-  /** 集中處理鎖定狀態變化，`frame()` 每幀同步一次時才不會對沒變的按鈕重複寫 `disabled`。 */
+  /**
+   * 集中處理鎖定狀態變化，`frame()` 每幀同步一次時才不會對沒變的按鈕重複寫
+   * `disabled`。`locked` 等同「Demo／Track 正在播放」——同步驅動 issue #34 的
+   * 播放狀態列（暫停鈕＋秒數讀出只在播放中出現），並在播放結束時把暫停旗標
+   * 強制歸零，下一次播放不會殘留上一輪的定格狀態。
+   */
   private setPlaybackLocked(locked: boolean): void {
     if (this.playbackLocked === locked) return;
     this.playbackLocked = locked;
     this.controlPanel.setPlaybackControlsEnabled(!locked);
+    this.controlPanel.setPlaybackActive(locked);
+    if (!locked) this.setPaused(false);
+  }
+
+  /**
+   * 「⏸ 暫停／▶ 繼續」切換鈕（issue #34）——只在播放中有作用（沒在播放時
+   * `demoRunner.isRunning` 為 false，直接忽略，對應「暫停鈕無作用」的驗收條件；
+   * 面板那邊此時整列也是隱藏的）。
+   */
+  private togglePause(): void {
+    if (!this.demoRunner.isRunning) return;
+    this.setPaused(!this.paused);
+  }
+
+  /** 切換暫停旗標並同步面板按鈕視覺；值沒變則不動作。 */
+  private setPaused(paused: boolean): void {
+    if (this.paused === paused) return;
+    this.paused = paused;
+    this.controlPanel.setPaused(paused);
   }
 
   /**
@@ -675,6 +707,17 @@ export class JellySandbox {
     const elapsedMs = nowMs - this.lastFrameMs;
     const elapsed = elapsedMs / 1000;
     this.lastFrameMs = nowMs;
+
+    // 暫停中（issue #34）：略過固定步迴圈、PerfMonitor 取樣與相機更新——果凍
+    // 定格在當下形變、播放秒數不動、鏡頭不動、排定事件不觸發——只重畫這一格。
+    // `lastFrameMs` 上面已更新，暫停期間累積的真實時間全數丟棄，按繼續時
+    // `accumulator` 不會突然吐出一大批步，決定性不受影響。
+    if (this.paused) {
+      this.renderer.render();
+      this.rafId = requestAnimationFrame(this.frame);
+      return;
+    }
+
     // 同一個 clamp 給 camera 平滑跟 PerfMonitor 累積用：分頁切回來那一大幀不會
     // 被當成「持續超標一整秒」誤觸發降級（見 PerfMonitor 說明的 sustainSeconds）。
     const clampedElapsed = Math.min(Math.max(elapsed, 0), CAMERA_MAX_DT);
@@ -692,7 +735,13 @@ export class JellySandbox {
       this.sim.step(STEP_SECONDS);
       this.trackRecorder.tick(); // 跟 demoRunner 同一個 step 計數，錄下的時間戳記才能對得上重播（issue #29）
     }
-    this.setPlaybackLocked(this.demoRunner.isRunning); // 追上「Demo／Track 自己播完」這種沒有按鈕點擊觸發的狀態變化
+    const playing = this.demoRunner.isRunning;
+    this.setPlaybackLocked(playing); // 追上「Demo／Track 自己播完」這種沒有按鈕點擊觸發的狀態變化
+    if (playing) {
+      // 面板的「目前 X.XX 秒」讀出（issue #34）——用 DemoRunner 的全域 sim step
+      // 計數換算，暫停時 step 不前進、讀出跟著定住。
+      this.controlPanel.setPlaybackTime(stepToSeconds(this.demoRunner.elapsedSteps));
+    }
 
     const cmds = this.cameraCommands;
     this.cameraCommands = [];
