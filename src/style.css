@@ -273,6 +273,82 @@ body {
 }
 
 /**
+ * 群組區（issue #43 / V2 T1-8）——夾在「▶ 播放」與 Track 清單之間。每列
+ * `[開啟▢] 名稱(可改)（N 條）[獨奏][刪除]`。播放取所有開啟中群組的成員聯集；
+ * 錄製中／播放中整區跟 Track 清單一起 `disabled`（見 `updateTrackControlsState`）。
+ */
+.jelly-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 320px;
+}
+
+.jelly-group-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+
+.jelly-group-row input.jelly-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+}
+
+.jelly-group-count {
+  flex: none;
+  opacity: 0.65;
+  font-size: 0.72rem;
+}
+
+.jelly-group-row button {
+  flex: none;
+  font: inherit;
+  font-size: 0.72rem;
+}
+
+.jelly-group-row button.jelly-group-solo-active {
+  color: #ffb400;
+  font-weight: 600;
+}
+
+.jelly-group-list :disabled,
+.jelly-group-add:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/** Track 列裡的 `群組 ▾` 多選（issue #43）——收合的核取方塊清單。 */
+.jelly-track-groups {
+  font-size: 0.72rem;
+  opacity: 0.85;
+}
+
+.jelly-track-groups summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.jelly-track-groups[open] summary {
+  margin-bottom: 2px;
+}
+
+.jelly-track-groups-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  padding-left: 8px;
+}
+
+.jelly-track-groups-list label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/**
  * Pin 位置標記層（issue #14 追加）：疊在畫布上、跟著每個 Pin 的目前世界座標
  * 走。`pointer-events: none`——不擋手勢，點掉特定 Pin 是靠世界座標鄰近判定
  * （見 `src/input/pinModeRouting.ts`），不是點中這個 DOM 節點。

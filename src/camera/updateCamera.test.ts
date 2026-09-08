@@ -329,7 +329,13 @@ describe('updateCamera — 絕對指令 setState（issue #36 / V2 T1-4）', () =
 
   it('收到 setState 就立刻回傳該狀態（dt = 0，逐欄位相等）', () => {
     const s0 = createCameraState(targetAt(0, 0), CANVAS);
-    const s = updateCamera(s0, targetAt(9999, 9999), CANVAS, [{ type: 'setState', state: SNAPSHOT }], 0);
+    const s = updateCamera(
+      s0,
+      targetAt(9999, 9999),
+      CANVAS,
+      [{ type: 'setState', state: SNAPSHOT }],
+      0,
+    );
     expect(s).toEqual(SNAPSHOT);
   });
 
@@ -389,7 +395,13 @@ describe('updateCamera — 絕對指令 setState（issue #36 / V2 T1-4）', () =
       framing: false,
       sinceManualSeconds: CFG.resumeDelaySeconds,
     };
-    const s = updateCamera(s0, targetAt(0, 0), CANVAS, [{ type: 'panBy', dxScreen: 10, dyScreen: -4 }], 0);
+    const s = updateCamera(
+      s0,
+      targetAt(0, 0),
+      CANVAS,
+      [{ type: 'panBy', dxScreen: 10, dyScreen: -4 }],
+      0,
+    );
     expect(s.transform.x).toBeCloseTo(-5, 9);
     expect(s.transform.y).toBeCloseTo(2, 9);
   });

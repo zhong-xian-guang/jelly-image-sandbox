@@ -2,3 +2,11 @@
 
 export { TrackRecorder } from './TrackRecorder';
 export type { Track, RecordTarget, SplitTracks } from './types';
+export {
+  createDefaultGroup,
+  DEFAULT_GROUP_ID,
+  toggleSolo,
+  tracksInEnabledGroups,
+  withGroupInvariant,
+} from './groups';
+export type { SoloState, TrackGroup } from './groups';
