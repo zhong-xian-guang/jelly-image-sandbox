@@ -1,20 +1,25 @@
 /**
- * `DropImportInput`（issue #12 / T11）——把 DOM 拖放事件接到 `selectDroppedPng`。
+ * `DropImportInput`（issue #12 / T11）——把 DOM 拖放事件接到 `selectSupportedImageFile`。
  *
  * 薄的接線層（對照 `PointerInput`/`CameraInput`）：`dragenter`/`dragover`/
- * `dragleave`/`drop` → 挑出 PNG 檔案 → 讀成位元組 → 呼叫 `onImport`。非檔案拖曳
- * （文字、連結）完全不理會、不擋預設行為。`dragenter`/`dragleave` 用巢狀計數
+ * `dragleave`/`drop` → 挑出支援的影像檔（png/jpeg/gif）→ 讀成位元組 → 呼叫 `onImport`。
+ * 非檔案拖曳（文字、連結）完全不理會、不擋預設行為。`dragenter`/`dragleave` 用巢狀計數
  * （子元素間移動也會先觸發子元素的 `dragleave` 再觸發父層的 `dragenter`，單純
  * 用布林旗標會在中途誤判「已離開」）判斷真的離開時才關掉提示。
  */
 
-import { selectDroppedPng } from './dropImport';
+import { selectSupportedImageFile } from './dropImport';
 
 export interface DropImportInputOptions {
-  /** 挑到 PNG 檔案並讀成位元組後呼叫。 */
-  onImport: (pngBytes: Uint8Array) => void;
+  /** 挑到支援的影像檔並讀成位元組後呼叫。 */
+  onImport: (imageBytes: Uint8Array) => void;
   /** 正在拖著檔案經過 `target`（顯示／隱藏拖放提示用）。 */
   onDragActiveChange: (active: boolean) => void;
+  /**
+   * 真的拖了檔案、但沒有一個是支援的影像格式，或讀檔失敗。帶一句給使用者看的說明
+   * （呼叫端負責顯示在畫面上；純文字／連結拖曳不算，不會觸發）。
+   */
+  onReject?: (message: string) => void;
 }
 
 export class DropImportInput {
@@ -67,11 +72,24 @@ export class DropImportInput {
     this.dragDepth = 0;
     this.opts.onDragActiveChange(false);
 
-    const file = selectDroppedPng(ev.dataTransfer);
-    if (!file) return; // 非圖片／不支援格式：忽略、不崩（issue #12 驗收條件）
+    const files = ev.dataTransfer?.files;
+    const file = selectSupportedImageFile(files);
+    if (!file) {
+      // 真的拖了檔案、只是格式不支援（webp/avif/bmp…）→ 主控台一行警告 + 畫面提示後略過
+      // （issue #55 驗收條件：「畫面無變化、主控台一行警告、原本的果凍不受影響」）。
+      // 純文字／連結拖曳沒有 files，不吭聲。
+      if (files && files.length > 0) {
+        console.warn('[jelly] 拖進來的檔案不是支援的圖片格式（僅支援 PNG / JPEG / GIF），已略過');
+        this.opts.onReject?.('不支援這個格式，請改用 PNG / JPEG / GIF 圖片');
+      }
+      return;
+    }
     file
       .arrayBuffer()
       .then((buf) => this.opts.onImport(new Uint8Array(buf)))
-      .catch((err: unknown) => console.warn('[jelly] 讀取拖放檔案失敗，已略過', err));
+      .catch((err: unknown) => {
+        console.warn('[jelly] 讀取拖放檔案失敗，已略過', err);
+        this.opts.onReject?.('這個檔案讀不進來，已略過');
+      });
   };
 }

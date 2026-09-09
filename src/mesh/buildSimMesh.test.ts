@@ -1,34 +1,9 @@
-import { encode } from 'fast-png';
 import { describe, expect, it } from 'vitest';
 
 import { buildSimMesh, MeshPipelineError } from './buildSimMesh';
 import { triangleMinAngleDeg, triangleSignedArea, triVerts } from './geometry';
+import { disc, gifFrom, jpegFrom, pngFrom } from './testFixtures';
 import type { SimMesh } from './types';
-
-/** 用 predicate（不透明與否）畫一張 RGBA PNG。 */
-function pngFrom(
-  width: number,
-  height: number,
-  opaque: (x: number, y: number) => boolean,
-): Uint8Array {
-  const data = new Uint8Array(width * height * 4);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4;
-      const on = opaque(x, y);
-      data[i] = 200;
-      data[i + 1] = 120;
-      data[i + 2] = 60;
-      data[i + 3] = on ? 255 : 0;
-    }
-  }
-  return encode({ width, height, data, channels: 4, depth: 8 });
-}
-
-const disc =
-  (cx: number, cy: number, r: number) =>
-  (x: number, y: number): boolean =>
-    (x - cx) ** 2 + (y - cy) ** 2 <= r * r;
 
 function vertexBBox(mesh: SimMesh) {
   let minX = Infinity;
@@ -98,7 +73,7 @@ function pointInAnyTriangle(mesh: SimMesh, px: number, py: number): boolean {
 }
 
 describe('buildSimMesh', () => {
-  it('決定性：相同 (pngBytes, params) 兩次呼叫 → SimMesh 深度相等', () => {
+  it('決定性：相同 (imageBytes, params) 兩次呼叫 → SimMesh 深度相等', () => {
     const png = pngFrom(240, 240, disc(120, 120, 100));
     const a = buildSimMesh(png);
     const b = buildSimMesh(png);
@@ -236,6 +211,26 @@ describe('buildSimMesh', () => {
   it('全透明輸入 → 丟 MeshPipelineError', () => {
     const png = pngFrom(32, 32, () => false);
     expect(() => buildSimMesh(png)).toThrow(MeshPipelineError);
+  });
+
+  it('同一張圓盤分別以 PNG 與 GIF 編碼 → SimMesh 拓撲一致（issue #55）', () => {
+    const shape = disc(80, 80, 64);
+    const fromPng = buildSimMesh(pngFrom(160, 160, shape));
+    const fromGif = buildSimMesh(gifFrom(160, 160, shape));
+    // 二值化後 mask 位元相同 → 決定性種子相同 → 逐頂點、逐三角形一致
+    expect(fromGif.positions).toEqual(fromPng.positions);
+    expect(fromGif.indices).toEqual(fromPng.indices);
+    expect(fromGif.uv).toEqual(fromPng.uv);
+  });
+
+  it('JPEG 方圖（無 alpha）→ 頂點 bbox 貼齊整張矩形（issue #55）', () => {
+    const mesh = buildSimMesh(jpegFrom(140, 110));
+    const b = vertexBBox(mesh);
+    const tol = 4;
+    expect(b.minX).toBeLessThanOrEqual(tol);
+    expect(b.minY).toBeLessThanOrEqual(tol);
+    expect(b.maxX).toBeGreaterThanOrEqual(140 - tol);
+    expect(b.maxY).toBeGreaterThanOrEqual(110 - tol);
   });
 
   it('params 覆寫會改變輸出（且仍決定性）', () => {

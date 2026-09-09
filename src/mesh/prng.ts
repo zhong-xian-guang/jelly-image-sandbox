@@ -1,6 +1,6 @@
 /**
  * 有種子的決定性 PRNG 與位元組雜湊。整條 mesh 管線的隨機性（只有 Steiner 點抖動）
- * 都經由這裡，絕不碰 `Math.random` 或 wall-clock，讓 `(pngBytes, params)` → `SimMesh`
+ * 都經由這裡，絕不碰 `Math.random` 或 wall-clock，讓 `(imageBytes, params)` → `SimMesh`
  * 可重現（ADR-0005）。
  */
 

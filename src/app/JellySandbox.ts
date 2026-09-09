@@ -13,14 +13,14 @@
  * picking／算繪都吃 `cameraState.transform`——相機平移／縮放後仍命中正確的表面點。
  *
  * **拖放匯入**：`DropImportInput`（薄的接線層，對照 `PointerInput`/`CameraInput`）
- * 挑出拖放的 PNG 檔案、讀成位元組後回呼 `importPng` → `buildSimMesh` → 換一套新的
+ * 挑出拖放的影像檔（png/jpeg/gif）、讀成位元組後回呼 `importImage` → `buildSimMesh` → 換一套新的
  * `SimCore` + `JellyRenderer`（拓撲變了、舊 Mesh geometry 沒法沿用）。新 Renderer
- * 先建好、確定成功了才拆舊的，畫面不會有空檔；解碼／建網格失敗（非圖片、壞檔）
- * 一律 `console.warn` 後放棄，不影響原本的 Jelly。匯入時把控制面板目前設定
- * （Softness、輕拍力道、Boundary 模式）重新套到新的 `SimCore`，面板不會顯示跟
- * 實際物理不一致的值。`importHint`（issue #12 追加）是常駐在角落的低調小字，
- * 提示「可以拖 PNG 進來」——`dropHint` 只在拖曳中才出現，沒有這個常駐提示的話
- * 使用者無從發現這個功能本身存在。
+ * 先建好、確定成功了才拆舊的，畫面不會有空檔；解碼／建網格失敗（非圖片、不支援
+ * 格式、壞檔）一律 `console.warn` ＋ 畫面上閃一行 `notice` 後放棄，不影響原本的
+ * Jelly。匯入時把控制面板目前設定（Softness、輕拍力道、Boundary 模式）重新套到
+ * 新的 `SimCore`，面板不會顯示跟實際物理不一致的值。`importHint`（issue #12 追加）
+ * 是常駐在角落的低調小字，提示「可以拖圖片進來」——`dropHint` 只在拖曳中才出現，
+ * 沒有這個常駐提示的話使用者無從發現這個功能本身存在。
  *
  * **控制面板**：`ControlPanel`（同樣是薄的 DOM 接線層）建 UI、回呼往外送；實際
  * 換算邏輯都在純函式模組——Softness 曲線見 `../sim/softness`，Walled 邊界範圍見
@@ -105,7 +105,13 @@ import {
   worldToScreen,
 } from '../camera';
 import { PointerInput, routeForPinMode } from '../input';
-import { buildSimMesh, DEFAULT_PARAMS, type SimMesh } from '../mesh';
+import {
+  buildSimMesh,
+  DEFAULT_PARAMS,
+  imageFormatToMime,
+  sniffImageFormat,
+  type SimMesh,
+} from '../mesh';
 import { JellyRenderer } from '../render';
 import {
   type Bbox,
@@ -151,6 +157,9 @@ import { computeWalledBounds } from './walledBounds';
 const CAMERA_MAX_DT = 0.1;
 /** 拖曳中疊在畫面上的提示層 class（樣式見 `style.css`）。 */
 const DROP_HINT_ACTIVE_CLASS = 'is-active';
+/** 匯入被拒／失敗提示（`jelly-notice`）顯示中的 class，以及自動隱藏的秒數。 */
+const NOTICE_VISIBLE_CLASS = 'is-visible';
+const NOTICE_DURATION_MS = 4000;
 /**
  * 輕拍力道滑桿的範圍；中點 = `DEFAULT_SIM_PARAMS.tapStrength`（6000）——同
  * `../sim/softness` 的理由，滑桿沒被動過時中點顯示的值要跟實際生效的一致。
@@ -219,6 +228,10 @@ export class JellySandbox {
   private readonly root: HTMLElement;
   private readonly dropHint: HTMLDivElement;
   private readonly importHint: HTMLDivElement;
+  /** 匯入被拒／失敗時，畫面上短暫顯示一行說明的浮層（見 `showNotice`）。 */
+  private readonly notice: HTMLDivElement;
+  /** `notice` 的自動隱藏計時器（`window.setTimeout` 的回傳值，0 = 沒有）。 */
+  private noticeTimer = 0;
 
   private cameraState: CameraState;
   /** `CameraInput` 逐事件塞入，主迴圈每幀取出餵 `updateCamera` 後清空。 */
@@ -298,10 +311,13 @@ export class JellySandbox {
     root.appendChild(this.dropHint);
     this.importHint = this.createImportHint();
     root.appendChild(this.importHint);
+    this.notice = this.createNotice();
+    root.appendChild(this.notice);
     this.dropImportInput = new DropImportInput(root, {
       onImport: this.onDropImport,
       onDragActiveChange: (active) =>
         this.dropHint.classList.toggle(DROP_HINT_ACTIVE_CLASS, active),
+      onReject: (message) => this.showNotice(message),
     });
 
     this.controlPanel = new ControlPanel({
@@ -400,6 +416,8 @@ export class JellySandbox {
     this.dropImportInput.destroy();
     this.dropHint.remove();
     this.importHint.remove();
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.notice.remove();
     this.controlPanel.destroy();
     this.pinMarkers.destroy();
     this.input.destroy();
@@ -903,29 +921,33 @@ export class JellySandbox {
   }
 
   /**
-   * `DropImportInput` 挑到 PNG 位元組後的回呼：`buildSimMesh` → 解碼貼圖 →
-   * 換掉整套 `SimCore` + `JellyRenderer`。任何一步失敗（非圖片、壞檔、貼圖
-   * 解碼失敗）都在這個共用 try/catch 裡 `console.warn` 後放棄，原本的 Jelly
-   * 不受影響（issue #12 驗收條件：「忽略、不崩」）。`importing` 擋掉重疊呼叫。
+   * `DropImportInput` 挑到影像位元組後的回呼：`buildSimMesh` → 解碼貼圖 →
+   * 換掉整套 `SimCore` + `JellyRenderer`。任何一步失敗（非圖片、不支援格式、
+   * 壞檔、貼圖解碼失敗）都在這個共用 try/catch 裡 `console.warn` 後放棄，原本的
+   * Jelly 不受影響（issue #12 / #55 驗收條件：「提示後略過、不崩」）。
+   * `importing` 擋掉重疊呼叫。
    */
-  private onDropImport = (pngBytes: Uint8Array): void => {
+  private onDropImport = (imageBytes: Uint8Array): void => {
     if (this.importing) return;
     this.importing = true;
-    this.importPng(pngBytes)
-      .catch((err: unknown) => console.warn('[jelly] PNG 匯入失敗，已略過', err))
+    this.importImage(imageBytes)
+      .catch((err: unknown) => {
+        console.warn('[jelly] 影像匯入失敗，已略過', err);
+        this.showNotice('這張圖片沒辦法變成果凍，已略過');
+      })
       .finally(() => {
         this.importing = false;
       });
   };
 
-  private async importPng(pngBytes: Uint8Array): Promise<void> {
+  private async importImage(imageBytes: Uint8Array): Promise<void> {
     // 網格解析度退路（issue #16）：上次 substep 降級以來還沒消化過，這次匯入改用
     // 較低的 targetParticleCount（見 REDUCED_TARGET_PARTICLE_COUNT、PerfMonitor）。
     const meshParams = this.perfMonitor.consumeMeshFallbackPending()
       ? { targetParticleCount: REDUCED_TARGET_PARTICLE_COUNT }
       : {};
-    const mesh: SimMesh = buildSimMesh(pngBytes, meshParams);
-    const texture = await decodeTextureImage(pngBytes);
+    const mesh: SimMesh = buildSimMesh(imageBytes, meshParams);
+    const texture = await decodeTextureImage(imageBytes);
     await this.replaceJelly(mesh, texture);
   }
 
@@ -1025,14 +1047,37 @@ export class JellySandbox {
 
   /**
    * 常駐的匯入提示（issue #12 追加）——`jelly-drop-hint` 只在拖曳中才顯示，
-   * 使用者不會知道「拖 PNG 進來可以匯入」這個功能本身存在。低調小字放在角落，
+   * 使用者不會知道「拖圖片進來可以匯入」這個功能本身存在。低調小字放在角落，
    * 不擋任何操作、拖曳時會被上面的 `jelly-drop-hint` 蓋住。
    */
   private createImportHint(): HTMLDivElement {
     const hint = document.createElement('div');
     hint.className = 'jelly-import-hint';
-    hint.textContent = '拖曳一張帶透明背景的 PNG 到畫面上以匯入';
+    hint.textContent = '拖曳一張圖片（PNG / JPEG / GIF）到畫面上以匯入';
     return hint;
+  }
+
+  /**
+   * 匯入被拒／失敗時的畫面提示（issue #55 檢視追加）——`console.warn` 只有開
+   * DevTools 才看得到，使用者拖了不支援的檔案會不知道發生什麼事。置頂置中一行、
+   * `aria-live` 讓螢幕報讀器也讀得到，幾秒後自動淡出。
+   */
+  private createNotice(): HTMLDivElement {
+    const el = document.createElement('div');
+    el.className = 'jelly-notice';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    return el;
+  }
+
+  private showNotice(message: string): void {
+    this.notice.textContent = message;
+    this.notice.classList.add(NOTICE_VISIBLE_CLASS);
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => {
+      this.notice.classList.remove(NOTICE_VISIBLE_CLASS);
+      this.noticeTimer = 0;
+    }, NOTICE_DURATION_MS);
   }
 
   private frame = (nowMs: number): void => {
@@ -1179,10 +1224,15 @@ function lastEventStep(steps: Track): number {
   return steps[steps.length - 1]?.atStep ?? 0;
 }
 
-/** PNG 位元組 → `HTMLImageElement`（Renderer 的貼圖來源）。走 Blob URL，載入完即釋放。 */
-function decodeTextureImage(pngBytes: Uint8Array): Promise<HTMLImageElement> {
+/**
+ * 影像位元組 → `HTMLImageElement`（Renderer 的貼圖來源）。走 Blob URL，載入完即釋放。
+ * Blob 的 MIME 依實際格式（png/jpeg/gif）給——瀏覽器 `<img>` 原生支援三者；動畫
+ * GIF 由瀏覽器取第一幀當靜圖，跟 mesh 端 `decodeGifAlpha` 一致（issue #55）。
+ */
+function decodeTextureImage(imageBytes: Uint8Array): Promise<HTMLImageElement> {
+  const mime = imageFormatToMime(sniffImageFormat(imageBytes));
   return new Promise((resolve, reject) => {
-    const blob = new Blob([pngBytes as BlobPart], { type: 'image/png' });
+    const blob = new Blob([imageBytes as BlobPart], { type: mime });
     const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {

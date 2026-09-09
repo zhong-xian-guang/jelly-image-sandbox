@@ -82,6 +82,33 @@ body {
   pointer-events: none;
 }
 
+/**
+ * 匯入被拒／失敗的短暫提示（issue #55 檢視追加）：拖了不支援的格式或壞檔時，
+ * `console.warn` 使用者看不到——這裡置頂置中閃一行，幾秒後由 JS 移除 `.is-visible`
+ * 觸發淡出。預設 `opacity:0` + `pointer-events:none`，不擋任何操作。
+ */
+.jelly-notice {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 11;
+  max-width: 80%;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: rgba(180, 50, 40, 0.92);
+  color: #fff;
+  font-size: 0.9rem;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.jelly-notice.is-visible {
+  opacity: 1;
+}
+
 /** 玩家控制面板（issue #14 / T13）：疊在畫布左上角，`position:absolute` + `z-index`。 */
 .jelly-control-panel {
   position: absolute;

@@ -1,5 +1,5 @@
 /**
- * Mesh pipeline 的型別。管線是純函式、決定性的：`buildSimMesh(pngBytes, params)`
+ * Mesh pipeline 的型別。管線是純函式、決定性的：`buildSimMesh(imageBytes, params)`
  * 對同一組輸入永遠回傳深度相等的 `SimMesh`（見 GitHub issue #3 / ADR-0002、ADR-0005）。
  */
 

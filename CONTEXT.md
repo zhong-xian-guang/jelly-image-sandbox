@@ -1,6 +1,6 @@
 # 果凍沙盒（Jelly Sandbox）
 
-一個物理模擬的網頁沙盒小遊戲：使用者匯入一張帶 alpha 的 PNG，其不透明區域變成一塊可抓取、拖曳、甩動、回彈的柔體，最終以靜態網站包發佈到 itch.io。本檔是詞彙表，只定義專案特有的用語，不含實作細節。
+一個物理模擬的網頁沙盒小遊戲：使用者匯入一張圖片（PNG / JPEG / GIF），其不透明區域變成一塊可抓取、拖曳、甩動、回彈的柔體，最終以靜態網站包發佈到 itch.io。本檔是詞彙表，只定義專案特有的用語，不含實作細節。
 
 ## Language
 
@@ -65,7 +65,7 @@ _Avoid_: wall、container、bounds、桌面
 _Avoid_: viewport、view、視角
 
 **Alpha mask（Alpha 遮罩）**：
-從匯入 PNG 的 alpha 通道取得的「不透明／透明」二值圖。
+從匯入影像取得的「不透明／透明」二值圖。匯入接受 PNG / JPEG / GIF（見 ADR-0009）：PNG 取 alpha 通道；JPEG 沒有 alpha → 整張矩形都不透明（整張照片變一塊矩形果凍）；GIF 取第一幀，palette 的透明索引 → 透明。
 _Avoid_: silhouette、stencil、剪影
 
 **Contour（輪廓）**：
