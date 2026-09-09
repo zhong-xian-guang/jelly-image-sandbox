@@ -19,7 +19,7 @@
  * 一律 `console.warn` 後放棄，不影響原本的 Jelly。匯入時把控制面板目前設定
  * （Softness、輕拍力道、Boundary 模式）重新套到新的 `SimCore`，面板不會顯示跟
  * 實際物理不一致的值。`importHint`（issue #12 追加）是常駐在角落的低調小字，
- * 提示「可以拖 PNG 進來」——`dropHint` 只在拖曳中才出現，沒有這個常駐提示的話
+ * 提示「可以拖圖片進來」——`dropHint` 只在拖曳中才出現，沒有這個常駐提示的話
  * 使用者無從發現這個功能本身存在。
  *
  * **控制面板**：`ControlPanel`（同樣是薄的 DOM 接線層）建 UI、回呼往外送；實際
@@ -1032,13 +1032,13 @@ export class JellySandbox {
 
   /**
    * 常駐的匯入提示（issue #12 追加）——`jelly-drop-hint` 只在拖曳中才顯示，
-   * 使用者不會知道「拖 PNG 進來可以匯入」這個功能本身存在。低調小字放在角落，
+   * 使用者不會知道「拖圖片進來可以匯入」這個功能本身存在。低調小字放在角落，
    * 不擋任何操作、拖曳時會被上面的 `jelly-drop-hint` 蓋住。
    */
   private createImportHint(): HTMLDivElement {
     const hint = document.createElement('div');
     hint.className = 'jelly-import-hint';
-    hint.textContent = '拖曳一張帶透明背景的 PNG 到畫面上以匯入';
+    hint.textContent = '拖曳一張圖片（PNG / JPEG / GIF）到畫面上以匯入';
     return hint;
   }
 

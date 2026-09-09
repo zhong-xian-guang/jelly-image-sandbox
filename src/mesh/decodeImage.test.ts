@@ -1,6 +1,3 @@
-import { encode as encodePng } from 'fast-png';
-import { encode as encodeJpeg } from 'jpeg-js';
-import { GifWriter } from 'omggif';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -12,41 +9,7 @@ import {
   sniffImageFormat,
 } from './decodeImage';
 import { MeshPipelineError } from './errors';
-
-/** predicate → RGBA PNG（不透明 alpha 255、透明 alpha 0）。 */
-function pngFrom(w: number, h: number, opaque: (x: number, y: number) => boolean): Uint8Array {
-  const data = new Uint8Array(w * h * 4);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      data[i] = 10;
-      data[i + 1] = 20;
-      data[i + 2] = 30;
-      data[i + 3] = opaque(x, y) ? 255 : 0;
-    }
-  }
-  return encodePng({ width: w, height: h, data, channels: 4, depth: 8 });
-}
-
-/** predicate → GIF（palette 索引 0 透明、1 不透明）。 */
-function gifFrom(w: number, h: number, opaque: (x: number, y: number) => boolean): Uint8Array {
-  const palette = [0x000000, 0x3c78c8];
-  const indexed = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) indexed[y * w + x] = opaque(x, y) ? 1 : 0;
-  }
-  const buf = new Uint8Array(w * h + 4096);
-  const gw = new GifWriter(buf, w, h, { palette });
-  gw.addFrame(0, 0, w, h, indexed, { transparent: 0 });
-  return buf.subarray(0, gw.end());
-}
-
-/** 全不透明 JPEG。 */
-function jpegFrom(w: number, h: number): Uint8Array {
-  const data = new Uint8Array(w * h * 4).fill(128);
-  for (let i = 0; i < w * h; i++) data[i * 4 + 3] = 255;
-  return Uint8Array.from(encodeJpeg({ width: w, height: h, data }, 85).data);
-}
+import { disc, gifFrom, jpegFrom, pngFrom } from './testFixtures';
 
 const leftHalf = (w: number) => (x: number) => x < w / 2;
 
@@ -110,7 +73,7 @@ describe('decodeImageAlpha — 格式分派', () => {
   });
 
   it('同一形狀的 PNG 與 GIF → alpha 平面逐位元組相等', () => {
-    const shape = (x: number, y: number) => (x - 10) ** 2 + (y - 8) ** 2 <= 36;
+    const shape = disc(10, 8, 6);
     const fromPng = decodeImageAlpha(pngFrom(24, 18, shape));
     const fromGif = decodeImageAlpha(gifFrom(24, 18, shape));
     expect(fromGif.alpha).toEqual(fromPng.alpha);

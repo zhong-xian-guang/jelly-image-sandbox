@@ -12,5 +12,9 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
+    // Mesh pipeline 的測試（buildSimMesh / refine）跑真正的 CDT + Ruppert 細化，
+    // 單一 case 可達 1–2 秒；在 CPU 吃緊的機器上，vitest 平行 worker 的競用會把
+    // 預設 5 秒 timeout 逼到偶發誤判。放寬到 20 秒（實際跑完仍遠低於此）。
+    testTimeout: 20000,
   },
 });

@@ -1,65 +1,9 @@
-import { encode } from 'fast-png';
-import { encode as encodeJpeg } from 'jpeg-js';
-import { GifWriter } from 'omggif';
 import { describe, expect, it } from 'vitest';
 
 import { buildSimMesh, MeshPipelineError } from './buildSimMesh';
 import { triangleMinAngleDeg, triangleSignedArea, triVerts } from './geometry';
+import { disc, gifFrom, jpegFrom, pngFrom } from './testFixtures';
 import type { SimMesh } from './types';
-
-/** 用 predicate（不透明與否）畫一張 RGBA PNG。 */
-function pngFrom(
-  width: number,
-  height: number,
-  opaque: (x: number, y: number) => boolean,
-): Uint8Array {
-  const data = new Uint8Array(width * height * 4);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4;
-      const on = opaque(x, y);
-      data[i] = 200;
-      data[i + 1] = 120;
-      data[i + 2] = 60;
-      data[i + 3] = on ? 255 : 0;
-    }
-  }
-  return encode({ width, height, data, channels: 4, depth: 8 });
-}
-
-/** 同樣的 predicate 畫成 GIF（palette 索引 0 = 透明、1 = 不透明色）。 */
-function gifFrom(
-  width: number,
-  height: number,
-  opaque: (x: number, y: number) => boolean,
-): Uint8Array {
-  const palette = [0x000000, 0xc8783c];
-  const indexed = new Uint8Array(width * height);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) indexed[y * width + x] = opaque(x, y) ? 1 : 0;
-  }
-  const buf = new Uint8Array(width * height + 4096);
-  const gw = new GifWriter(buf, width, height, { palette });
-  gw.addFrame(0, 0, width, height, indexed, { transparent: 0 });
-  return buf.subarray(0, gw.end());
-}
-
-/** 一張全不透明的 JPEG（JPEG 沒有 alpha 通道）。 */
-function jpegFrom(width: number, height: number): Uint8Array {
-  const data = new Uint8Array(width * height * 4);
-  for (let i = 0; i < width * height; i++) {
-    data[i * 4] = 200;
-    data[i * 4 + 1] = 120;
-    data[i * 4 + 2] = 60;
-    data[i * 4 + 3] = 255;
-  }
-  return Uint8Array.from(encodeJpeg({ width, height, data }, 90).data);
-}
-
-const disc =
-  (cx: number, cy: number, r: number) =>
-  (x: number, y: number): boolean =>
-    (x - cx) ** 2 + (y - cy) ** 2 <= r * r;
 
 function vertexBBox(mesh: SimMesh) {
   let minX = Infinity;

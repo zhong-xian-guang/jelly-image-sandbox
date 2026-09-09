@@ -26,6 +26,12 @@ export interface DecodedAlpha {
   alpha: Uint8Array;
 }
 
+/**
+ * `jpeg-js` 的解析度上限（百萬像素）。預設 100，遠高於任何拿來當果凍的圖，只當
+ * 「圖大到不合理就丟錯而非吃光記憶體」的保險（見 issue #55「丟錯而非回垃圾」）。
+ */
+const JPEG_MAX_RESOLUTION_MP = 100;
+
 export type ImageFormat = 'png' | 'jpeg' | 'gif';
 
 function toUint8(bytes: Uint8Array | ArrayBuffer): Uint8Array {
@@ -141,10 +147,13 @@ export function decodePngAlpha(bytes: Uint8Array | ArrayBuffer): DecodedAlpha {
  * 解碼 JPEG 並回傳「整張矩形都不透明」的 alpha 平面。JPEG 沒有 alpha 通道，
  * 所以匯入 JPEG＝整張照片變成一塊矩形果凍（見 issue #55 驗收條件）。
  */
-export function decodeJpegAlpha(bytes: Uint8Array): DecodedAlpha {
+export function decodeJpegAlpha(bytes: Uint8Array | ArrayBuffer): DecodedAlpha {
   let img: { width: number; height: number };
   try {
-    img = decodeJpeg(bytes, { useTArray: true, maxResolutionInMP: 100 });
+    img = decodeJpeg(toUint8(bytes), {
+      useTArray: true,
+      maxResolutionInMP: JPEG_MAX_RESOLUTION_MP,
+    });
   } catch (err) {
     throw new MeshPipelineError(`JPEG 解碼失敗：${(err as Error).message}`);
   }
@@ -158,10 +167,10 @@ export function decodeJpegAlpha(bytes: Uint8Array): DecodedAlpha {
  * 解碼 GIF 的**第一幀**並取出 alpha 平面（動畫 GIF 當靜圖用）。palette 的透明索引
  * 對應到 alpha 0、其餘 255；第一幀矩形外（GIF 邏輯畫布較大時）也算透明。
  */
-export function decodeGifAlpha(bytes: Uint8Array): DecodedAlpha {
+export function decodeGifAlpha(bytes: Uint8Array | ArrayBuffer): DecodedAlpha {
   let reader: GifReader;
   try {
-    reader = new GifReader(bytes);
+    reader = new GifReader(toUint8(bytes));
   } catch (err) {
     throw new MeshPipelineError(`GIF 解碼失敗：${(err as Error).message}`);
   }

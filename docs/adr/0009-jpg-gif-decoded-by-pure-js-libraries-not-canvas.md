@@ -1,6 +1,6 @@
 # jpg / gif 匯入用純 JS 解碼函式庫，不走瀏覽器 canvas
 
-匯入接受 png / jpeg / gif（見 issue #53 / #55）。三種格式的 **alpha 平面**都由純 JS 函式庫在 mesh pipeline 內解碼：PNG → `fast-png`（既有）、JPEG → `jpeg-js`（MIT）、GIF → `omggif`（MIT）。`src/mesh/decodeImage.ts` 的新對外函式 `decodeImageAlpha(imageBytes)` 嗅探 magic bytes（`89 50 4E 47` / `FF D8 FF` / `47 49 46 38`）分派；未知 magic 丟既有的 `MeshPipelineError`，呼叫端沿用「`console.warn` 後安靜略過、不動現有果凍」。
+匯入接受 png / jpeg / gif（見 issue #53 / #55）。三種格式的 **alpha 平面**都由純 JS 函式庫在 mesh pipeline 內解碼：PNG → `fast-png`（MIT，既有）、JPEG → `jpeg-js`（BSD-3-Clause）、GIF → `omggif`（MIT）。（issue #55 內文誤記 `jpeg-js` 為 MIT，實際是 BSD-3-Clause——同屬寬鬆授權，可自由散布進 itch.io 靜態包，不在 CLAUDE.md 禁用清單所針對的 GPL／AGPL／付費商業散布之列。）`src/mesh/decodeImage.ts` 的新對外函式 `decodeImageAlpha(imageBytes)` 嗅探 magic bytes（`89 50 4E 47` / `FF D8 FF` / `47 49 46 38`）分派；未知 magic 丟既有的 `MeshPipelineError`，呼叫端沿用「`console.warn` 後安靜略過、不動現有果凍」。
 
 **不**用瀏覽器 canvas（`createImageBitmap` / `<img>` + `drawImage` + `getImageData`）取 alpha。
 
@@ -23,7 +23,7 @@ mesh pipeline 的核心性質是「純函式、決定性、可在 vitest 無頭�
 
 ## Consequences
 
-- `dependencies` 新增 `jpeg-js`、`omggif`（皆 MIT、純 JS、體積小、無 canvas 相依）。`omggif` 無自帶型別，最小簽章補在 `src/mesh/vendor.d.ts`。
+- `dependencies` 新增 `jpeg-js`（BSD-3-Clause）、`omggif`（MIT）——皆純 JS、體積小、無 canvas 相依。`omggif` 無自帶型別，最小簽章補在 `src/mesh/vendor.d.ts`；`jpeg-js` 自帶 `index.d.ts`。
 - `MeshPipelineError` 從 `buildSimMesh.ts` 移到 `src/mesh/errors.ts`（`buildSimMesh` 仍 re-export，對外介面不變），避免 `buildSimMesh` ↔ `decodeImage` 互相 import。
 - webp / avif / bmp / svg 等其他格式**仍不支援**：magic 不符 → `MeshPipelineError` → 沿用現有「警告後忽略」。日後要加，得評估對應的純 JS 解碼函式庫，或重新檢視本 ADR。
 - JPEG 沒有 alpha → 整張矩形變一塊果凍；GIF 取第一幀（含透明索引 → 挖空透明區）。這是預期行為，不是缺陷。
