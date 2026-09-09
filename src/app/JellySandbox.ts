@@ -111,6 +111,7 @@ import {
   type Bbox,
   type BoundaryMode,
   InfiniteBoundary,
+  type Point,
   SimCore,
   softnessToParams,
   WalledBoundary,
@@ -259,7 +260,7 @@ export class JellySandbox {
    *（`setupPinsTrack`）排在 `mergeTracks` 輸入最前面，於 step 0 一次還原。生命週期
    * 比照 `tracks`：`停止／重設` 保留、重新匯入 PNG 清空（座標對舊網格沒意義）。
    */
-  private setupPins: { x: number; y: number }[] = [];
+  private setupPins: Point[] = [];
   /**
    * Track 群組清單（issue #43 / V2 T1-8，見 ADR-0008）——`groups[0]` 永遠是預設
    * 群組（`DEFAULT_GROUP_ID`、不可刪、新錄好的 Track 自動加入）。生命週期比照
@@ -545,8 +546,9 @@ export class JellySandbox {
    */
   private snapshotSetupPins(): void {
     this.setupPins = this.sim.listPins().flatMap((pin) => {
+      // `restAttachPoint` 回傳全新的 `Point`；作用中的 Pin 必有約束，`null` 只是防呆。
       const rest = this.sim.restAttachPoint(pin.id);
-      return rest ? [{ x: rest.x, y: rest.y }] : [];
+      return rest ? [rest] : [];
     });
     this.syncPanelTracks();
   }

@@ -418,7 +418,7 @@ export class ControlPanel {
    * （維持「至少一條 Action Track」）。文字沒變不寫 DOM。
    */
   setSetupPinCount(count: number): void {
-    const text = `片段初始 Pin：${count} 個`;
+    const text = setupPinCountText(count);
     if (this.setupPinsCountEl.textContent === text) return;
     this.setupPinsCountEl.textContent = text;
   }
@@ -810,7 +810,7 @@ export class ControlPanel {
 
     const countEl = document.createElement('span');
     countEl.className = 'jelly-setup-pins-count';
-    countEl.textContent = '片段初始 Pin：0 個';
+    countEl.textContent = setupPinCountText(0);
 
     const snapshotButton = document.createElement('button');
     snapshotButton.type = 'button';
@@ -1021,4 +1021,9 @@ export class ControlPanel {
 /** 面板上顯示秒數的統一格式（兩位小數）——播放讀出與 Track 列「錄到 X–Y 秒」共用。 */
 function formatSeconds(seconds: number): string {
   return seconds.toFixed(2);
+}
+
+/** 「片段初始 Pin：N 個」讀出文字（issue #39）——初始渲染與 `setSetupPinCount` 共用，前綴字串只留一份。 */
+function setupPinCountText(count: number): string {
+  return `片段初始 Pin：${count} 個`;
 }
