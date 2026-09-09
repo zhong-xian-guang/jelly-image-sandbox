@@ -8,7 +8,7 @@
  * 用布林旗標會在中途誤判「已離開」）判斷真的離開時才關掉提示。
  */
 
-import { selectSupportedImageFile } from './dropImport';
+import { readSelectedImageFile } from './dropImport';
 
 export interface DropImportInputOptions {
   /** 挑到支援的影像檔並讀成位元組後呼叫。 */
@@ -72,24 +72,12 @@ export class DropImportInput {
     this.dragDepth = 0;
     this.opts.onDragActiveChange(false);
 
-    const files = ev.dataTransfer?.files;
-    const file = selectSupportedImageFile(files);
-    if (!file) {
-      // 真的拖了檔案、只是格式不支援（webp/avif/bmp…）→ 主控台一行警告 + 畫面提示後略過
-      // （issue #55 驗收條件：「畫面無變化、主控台一行警告、原本的果凍不受影響」）。
-      // 純文字／連結拖曳沒有 files，不吭聲。
-      if (files && files.length > 0) {
-        console.warn('[jelly] 拖進來的檔案不是支援的圖片格式（僅支援 PNG / JPEG / GIF），已略過');
-        this.opts.onReject?.('不支援這個格式，請改用 PNG / JPEG / GIF 圖片');
-      }
-      return;
-    }
-    file
-      .arrayBuffer()
-      .then((buf) => this.opts.onImport(new Uint8Array(buf)))
-      .catch((err: unknown) => {
-        console.warn('[jelly] 讀取拖放檔案失敗，已略過', err);
-        this.opts.onReject?.('這個檔案讀不進來，已略過');
-      });
+    // 挑檔 → 讀位元組 → 回呼的尾段與「匯入圖片」按鈕共用（`readSelectedImageFile`）：
+    // 拖了不支援格式（webp/avif/bmp…）→ 主控台一行警告 + `onReject`（issue #55）；
+    // 純文字／連結拖曳沒有 files，靜默略過。
+    readSelectedImageFile(ev.dataTransfer?.files, {
+      onImport: this.opts.onImport,
+      onReject: this.opts.onReject,
+    });
   };
 }

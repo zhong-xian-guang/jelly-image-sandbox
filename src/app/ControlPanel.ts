@@ -129,7 +129,8 @@ export interface ControlPanelOptions {
   demos: readonly DemoMenuItem[];
   /**
    * 「匯入圖片」按鈕被按（issue #56 / V2 T2-3）——開瀏覽器原生檔案選擇器，選到的圖
-   * 走跟拖放匯入完全相同的後續路徑。角落常駐提示字的點擊也接同一個回呼。
+   * 走跟拖放匯入完全相同的後續路徑。（角落常駐提示字點擊也開同一個選擇器，但那條
+   * 由 `JellySandbox` 直接接在提示字元素上，不經這個回呼。）
    */
   onImportImage: () => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
