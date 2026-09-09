@@ -38,6 +38,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onRecordTargetChange: vi.fn(),
     onToggleRecording: vi.fn(),
     onPlayAll: vi.fn(),
+    onSnapshotSetupPins: vi.fn(),
+    onClearSetupPins: vi.fn(),
     onAddGroup: vi.fn(),
     onGroupEnabledChange: vi.fn(),
     onGroupRename: vi.fn(),
@@ -210,5 +212,59 @@ describe('ControlPanel — 依群組分區的 Track 清單（issue #43）', () =
     panel.setGroups(groupRows());
     const [, g1Sec] = sections();
     expect([...g1Sec!.querySelectorAll('.jelly-track-row')]).toHaveLength(1);
+  });
+});
+
+describe('ControlPanel — 片段初始 Pin 列（issue #39）', () => {
+  let panel: ControlPanel;
+  let opts: ControlPanelOptions;
+
+  beforeEach(() => {
+    opts = makeOptions();
+    panel = new ControlPanel(opts);
+  });
+
+  function setupRow(): HTMLElement {
+    return panel.element.querySelector('.jelly-setup-pins-row') as HTMLElement;
+  }
+  function buttons(): HTMLButtonElement[] {
+    return [...setupRow().querySelectorAll('button')] as HTMLButtonElement[];
+  }
+  function countText(): string {
+    return setupRow().querySelector('.jelly-setup-pins-count')!.textContent ?? '';
+  }
+
+  it('預設顯示「片段初始 Pin：0 個」＋兩顆鈕', () => {
+    expect(countText()).toBe('片段初始 Pin：0 個');
+    expect(buttons().map((b) => b.textContent)).toEqual(['設為目前 Pin', '清除']);
+  });
+
+  it('setSetupPinCount 更新數字', () => {
+    panel.setSetupPinCount(2);
+    expect(countText()).toBe('片段初始 Pin：2 個');
+    panel.setSetupPinCount(0);
+    expect(countText()).toBe('片段初始 Pin：0 個');
+  });
+
+  it('兩顆鈕點下 → 對應回呼', () => {
+    const [snapshot, clear] = buttons();
+    snapshot!.click();
+    clear!.click();
+    expect(opts.onSnapshotSetupPins).toHaveBeenCalledTimes(1);
+    expect(opts.onClearSetupPins).toHaveBeenCalledTimes(1);
+  });
+
+  it('錄製中 / 播放中 → 兩顆鈕變灰，結束後解鎖（不受 Track 數量影響）', () => {
+    expect(buttons().every((b) => !b.disabled)).toBe(true);
+
+    panel.setRecordingActive(true);
+    expect(buttons().every((b) => b.disabled)).toBe(true);
+    panel.setRecordingActive(false);
+    expect(buttons().every((b) => !b.disabled)).toBe(true);
+
+    panel.setPlaybackControlsEnabled(false);
+    expect(buttons().every((b) => b.disabled)).toBe(true);
+    panel.setPlaybackControlsEnabled(true);
+    expect(buttons().every((b) => !b.disabled)).toBe(true);
   });
 });

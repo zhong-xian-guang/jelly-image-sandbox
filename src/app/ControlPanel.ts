@@ -140,6 +140,10 @@ export interface ControlPanelOptions {
   onToggleRecording: () => void;
   /** 「▶ 播放」按鈕（issue #33；issue #43 改播「開啟中群組成員聯集」）——依起始時間疊加重播。 */
   onPlayAll: () => void;
+  /** 「片段初始 Pin：設為目前 Pin」被按（issue #39）——把畫面上所有 Pin 拍成片段初始快照。 */
+  onSnapshotSetupPins: () => void;
+  /** 「片段初始 Pin：清除」被按（issue #39）——清空快照。 */
+  onClearSetupPins: () => void;
   /** 「＋ 新增群組」被按（issue #43）。 */
   onAddGroup: () => void;
   /** 某群組的開啟／關閉勾選框被切換（issue #43）。 */
@@ -171,6 +175,14 @@ export class ControlPanel {
   private readonly recordButton: HTMLButtonElement;
   private readonly playAllButton: HTMLButtonElement;
   private readonly recordTargetSelect: HTMLSelectElement;
+  /**
+   * 「片段初始 Pin：N 個 ｜ 設為目前 Pin ｜ 清除」列（issue #39 / ADR-0007 追記）
+   * ——片段層級的狀態，不受 Track 數量影響。`setSetupPinCount` 更新數字；錄製中／
+   * 播放中兩顆鈕跟著 Track 清單編輯一起鎖住（見 `updateTrackControlsState`）。
+   */
+  private readonly setupPinsCountEl: HTMLElement;
+  private readonly setupPinsSnapshotButton: HTMLButtonElement;
+  private readonly setupPinsClearButton: HTMLButtonElement;
   /**
    * 「鎖定跟隨」勾選框（issue #36 追加把手）——`setFollowLocked` 讓 `JellySandbox`
    * 每幀把它同步到相機實際的 `followEnabled`，這樣相機軌播放（`setState` 硬切、
@@ -278,6 +290,11 @@ export class ControlPanel {
     this.recordButton = track.recordButton;
     this.playAllButton = track.playAllButton;
 
+    const setupPins = this.setupPinsRow(opts.onSnapshotSetupPins, opts.onClearSetupPins);
+    this.setupPinsCountEl = setupPins.countEl;
+    this.setupPinsSnapshotButton = setupPins.snapshotButton;
+    this.setupPinsClearButton = setupPins.clearButton;
+
     // 依群組分區的 Track 清單（issue #43）——群組標頭 + 底下該群組的成員卡片。
     this.groupedTracksEl = document.createElement('div');
     this.groupedTracksEl.className = 'jelly-grouped-tracks';
@@ -292,6 +309,7 @@ export class ControlPanel {
     panel.append(
       target.row,
       track.row,
+      setupPins.row,
       this.playbackStatusRow,
       this.groupedTracksEl,
       addGroup.row,
@@ -395,6 +413,17 @@ export class ControlPanel {
   }
 
   /**
+   * `JellySandbox` 在片段初始 Pin 快照變動後同步一次數量（issue #39）——「片段初始
+   * Pin：N 個」。片段層級狀態，不受 Track 數量影響，也不影響「▶ 播放」的可按條件
+   * （維持「至少一條 Action Track」）。文字沒變不寫 DOM。
+   */
+  setSetupPinCount(count: number): void {
+    const text = `片段初始 Pin：${count} 個`;
+    if (this.setupPinsCountEl.textContent === text) return;
+    this.setupPinsCountEl.textContent = text;
+  }
+
+  /**
    * 依 `playbackLocked` / `recording` / `trackCount` / `playableTrackCount` 重算
    * Track 區塊每個控制項的可用狀態，集中一處免得各方法各自漏掉一顆按鈕。
    * issue #43：群組區（`群組 ▾`、開關、名稱、獨奏、刪除、＋ 新增群組）在錄製中、
@@ -405,6 +434,9 @@ export class ControlPanel {
     // 錄製中「開始錄製」要保持可按（它此時是「停止錄製」）；只有播放中才鎖它。
     this.recordButton.disabled = this.playbackLocked;
     this.recordTargetSelect.disabled = busy;
+    // 片段初始 Pin 的兩顆鈕比照 Track 清單編輯：錄製中／播放中鎖住（issue #39）。
+    this.setupPinsSnapshotButton.disabled = busy;
+    this.setupPinsClearButton.disabled = busy;
     // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
     this.playAllButton.disabled = busy || this.trackCount === 0 || this.playableTrackCount === 0;
     this.addGroupButton.disabled = busy;
@@ -756,6 +788,44 @@ export class ControlPanel {
 
     row.append(recordButton, playAllButton);
     return { row, recordButton, playAllButton };
+  }
+
+  /**
+   * 「片段初始 Pin：N 個 ｜ 設為目前 Pin ｜ 清除」列（issue #39 / ADR-0007 追記）。
+   * 「設為目前 Pin」把畫面上所有 Pin 拍成片段初始快照（`播放全部` 於 step 0 還原）；
+   * 「清除」清空快照。可用狀態一律交給 `updateTrackControlsState`（錄製中／播放中鎖住）。
+   * 回傳個別節點讓建構子直接賦值給 `readonly` 欄位。
+   */
+  private setupPinsRow(
+    onSnapshot: () => void,
+    onClear: () => void,
+  ): {
+    row: HTMLElement;
+    countEl: HTMLElement;
+    snapshotButton: HTMLButtonElement;
+    clearButton: HTMLButtonElement;
+  } {
+    const row = document.createElement('div');
+    row.className = 'jelly-control-row jelly-setup-pins-row';
+
+    const countEl = document.createElement('span');
+    countEl.className = 'jelly-setup-pins-count';
+    countEl.textContent = '片段初始 Pin：0 個';
+
+    const snapshotButton = document.createElement('button');
+    snapshotButton.type = 'button';
+    snapshotButton.textContent = '設為目前 Pin';
+    snapshotButton.title = '把畫面上現在所有 Pin 拍成片段初始快照——「▶ 播放」時於 step 0 還原';
+    snapshotButton.addEventListener('click', onSnapshot);
+
+    const clearButton = document.createElement('button');
+    clearButton.type = 'button';
+    clearButton.textContent = '清除';
+    clearButton.title = '清空片段初始 Pin 快照';
+    clearButton.addEventListener('click', onClear);
+
+    row.append(countEl, snapshotButton, clearButton);
+    return { row, countEl, snapshotButton, clearButton };
   }
 
   /**

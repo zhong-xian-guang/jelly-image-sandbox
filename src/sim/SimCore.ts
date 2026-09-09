@@ -349,6 +349,19 @@ export class SimCore {
   }
 
   /**
+   * 某個 Grab／Pin 附著點在 **rest（初始網格）形狀** 下的世界座標——同一組三角形
+   * ＋重心座標，但套在 `rest` 而非目前變形後的 `pos` 上，所以不隨查詢當下的變形
+   * 而偏。片段初始 Pin 快照（issue #39 / ADR-0007 追記）靠它把「畫面上的 Pin」記
+   * 成一組跟 `sim.reset()` 後（位置回 rest）的果凍對齊的座標——播放全部在 step 0
+   * 還原這些 Pin 時才會精準落在原本的表面點。該 `id` 沒有作用中的約束時回傳 `null`。
+   */
+  restAttachPoint(id: PointerId): Point | null {
+    const c = this.constraints.get(id);
+    if (!c) return null;
+    return this.weightedPoint(c, this.rest);
+  }
+
+  /**
    * 目前所有作用中的 Pin：`id` + 附著點目前世界座標（隨網格變形移動）。畫 Pin
    * 標記、或「點掉特定 Pin」需要知道每個 Pin 現在在哪裡時用。
    */
@@ -433,12 +446,13 @@ export class SimCore {
     return true;
   }
 
-  private weightedPoint(g: Constraint): Point {
+  /** 附著點世界座標＝三角形頂點的重心座標加權；`buf` 預設目前位置，傳 `rest` 得靜止形狀下的座標。 */
+  private weightedPoint(g: Constraint, buf: Float64Array = this.pos): Point {
     const [i0, i1, i2] = g.tri;
     const [w0, w1, w2] = g.w;
     return {
-      x: w0 * this.pos[2 * i0]! + w1 * this.pos[2 * i1]! + w2 * this.pos[2 * i2]!,
-      y: w0 * this.pos[2 * i0 + 1]! + w1 * this.pos[2 * i1 + 1]! + w2 * this.pos[2 * i2 + 1]!,
+      x: w0 * buf[2 * i0]! + w1 * buf[2 * i1]! + w2 * buf[2 * i2]!,
+      y: w0 * buf[2 * i0 + 1]! + w1 * buf[2 * i1 + 1]! + w2 * buf[2 * i2 + 1]!,
     };
   }
 

@@ -6,6 +6,8 @@ import {
   cameraTrackGlobalRange,
   mergeTracks,
   overlappingCameraTrackIds,
+  SETUP_PIN_ID_PREFIX,
+  setupPinsTrack,
   type OverlayTrack,
 } from './overlay';
 
@@ -737,5 +739,81 @@ describe('mergeTracks', () => {
       },
       { startStep: 0, idPrefix: 'B/', steps: [{ atStep: 4, event: { type: 'tap', x: 2, y: 2 } }] },
     ]);
+  });
+});
+
+describe('setupPinsTrack（片段初始 Pin 合成軌，issue #39 / ADR-0007 追記）', () => {
+  it('每個 rest 座標 → 一個 atStep:0 的 pin 事件，id 為陣列序號', () => {
+    const track = setupPinsTrack([
+      { x: 10, y: 20 },
+      { x: 30, y: 40 },
+    ]);
+
+    expect(track.startStep).toBe(0);
+    expect(track.idPrefix).toBe(SETUP_PIN_ID_PREFIX);
+    expect(track.startCamera ?? null).toBeNull();
+    expect(track.steps).toEqual([
+      { atStep: 0, event: { type: 'pin', id: 0, x: 10, y: 20 } },
+      { atStep: 0, event: { type: 'pin', id: 1, x: 30, y: 40 } },
+    ]);
+  });
+
+  it('經 mergeTracks → 產出 atStep:0、id 帶 setup/ 前綴、各自獨立的 pin 事件序列', () => {
+    const merged = mergeTracks([
+      setupPinsTrack([
+        { x: 1, y: 2 },
+        { x: 3, y: 4 },
+      ]),
+    ]);
+
+    expect(merged).toEqual([
+      { atStep: 0, event: { type: 'pin', id: 'setup/0', x: 1, y: 2 } },
+      { atStep: 0, event: { type: 'pin', id: 'setup/1', x: 3, y: 4 } },
+    ]);
+  });
+
+  it('排在其他軌的 step-0 事件之前（先套佈景、再開演）', () => {
+    const action: OverlayTrack = {
+      startStep: 0,
+      idPrefix: 't1/',
+      steps: [
+        { atStep: 0, event: { type: 'grab', id: 'a', x: 5, y: 5 } },
+        { atStep: 3, event: { type: 'release', id: 'a' } },
+      ],
+    };
+
+    const merged = mergeTracks([setupPinsTrack([{ x: 1, y: 1 }]), action]);
+
+    expect(merged.map((s) => [s.atStep, s.event.type, (s.event as { id?: unknown }).id])).toEqual([
+      [0, 'pin', 'setup/0'],
+      [0, 'grab', 't1/a'],
+      [3, 'release', 't1/a'],
+    ]);
+  });
+
+  it('setup/ 前綴不撞 Action Track 的 t1/：同一表面點各錄一個 Pin 時兩者並存、不特判', () => {
+    const action: OverlayTrack = {
+      startStep: 0,
+      idPrefix: 't1/',
+      steps: [{ atStep: 120, event: { type: 'pin', id: 'p', x: 1, y: 1 } }],
+    };
+
+    const merged = mergeTracks([setupPinsTrack([{ x: 1, y: 1 }]), action]);
+
+    expect(merged).toEqual([
+      { atStep: 0, event: { type: 'pin', id: 'setup/0', x: 1, y: 1 } },
+      { atStep: 120, event: { type: 'pin', id: 't1/p', x: 1, y: 1 } },
+    ]);
+  });
+
+  it('空清單 → steps 為空的軌，mergeTracks 不貢獻任何事件', () => {
+    const track = setupPinsTrack([]);
+    expect(track.steps).toEqual([]);
+    expect(mergeTracks([track])).toEqual([]);
+  });
+
+  it('不是相機軌：mergeTracks 不為它插 setState 硬切', () => {
+    const merged = mergeTracks([setupPinsTrack([{ x: 0, y: 0 }])]);
+    expect(merged.every((s) => s.event.type !== 'setState')).toBe(true);
   });
 });

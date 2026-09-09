@@ -48,7 +48,7 @@
  */
 
 import type { CameraState } from '../../camera';
-import type { PointerId } from '../../sim';
+import type { Point, PointerId } from '../../sim';
 
 import type { DemoEvent, DemoStep } from './types';
 
@@ -128,6 +128,34 @@ export function overlappingCameraTrackIds(
 /** 把 `event` 的 `PointerId`（若有）加上 `prefix`；`tap`／相機指令沒有 `id`，原樣回傳。 */
 function withPrefixedId(event: DemoEvent, prefix: string): DemoEvent {
   return 'id' in event ? { ...event, id: `${prefix}${String(event.id)}` } : event;
+}
+
+/**
+ * 片段初始 Pin 合成軌（issue #39 / ADR-0007 追記）的 `PointerId` 前綴——`setup/`
+ * 天然不撞 Action Track 的 `t1/`、`t2/`…（`mergeTracks` 逐條套各自的 `idPrefix`），
+ * 所以「同一表面點既是初始 Pin、又被某條 Action Track 錄了一個 `pin`」時兩者是
+ * 各自獨立的約束、不特判。
+ */
+export const SETUP_PIN_ID_PREFIX = 'setup/';
+
+/**
+ * 把一組「片段初始 Pin」的 rest 形狀世界座標（`SimCore.restAttachPoint` 拍下）
+ * 組成一條合成 `OverlayTrack`：`startStep: 0`、`idPrefix: 'setup/'`、每個座標一個
+ * `atStep: 0` 的 `pin` 事件（`id` = 陣列序號，經 `mergeTracks` 前綴成 `setup/0`、
+ * `setup/1`…各自獨立）。`playAll` 把它排在 `mergeTracks` 輸入陣列**最前面**：step 0
+ * 又靠穩定排序排在所有動作／相機軌的 step-0 事件之前，於是「先套佈景、再開演」。
+ * 非相機軌（不帶 `startCamera` → `mergeTracks` 不插 `setState` 硬切），不套頭尾修剪。
+ * 空陣列回傳 `steps` 為空的軌，`mergeTracks` 不會為它產出任何事件。
+ */
+export function setupPinsTrack(restPoints: readonly Point[]): OverlayTrack {
+  return {
+    startStep: 0,
+    idPrefix: SETUP_PIN_ID_PREFIX,
+    steps: restPoints.map((p, i): DemoStep => ({
+      atStep: 0,
+      event: { type: 'pin', id: i, x: p.x, y: p.y },
+    })),
+  };
 }
 
 /** 一個世界座標點。 */

@@ -204,6 +204,13 @@ body {
   font-size: 0.72rem;
 }
 
+/** 「片段初始 Pin：N 個」讀出（issue #39）——低調小字，兩顆鈕推到列尾。 */
+.jelly-setup-pins-count {
+  flex: 1;
+  opacity: 0.8;
+  font-size: 0.78rem;
+}
+
 .jelly-track-row :disabled {
   opacity: 0.45;
   cursor: not-allowed;
