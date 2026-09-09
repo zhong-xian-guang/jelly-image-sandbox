@@ -11,12 +11,16 @@ import type { CameraCommand, CameraState, CameraTarget, CanvasSize } from './typ
 const CANVAS: CanvasSize = { width: 800, height: 600 };
 const CFG = DEFAULT_CAMERA_FOLLOW_CONFIG;
 
-/** Jelly 靜止在原點附近的目標（bbox 200×200、質心在原點）。 */
+/** Jelly 目標：bbox 中心在 `(cx, cy)`、邊長 `2·half`（預設 200×200）。 */
 function targetAt(cx: number, cy: number, half = 100): CameraTarget {
   return {
-    centroid: { x: cx, y: cy },
     bbox: { minX: cx - half, minY: cy - half, maxX: cx + half, maxY: cy + half },
   };
+}
+
+/** 明確給四個邊界——測不置中／不等邊（＝形狀不對稱）的 bbox。 */
+function targetBox(minX: number, minY: number, maxX: number, maxY: number): CameraTarget {
+  return { bbox: { minX, minY, maxX, maxY } };
 }
 
 /** 跑 `seconds` 秒模擬幀（60Hz），每幀可帶指令（預設無）。 */
@@ -63,7 +67,7 @@ describe('createCameraState', () => {
 });
 
 describe('updateCamera — 自動跟隨', () => {
-  it('Jelly 平移 → 相機平移分量單調朝質心收斂、不過衝（AC1）', () => {
+  it('Jelly 平移 → 相機平移分量單調朝 bbox 中心收斂、不過衝（AC1）', () => {
     const start = createCameraState(targetAt(0, 0), CANVAS);
     const target = targetAt(300, 0);
     let s = start;
@@ -78,6 +82,32 @@ describe('updateCamera — 自動跟隨', () => {
     expect(s.transform.x).toBeGreaterThan(280);
   });
 
+  it('不對稱形狀（bbox 不置中、不等邊）：靜置跟隨收斂到跟「框住果凍」完全相同的鏡位、不偏', () => {
+    // 質心 ≠ bbox 中心的情形（issue #48）——平移錨點若還是質心，跟隨會從初始
+    // 鏡位漂走，收斂到跟按「框住果凍」不一樣的地方。
+    const target = targetBox(-40, -300, 600, 100);
+    const fit = fitTransform(target.bbox, CANVAS);
+
+    // (a) 從已 fit 的初始狀態靜置跑 3s → 一步都不該動。
+    const rest = run(createCameraState(target, CANVAS), target, 3);
+    expect(rest.transform.x).toBeCloseTo(fit.x, 6);
+    expect(rest.transform.y).toBeCloseTo(fit.y, 6);
+    expect(rest.transform.scale).toBeCloseTo(fit.scale, 6);
+
+    // (b) 從被手動甩歪的鏡位起跑 → 收斂目標就是「框住果凍」的鏡位，不是質心。
+    const displaced = updateCamera(
+      createCameraState(target, CANVAS),
+      target,
+      CANVAS,
+      [{ type: 'panBy', dxScreen: 4000, dyScreen: -2500 }],
+      0,
+    );
+    const settled = run(displaced, target, 5);
+    expect(settled.transform.x).toBeCloseTo(fit.x, 3);
+    expect(settled.transform.y).toBeCloseTo(fit.y, 3);
+    expect(settled.transform.scale).toBeCloseTo(fit.scale, 3);
+  });
+
   it('用力甩遠（無限模式）→ 幾秒內追上，Jelly 不消失（AC2）', () => {
     const s0 = createCameraState(targetAt(0, 0), CANVAS);
     const far = targetAt(5000, -3000);
@@ -86,17 +116,18 @@ describe('updateCamera — 自動跟隨', () => {
     expect(s.transform.y).toBeCloseTo(-3000, -1);
   });
 
-  it('質心不動時相機停在 fit 上（靜置不漂移）', () => {
-    const target = targetAt(0, 0);
+  it('bbox 不動時相機停在 fit 上（靜置不漂移）', () => {
+    const target = targetBox(-40, -300, 600, 100); // 不置中、不等邊
     const s = run(createCameraState(target, CANVAS), target, 2);
     expect(s.transform).toEqual(fitTransform(target.bbox, CANVAS));
   });
 
-  it('質心突然跳很遠：跟隨落後也保證下一幀就頂住硬上限，不會整幀跑出畫面（AC1/AC2）', () => {
+  it('bbox 中心突然跳很遠：跟隨落後也保證下一幀就頂住硬上限，不會整幀跑出畫面（AC1/AC2）', () => {
     const s0 = createCameraState(targetAt(0, 0), CANVAS);
     const far = targetAt(20000, 0); // 遠超一幀 ease 追得上的距離
+    const farCenterX = fitTransform(far.bbox, CANVAS).x;
     const s = updateCamera(s0, far, CANVAS, [], 1 / 60);
-    const offXPx = Math.abs(far.centroid.x - s.transform.x) * s.transform.scale;
+    const offXPx = Math.abs(farCenterX - s.transform.x) * s.transform.scale;
     expect(offXPx).toBeLessThanOrEqual(CANVAS.width * CFG.keepInFrameFrac + 1e-6);
   });
 });
@@ -113,12 +144,12 @@ describe('updateCamera — 手動輸入暫停 / 回歸（AC3）', () => {
     // panBy 把閒置時鐘歸零；同幀只前進一個 dt
     expect(s.sinceManualSeconds).toBeLessThan(0.1);
 
-    // 暫停視窗內（~1.5s）：相機不朝質心跑，即使質心遠在硬上限之外
+    // 暫停視窗內（~1.5s）：相機不朝 bbox 中心跑，即使 Jelly 遠在硬上限之外
     s = run(s, moving, 1.5);
     expect(s.transform.x).toBeCloseTo(afterPanX, 6);
     expect(s.sinceManualSeconds).toBeLessThan(CFG.resumeDelaySeconds);
 
-    // 再過 ~2s：回歸自動跟隨，朝質心收斂
+    // 再過 ~2s：回歸自動跟隨，朝 bbox 中心收斂
     s = run(s, moving, 2.5);
     expect(s.sinceManualSeconds).toBe(CFG.resumeDelaySeconds);
     expect(s.transform.x).toBeGreaterThan(afterPanX + 50);
@@ -213,13 +244,13 @@ describe('updateCamera — 縮放對準定點（AC6）', () => {
 });
 
 describe('updateCamera — 鎖定跟隨（AC4）', () => {
-  it('鎖定時質心移動相機不動，手動仍生效', () => {
+  it('鎖定時 Jelly 移動相機不動，手動仍生效', () => {
     const target = targetAt(0, 0);
     let s = run(createCameraState(target, CANVAS), target, 1);
     s = updateCamera(s, target, CANVAS, [{ type: 'setFollow', enabled: false }], 1 / 60);
     const locked = { ...s.transform };
 
-    // 質心大幅移動、跑 3s → 相機文風不動
+    // Jelly 大幅移動、跑 3s → 相機文風不動
     s = run(s, targetAt(600, 400), 3);
     expect(s.transform.x).toBeCloseTo(locked.x, 6);
     expect(s.transform.y).toBeCloseTo(locked.y, 6);
@@ -263,7 +294,7 @@ describe('updateCamera — 框住果凍（AC5）', () => {
     expect(s.transform.scale).toBeCloseTo(fit.scale, 3);
     expect(s.framing).toBe(false);
 
-    // 恢復跟隨：質心移動 → 相機跟上
+    // 恢復跟隨：Jelly 移動 → 相機跟上
     s = run(s, targetAt(200, 0), 1.5);
     expect(s.transform.x).toBeGreaterThan(150);
   });
@@ -301,7 +332,7 @@ describe('updateCamera — 框住果凍（AC5）', () => {
     expect(s.framing).toBe(false);
     expect(s.followEnabled).toBe(false); // 到位後仍鎖定
 
-    // 鎖定著：質心移動，相機不該跟上（維持在 fit 的位置不動）
+    // 鎖定著：Jelly 移動，相機不該跟上（維持在 fit 的位置不動）
     s = run(s, targetAt(200, 0), 1.5);
     expect(s.transform.x).toBeCloseTo(fit.x, 3);
   });
@@ -339,7 +370,7 @@ describe('updateCamera — 絕對指令 setState（issue #36 / V2 T1-4）', () =
     expect(s).toEqual(SNAPSHOT);
   });
 
-  it('不平滑：即使 dt > 0 且質心遠在天邊，transform 仍精確等於快照（沒有 ease 分量）', () => {
+  it('不平滑：即使 dt > 0 且 Jelly 遠在天邊，transform 仍精確等於快照（沒有 ease 分量）', () => {
     const s0 = createCameraState(targetAt(0, 0), CANVAS);
     const s = updateCamera(
       s0,
@@ -353,7 +384,7 @@ describe('updateCamera — 絕對指令 setState（issue #36 / V2 T1-4）', () =
     expect(s.framing).toBe(false);
   });
 
-  it('硬切後下一幀照常從快照繼續（follow 沒關 → 恢復朝質心跟隨）', () => {
+  it('硬切後下一幀照常從快照繼續（follow 沒關 → 恢復朝 bbox 中心跟隨）', () => {
     const followingSnapshot: CameraState = { ...SNAPSHOT, followEnabled: true };
     const s0 = createCameraState(targetAt(0, 0), CANVAS);
     let s = updateCamera(

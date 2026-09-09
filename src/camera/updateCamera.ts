@@ -7,10 +7,12 @@
  * 決定性、無 DOM、不讀 wall-clock（同 ADR-0005 對求解器的要求，讓 v2 能錄放相機）。
  *
  * 行為：
- *  - **自動跟隨**：平移分量對 `target.centroid`、縮放對 `target.bbox` 的 zoom-to-fit
- *    做指數平滑（frame-rate 無關：`α = 1 − e^(−λ·dt)`）。追不上時（用力甩遠、bbox
- *    突然變大）有硬上限頂住，保證 Jelly 不會跑出畫面／被縮放裁掉（見
- *    `keepInFrameFrac`）——一般跟隨誤差遠小於此上限、不會觸發。
+ *  - **自動跟隨**：平移分量與縮放都對 `target.bbox` 的 zoom-to-fit（`fitTransform`：
+ *    bbox 中心 + 塞進畫布的 scale）做指數平滑（frame-rate 無關：`α = 1 − e^(−λ·dt)`）。
+ *    錨點跟「框住果凍」和匯入初始鏡位完全一致——跟隨靜置時會收斂到跟按一次「框住
+ *    果凍」相同的鏡位、不會因為 Jelly 形狀不對稱而偏掉（質心 ≠ bbox 中心）。追不上時
+ *    （用力甩遠、bbox 突然變大）有硬上限頂住，保證 Jelly 不會跑出畫面／被縮放裁掉
+ *    （見 `keepInFrameFrac`）——一般跟隨誤差遠小於此上限、不會觸發。
  *  - **手動平移／縮放**（`panBy` / `zoomBy`）：立即套用，並把 `sinceManualSeconds`
  *    歸零 → 暫停自動跟隨；閒置到 `resumeDelaySeconds` 後緩動回歸。
  *  - **鎖定跟隨**（`setFollow { enabled:false }`）：自動跟隨關，手動仍可動。
@@ -176,19 +178,22 @@ export function updateCamera(
     }
   } else if (followEnabled && sinceManual >= resumeDelaySeconds && step > 0) {
     const a = 1 - Math.exp(-followLambda * step);
-    x += (target.centroid.x - x) * a;
-    y += (target.centroid.y - y) * a;
+    // 平移與縮放同一個錨點：bbox 中心 + fit scale（= 匯入初始鏡位、也 = 「框住
+    // 果凍」的目標）。原本平移是對質心，Jelly 形狀不對稱時質心 ≠ bbox 中心，靜置
+    // 跟隨會從初始鏡位漂到質心、把 Jelly 一側推出畫面（縮放卻還是照 bbox 算）。
+    x += (fit.x - x) * a;
+    y += (fit.y - y) * a;
     scale += (fit.scale - scale) * a;
 
     // 縮放裁不到：bbox 已比目前畫面塞不下時立即跟上（不等 ease），跟丟就先看見全貌。
     if (scale > fit.scale) scale = fit.scale;
-    // 平移追不上：質心離畫面中心的距離頂住硬上限，甩多遠都不會把 Jelly 帶出畫面。
+    // 平移追不上：bbox 中心離畫面中心的距離頂住硬上限，甩多遠都不會把 Jelly 帶出畫面。
     const maxOffX = canvasSize.width * keepInFrameFrac;
     const maxOffY = canvasSize.height * keepInFrameFrac;
-    const offX = (target.centroid.x - x) * scale;
-    const offY = (target.centroid.y - y) * scale;
-    if (Math.abs(offX) > maxOffX) x = target.centroid.x - Math.sign(offX) * (maxOffX / scale);
-    if (Math.abs(offY) > maxOffY) y = target.centroid.y - Math.sign(offY) * (maxOffY / scale);
+    const offX = (fit.x - x) * scale;
+    const offY = (fit.y - y) * scale;
+    if (Math.abs(offX) > maxOffX) x = fit.x - Math.sign(offX) * (maxOffX / scale);
+    if (Math.abs(offY) > maxOffY) y = fit.y - Math.sign(offY) * (maxOffY / scale);
   }
 
   return {

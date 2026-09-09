@@ -361,7 +361,7 @@ export class JellySandbox {
     root.appendChild(renderer.canvas);
 
     const cameraState = createCameraState(
-      { centroid: sim.centroid(), bbox: sim.bbox() },
+      { bbox: sim.bbox() },
       {
         width: root.clientWidth,
         height: root.clientHeight,
@@ -676,10 +676,7 @@ export class JellySandbox {
     this.sim.reset();
     const hasCameraTrack = active.some((t) => t.kind === 'camera');
     if (hasCameraTrack) {
-      this.cameraState = createCameraState(
-        { centroid: this.sim.centroid(), bbox: this.sim.bbox() },
-        this.canvasSize(),
-      );
+      this.cameraState = createCameraState({ bbox: this.sim.bbox() }, this.canvasSize());
       this.cameraCommands = [];
     } else {
       this.cameraCommands.push({ type: 'frame' });
@@ -923,10 +920,7 @@ export class JellySandbox {
 
     this.sim = sim;
     this.renderer = renderer;
-    this.cameraState = createCameraState(
-      { centroid: sim.centroid(), bbox: sim.bbox() },
-      this.canvasSize(),
-    );
+    this.cameraState = createCameraState({ bbox: sim.bbox() }, this.canvasSize());
     this.cameraCommands = [];
     ({ input: this.input, cameraInput: this.cameraInput } = this.attachInputHandlers(
       renderer.canvas,
@@ -1028,7 +1022,7 @@ export class JellySandbox {
     this.cameraCommands = [];
     this.cameraState = updateCamera(
       this.cameraState,
-      { centroid: this.sim.centroid(), bbox: this.sim.bbox() },
+      { bbox: this.sim.bbox() },
       this.canvasSize(),
       cmds,
       clampedElapsed,
