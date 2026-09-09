@@ -1,8 +1,9 @@
 /**
  * Mesh pipeline 核心（T2 / GitHub issue #3）。
  *
- * `buildSimMesh(pngBytes, params)` 是純函式、決定性的：
- * 解碼 PNG → alpha 二值化 + 降採樣 → 取最大不透明連通元件 → 手刻 marching squares
+ * `buildSimMesh(imageBytes, params)` 是純函式、決定性的：
+ * 解碼影像（PNG / JPEG / GIF，見 `decodeImage`）→ alpha 二值化 + 降採樣 → 取最大
+ * 不透明連通元件 → 手刻 marching squares
  * 描輪廓 → Douglas–Peucker 簡化 → 有種子 PRNG 撒內部點 → `cdt2d` constrained
  * Delaunay → 自寫 Ruppert 品質細化 → 粗 sliver 清理 → 指定 UV → 凍結拓撲。
  *
@@ -15,7 +16,8 @@ import simplify from 'simplify-js';
 
 import { toDownsampledMask } from './alphaMask';
 import { largestOpaqueComponent } from './components';
-import { decodePngAlpha } from './decodeImage';
+import { decodeImageAlpha } from './decodeImage';
+import { MeshPipelineError } from './errors';
 import { countBadTriangles, signedPolygonArea, triangleSignedArea, triVerts } from './geometry';
 import { traceContours } from './marchingSquares';
 import { deriveSeed, mulberry32 } from './prng';
@@ -25,20 +27,15 @@ import { interiorSpacing, scatterInteriorPoints } from './steiner';
 import { triangulate, type MeshBuffers, type RawMesh } from './triangulate';
 import { DEFAULT_PARAMS, type BuildSimMeshParams, type Point, type SimMesh } from './types';
 
-export class MeshPipelineError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'MeshPipelineError';
-  }
-}
+export { MeshPipelineError } from './errors';
 
 export function buildSimMesh(
-  pngBytes: Uint8Array | ArrayBuffer,
+  imageBytes: Uint8Array | ArrayBuffer,
   params: Partial<BuildSimMeshParams> = {},
 ): SimMesh {
   const p: BuildSimMeshParams = { ...DEFAULT_PARAMS, ...params };
 
-  const { width: imgW, height: imgH, alpha } = decodePngAlpha(pngBytes);
+  const { width: imgW, height: imgH, alpha } = decodeImageAlpha(imageBytes);
   const mask = toDownsampledMask(alpha, imgW, imgH, p.maxMaskEdge, p.alphaThreshold);
 
   const { mask: solid, count } = largestOpaqueComponent(mask);

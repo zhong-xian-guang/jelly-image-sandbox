@@ -13,7 +13,7 @@
  * picking／算繪都吃 `cameraState.transform`——相機平移／縮放後仍命中正確的表面點。
  *
  * **拖放匯入**：`DropImportInput`（薄的接線層，對照 `PointerInput`/`CameraInput`）
- * 挑出拖放的 PNG 檔案、讀成位元組後回呼 `importPng` → `buildSimMesh` → 換一套新的
+ * 挑出拖放的影像檔（png/jpeg/gif）、讀成位元組後回呼 `importImage` → `buildSimMesh` → 換一套新的
  * `SimCore` + `JellyRenderer`（拓撲變了、舊 Mesh geometry 沒法沿用）。新 Renderer
  * 先建好、確定成功了才拆舊的，畫面不會有空檔；解碼／建網格失敗（非圖片、壞檔）
  * 一律 `console.warn` 後放棄，不影響原本的 Jelly。匯入時把控制面板目前設定
@@ -105,7 +105,13 @@ import {
   worldToScreen,
 } from '../camera';
 import { PointerInput, routeForPinMode } from '../input';
-import { buildSimMesh, DEFAULT_PARAMS, type SimMesh } from '../mesh';
+import {
+  buildSimMesh,
+  DEFAULT_PARAMS,
+  imageFormatToMime,
+  sniffImageFormat,
+  type SimMesh,
+} from '../mesh';
 import { JellyRenderer } from '../render';
 import {
   type Bbox,
@@ -903,29 +909,30 @@ export class JellySandbox {
   }
 
   /**
-   * `DropImportInput` 挑到 PNG 位元組後的回呼：`buildSimMesh` → 解碼貼圖 →
-   * 換掉整套 `SimCore` + `JellyRenderer`。任何一步失敗（非圖片、壞檔、貼圖
-   * 解碼失敗）都在這個共用 try/catch 裡 `console.warn` 後放棄，原本的 Jelly
-   * 不受影響（issue #12 驗收條件：「忽略、不崩」）。`importing` 擋掉重疊呼叫。
+   * `DropImportInput` 挑到影像位元組後的回呼：`buildSimMesh` → 解碼貼圖 →
+   * 換掉整套 `SimCore` + `JellyRenderer`。任何一步失敗（非圖片、不支援格式、
+   * 壞檔、貼圖解碼失敗）都在這個共用 try/catch 裡 `console.warn` 後放棄，原本的
+   * Jelly 不受影響（issue #12 / #55 驗收條件：「提示後略過、不崩」）。
+   * `importing` 擋掉重疊呼叫。
    */
-  private onDropImport = (pngBytes: Uint8Array): void => {
+  private onDropImport = (imageBytes: Uint8Array): void => {
     if (this.importing) return;
     this.importing = true;
-    this.importPng(pngBytes)
-      .catch((err: unknown) => console.warn('[jelly] PNG 匯入失敗，已略過', err))
+    this.importImage(imageBytes)
+      .catch((err: unknown) => console.warn('[jelly] 影像匯入失敗，已略過', err))
       .finally(() => {
         this.importing = false;
       });
   };
 
-  private async importPng(pngBytes: Uint8Array): Promise<void> {
+  private async importImage(imageBytes: Uint8Array): Promise<void> {
     // 網格解析度退路（issue #16）：上次 substep 降級以來還沒消化過，這次匯入改用
     // 較低的 targetParticleCount（見 REDUCED_TARGET_PARTICLE_COUNT、PerfMonitor）。
     const meshParams = this.perfMonitor.consumeMeshFallbackPending()
       ? { targetParticleCount: REDUCED_TARGET_PARTICLE_COUNT }
       : {};
-    const mesh: SimMesh = buildSimMesh(pngBytes, meshParams);
-    const texture = await decodeTextureImage(pngBytes);
+    const mesh: SimMesh = buildSimMesh(imageBytes, meshParams);
+    const texture = await decodeTextureImage(imageBytes);
     await this.replaceJelly(mesh, texture);
   }
 
@@ -1179,10 +1186,15 @@ function lastEventStep(steps: Track): number {
   return steps[steps.length - 1]?.atStep ?? 0;
 }
 
-/** PNG 位元組 → `HTMLImageElement`（Renderer 的貼圖來源）。走 Blob URL，載入完即釋放。 */
-function decodeTextureImage(pngBytes: Uint8Array): Promise<HTMLImageElement> {
+/**
+ * 影像位元組 → `HTMLImageElement`（Renderer 的貼圖來源）。走 Blob URL，載入完即釋放。
+ * Blob 的 MIME 依實際格式（png/jpeg/gif）給——瀏覽器 `<img>` 原生支援三者；動畫
+ * GIF 由瀏覽器取第一幀當靜圖，跟 mesh 端 `decodeGifAlpha` 一致（issue #55）。
+ */
+function decodeTextureImage(imageBytes: Uint8Array): Promise<HTMLImageElement> {
+  const mime = imageFormatToMime(sniffImageFormat(imageBytes));
   return new Promise((resolve, reject) => {
-    const blob = new Blob([pngBytes as BlobPart], { type: 'image/png' });
+    const blob = new Blob([imageBytes as BlobPart], { type: mime });
     const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {

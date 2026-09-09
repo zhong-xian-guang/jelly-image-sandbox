@@ -90,7 +90,7 @@ export class PerfMonitor {
   }
 
   /**
-   * 讀取「該用網格解析度退路了嗎」並歸零（一次性）。`importPng` 每次匯入呼叫一次；
+   * 讀取「該用網格解析度退路了嗎」並歸零（一次性）。`importImage` 每次匯入呼叫一次；
    * 只有回傳 `true` 的那一次匯入會用較低的 `targetParticleCount`。
    */
   consumeMeshFallbackPending(): boolean {

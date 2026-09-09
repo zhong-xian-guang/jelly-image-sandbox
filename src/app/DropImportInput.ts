@@ -1,18 +1,18 @@
 /**
- * `DropImportInput`（issue #12 / T11）——把 DOM 拖放事件接到 `selectDroppedPng`。
+ * `DropImportInput`（issue #12 / T11）——把 DOM 拖放事件接到 `selectSupportedImageFile`。
  *
  * 薄的接線層（對照 `PointerInput`/`CameraInput`）：`dragenter`/`dragover`/
- * `dragleave`/`drop` → 挑出 PNG 檔案 → 讀成位元組 → 呼叫 `onImport`。非檔案拖曳
- * （文字、連結）完全不理會、不擋預設行為。`dragenter`/`dragleave` 用巢狀計數
+ * `dragleave`/`drop` → 挑出支援的影像檔（png/jpeg/gif）→ 讀成位元組 → 呼叫 `onImport`。
+ * 非檔案拖曳（文字、連結）完全不理會、不擋預設行為。`dragenter`/`dragleave` 用巢狀計數
  * （子元素間移動也會先觸發子元素的 `dragleave` 再觸發父層的 `dragenter`，單純
  * 用布林旗標會在中途誤判「已離開」）判斷真的離開時才關掉提示。
  */
 
-import { selectDroppedPng } from './dropImport';
+import { selectSupportedImageFile } from './dropImport';
 
 export interface DropImportInputOptions {
-  /** 挑到 PNG 檔案並讀成位元組後呼叫。 */
-  onImport: (pngBytes: Uint8Array) => void;
+  /** 挑到支援的影像檔並讀成位元組後呼叫。 */
+  onImport: (imageBytes: Uint8Array) => void;
   /** 正在拖著檔案經過 `target`（顯示／隱藏拖放提示用）。 */
   onDragActiveChange: (active: boolean) => void;
 }
@@ -67,7 +67,7 @@ export class DropImportInput {
     this.dragDepth = 0;
     this.opts.onDragActiveChange(false);
 
-    const file = selectDroppedPng(ev.dataTransfer);
+    const file = selectSupportedImageFile(ev.dataTransfer?.files);
     if (!file) return; // 非圖片／不支援格式：忽略、不崩（issue #12 驗收條件）
     file
       .arrayBuffer()
