@@ -133,6 +133,11 @@ export interface ControlPanelOptions {
    * 由 `JellySandbox` 直接接在提示字元素上，不經這個回呼。）
    */
   onImportImage: () => void;
+  /**
+   * 「儲存片段」按鈕被按（issue #57 / V2 T2-4）——把目前整個片段序列化成一個帶
+   * 時間戳的 `.json` 下載。任何時候都可用（含還沒匯入任何圖、只有內建預設果凍時）。
+   */
+  onSaveClip: () => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -278,6 +283,7 @@ export class ControlPanel {
     panel.append(
       this.perfStatus,
       this.buttonRow('匯入圖片…', opts.onImportImage),
+      this.buttonRow('儲存片段', opts.onSaveClip),
       this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange),
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
       this.rangeRow('軟硬度', 0, 1, 0.01, opts.initial.softness, opts.onSoftnessChange),
