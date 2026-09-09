@@ -24,6 +24,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     demos: [],
+    onImportImage: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -333,5 +334,35 @@ describe('ControlPanel — Track 清單內改名（issue #54 / V2 T2-1）', () =
     expect(labelInput().disabled).toBe(true);
     panel.setPlaybackControlsEnabled(true);
     expect(labelInput().disabled).toBe(false);
+  });
+});
+
+describe('ControlPanel — 匯入圖片按鈕（issue #56）', () => {
+  it('面板有一顆「匯入圖片」按鈕，點擊呼叫 onImportImage', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+
+    const button = [...panel.element.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('匯入圖片'),
+    );
+    expect(button).toBeDefined();
+
+    button!.click();
+    expect(opts.onImportImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('匯入圖片按鈕不受播放／錄製鎖定影響（重新匯入自帶場景收束）', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const button = [...panel.element.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('匯入圖片'),
+    )!;
+
+    panel.setPlaybackControlsEnabled(false);
+    panel.setRecordingActive(true);
+
+    expect(button.disabled).toBe(false);
+    button.click();
+    expect(opts.onImportImage).toHaveBeenCalledTimes(1);
   });
 });

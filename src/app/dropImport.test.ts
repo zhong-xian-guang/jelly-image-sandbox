@@ -1,15 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { isSupportedImageFile, selectSupportedImageFile } from './dropImport';
-
-/** 造一個 `FileList` 形狀的物件（有索引 + `length`，但不可迭代）——貼近 `DataTransfer.files`。 */
-function fakeFileList(files: File[]): FileList {
-  const list: Record<number, File> & { length: number } = { length: files.length };
-  files.forEach((f, i) => {
-    list[i] = f;
-  });
-  return list as unknown as FileList;
-}
+import { isSupportedImageFile, readSelectedImageFile, selectSupportedImageFile } from './dropImport';
+import { fakeFileList } from './testFixtures';
 
 describe('selectSupportedImageFile', () => {
   it('挑出第一個 MIME type 為 image/png 的檔案', () => {
@@ -71,5 +63,78 @@ describe('isSupportedImageFile', () => {
   it('MIME 命中就算數，忽略副檔名', () => {
     expect(isSupportedImageFile(new File(['x'], 'weird.name', { type: 'image/png' }))).toBe(true);
     expect(isSupportedImageFile(new File(['x'], 'photo.png', { type: 'image/webp' }))).toBe(false);
+  });
+});
+
+/** 一個夠用的 `File` 替身：先看 `type`／`name`，挑中後呼叫 `arrayBuffer()`。 */
+function fakeImageFile(name: string, type: string, bytes: number[] = [1, 2, 3]): File {
+  return {
+    name,
+    type,
+    arrayBuffer: () => Promise.resolve(new Uint8Array(bytes).buffer),
+  } as unknown as File;
+}
+
+describe('readSelectedImageFile（拖放與匯入按鈕共用尾段，issue #56）', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('挑到支援的圖 → 讀成位元組後呼叫 onImport，不呼叫 onReject', async () => {
+    const onImport = vi.fn();
+    const onReject = vi.fn();
+
+    readSelectedImageFile(fakeFileList([fakeImageFile('jelly.png', 'image/png', [9, 8, 7])]), {
+      onImport,
+      onReject,
+    });
+    await vi.waitFor(() => expect(onImport).toHaveBeenCalledTimes(1));
+
+    expect(onImport).toHaveBeenCalledWith(new Uint8Array([9, 8, 7]));
+    expect(onReject).not.toHaveBeenCalled();
+  });
+
+  it('有選檔但格式全不支援 → console.warn 一行 + onReject 帶說明，不呼叫 onImport', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onImport = vi.fn();
+    const onReject = vi.fn();
+
+    readSelectedImageFile(fakeFileList([fakeImageFile('pic.webp', 'image/webp')]), {
+      onImport,
+      onReject,
+    });
+
+    expect(onImport).not.toHaveBeenCalled();
+    expect(onReject).toHaveBeenCalledWith(expect.stringMatching(/PNG \/ JPEG \/ GIF/));
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('沒有選到任何檔（拖非檔案 / 按取消）→ 靜默，不呼叫任何回呼、不 warn', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onImport = vi.fn();
+    const onReject = vi.fn();
+
+    readSelectedImageFile(fakeFileList([]), { onImport, onReject });
+    readSelectedImageFile(null, { onImport, onReject });
+    readSelectedImageFile(undefined, { onImport, onReject });
+
+    expect(onImport).not.toHaveBeenCalled();
+    expect(onReject).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('讀檔失敗 → console.warn + onReject，不呼叫 onImport', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onImport = vi.fn();
+    const onReject = vi.fn();
+    const broken = {
+      name: 'jelly.png',
+      type: 'image/png',
+      arrayBuffer: () => Promise.reject(new Error('boom')),
+    } as unknown as File;
+
+    readSelectedImageFile(fakeFileList([broken]), { onImport, onReject });
+    await vi.waitFor(() => expect(onReject).toHaveBeenCalledTimes(1));
+
+    expect(onImport).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
   });
 });
