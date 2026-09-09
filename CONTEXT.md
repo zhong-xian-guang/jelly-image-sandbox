@@ -104,6 +104,10 @@ _Avoid_: layer、圖層、variant、變體、tag、標籤、scene
 一份在片段開始前就該存在的 Pin 佈局快照，獨立於任何 Track。使用者擺好 Pin 後明確拍下；疊加播放在 `sim.reset()` 之後、跑合併時間軸之前，於 step 0 一次還原，之後照常播放。存的是附著點在 rest 形狀下的座標，不隨拍快照當下的變形而偏。與「錄進 Action Track 的 `pin` 事件」不同：後者是有時序的**效果**（某秒才出現），前者是從第 0 秒就在的**佈景**。隨片段保存（`停止／重設` 保留、重新匯入 PNG 清空，見 ADR-0007 追記）。
 _Avoid_: setup pin、pre-pin、預釘
 
+**清除 Pin 事件（Clear-pins event）**：
+一個無指標 id 的輸入事件，錄進 Action Track（由「清除所有 Pin」按鈕在錄製中觸發）。重播到其排定的 step 時清掉**畫面上所有 Pin**——所有動作軌放的、以及片段初始 Pin，全部清掉。刻意跨軌：它是使用者明確錄下的動作，「把畫面清乾淨」就是意圖（見 ADR-0007 追記）。像 `Tap` 一樣受該軌起始時間與修剪支配、不能單獨編輯。
+_Avoid_: unpin all、reset pins、clear all
+
 **Demo（內建示範）**：
 專案內建、以程式碼寫成的預設操作序列，透過與即時輸入相同的介面驅動 Jelly。用來教學或展示。
 _Avoid_: tutorial、scenario、範例
