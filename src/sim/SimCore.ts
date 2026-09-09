@@ -249,7 +249,8 @@ export class SimCore {
 
   /**
    * 唯一的輸入介面（ADR-0005）。支援 `grab` / `moveGrab` / `release`（T4）、
-   * `pin` / `unpin` / `movePin`（T5）、`tap`（T7）。詳細語意見 `InputEvent`。
+   * `pin` / `unpin` / `movePin`（T5）、`tap`（T7）、`clearPins`（issue #51）。
+   * 詳細語意見 `InputEvent`。
    */
   applyInput(event: InputEvent): void {
     switch (event.type) {
@@ -300,6 +301,9 @@ export class SimCore {
       case 'tap':
         this.doTap(event.x, event.y, event.strength ?? this.params.tapStrength);
         break;
+      case 'clearPins':
+        this.clearPins();
+        break;
     }
   }
 
@@ -319,7 +323,10 @@ export class SimCore {
     return count;
   }
 
-  /** 一次移除所有 Pin（保留 Grab）。控制面板「清除所有 Pin」用。 */
+  /**
+   * 一次移除所有 Pin（保留 Grab）。控制面板「清除所有 Pin」用——現在經
+   * `applyInput({ type: 'clearPins' })` 轉呼，好讓 `TrackRecorder` 錄得到（issue #51）。
+   */
   clearPins(): void {
     for (const [id, c] of this.constraints) {
       if (c.pinned) this.constraints.delete(id);

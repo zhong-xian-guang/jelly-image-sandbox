@@ -111,6 +111,7 @@ import {
   type Bbox,
   type BoundaryMode,
   InfiniteBoundary,
+  type InputEvent,
   type Point,
   SimCore,
   softnessToParams,
@@ -320,7 +321,7 @@ export class JellySandbox {
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
       onPinModeChange: (enabled) => this.setPinMode(enabled),
-      onClearPins: () => this.sim.clearPins(),
+      onClearPins: () => this.clearPins(),
       onShowPinsChange: (visible) => this.setPinsVisible(visible),
       onFollowLockChange: (locked) => this.setFollowLock(locked),
       onFrameJelly: () => this.frameJelly(),
@@ -858,6 +859,20 @@ export class JellySandbox {
   }
 
   /**
+   * 「清除所有 Pin」按鈕（issue #14；issue #51 起改走窄介面）——跟指標事件同一條
+   * 路：一個無 `id` 的「清除 Pin 事件」`InputEvent` 送進 `sim.applyInput`，同時
+   * `trackRecorder.record`（no-op 除非正在錄製）。不再直呼 `sim.clearPins()`，回到
+   * ADR-0005「所有影響模擬的輸入都經 `applyInput`」——這樣錄製中按這顆鈕會落進
+   * Action Track，重播到那個 step 清掉畫面上所有 Pin（含片段初始 Pin，刻意跨軌，
+   * 見 ADR-0007 追記）。`applyInput` 不會前進錄製 step 計數，兩行順序不影響結果。
+   */
+  private clearPins(): void {
+    const event: InputEvent = { type: 'clearPins' };
+    this.sim.applyInput(event);
+    this.trackRecorder.record(event); // no-op 除非正在錄製（issue #51）
+  }
+
+  /**
    * 「顯示 Pin」開關——只管標記的顯示／隱藏。`ControlPanel` 那邊已經在使用者
    * 關掉顯示時順便把「Pin 模式」的勾選框也一起強制關掉（所見即所得），這裡
    * 不用重複處理；只要單純記著這個旗標，`frame()` 每幀據此決定要不要投影更新。
@@ -1115,6 +1130,7 @@ const ACTION_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
   pin: 'Pin',
   movePin: 'Pin',
   unpin: 'Pin',
+  clearPins: 'Pin',
 };
 const CAMERA_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
   panBy: '平移',

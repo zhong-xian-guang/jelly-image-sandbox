@@ -32,6 +32,10 @@ export type PointerId = number | string;
  * - `tap`：在 `(x, y)` 施加一次性向內徑向脈衝（凹陷後彈回）。`strength` 預設
  *   `params.tapStrength`。半徑（目前 bbox 對角線 × 0.2）內無 Particle → no-op。
  *   無 `id`：Tap 不是持續狀態。
+ * - `clearPins`：一次移除**所有** Pin（等同呼叫 `SimCore.clearPins()`）；未鎖的
+ *   Grab 不受影響。無 `id`——不是針對單一約束。控制面板「清除所有 Pin」按鈕走
+ *   這條窄介面，讓 `TrackRecorder` 錄得到（issue #51 / ADR-0007 追記）。不夾帶
+ *   「清掉了哪些」的快照：決定性重播，到那個 step 畫面上有什麼 Pin 就清什麼。
  */
 export type InputEvent =
   | { type: 'grab'; id: PointerId; x: number; y: number; radius?: number }
@@ -40,7 +44,8 @@ export type InputEvent =
   | { type: 'pin'; id: PointerId; x?: number; y?: number; radius?: number }
   | { type: 'unpin'; id: PointerId }
   | { type: 'movePin'; id: PointerId; x: number; y: number }
-  | { type: 'tap'; x: number; y: number; strength?: number };
+  | { type: 'tap'; x: number; y: number; strength?: number }
+  | { type: 'clearPins' };
 
 /** 求解器的手感參數。全部有預設值，建構時可只帶想改的欄位。 */
 export interface SimParams {

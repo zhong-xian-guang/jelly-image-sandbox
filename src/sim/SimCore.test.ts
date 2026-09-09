@@ -457,6 +457,30 @@ describe('SimCore — Pin', () => {
     expect(sim.attachPoint('g')).not.toBeNull();
   });
 
+  it("applyInput({ type: 'clearPins' })：清掉所有 Pin，保留未鎖的 Grab（比照 clearPins()）", () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'pin', id: 'p1', x: 0, y: 0 });
+    sim.applyInput({ type: 'pin', id: 'p2', x: 96, y: 0 });
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+    expect(sim.pinCount).toBe(2);
+    expect(sim.grabCount).toBe(1);
+
+    sim.applyInput({ type: 'clearPins' });
+
+    expect(sim.pinCount).toBe(0);
+    expect(sim.grabCount).toBe(1);
+    expect(sim.attachPoint('p1')).toBeNull();
+    expect(sim.attachPoint('p2')).toBeNull();
+    expect(sim.attachPoint('g')).not.toBeNull();
+  });
+
+  it("applyInput({ type: 'clearPins' })：畫面上沒有 Pin 時是 no-op（不丟例外）", () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+    expect(() => sim.applyInput({ type: 'clearPins' })).not.toThrow();
+    expect(sim.grabCount).toBe(1);
+  });
+
   it('listPins：回傳每個 Pin 的 id + 附著點，不含 Grab', () => {
     const sim = new SimCore(MESH());
     expect(sim.listPins()).toEqual([]);

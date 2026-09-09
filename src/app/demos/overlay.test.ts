@@ -117,6 +117,38 @@ describe('mergeTracks', () => {
     ]);
   });
 
+  it('clearPins（無 id）原樣通過：不加前綴，只依 startStep 平移 atStep（比照 tap）', () => {
+    const track: OverlayTrack = {
+      startStep: 12,
+      idPrefix: 't1/',
+      steps: [
+        { atStep: 0, event: { type: 'grab', id: 'a', x: 0, y: 0 } },
+        { atStep: 4, event: { type: 'clearPins' } },
+      ],
+    };
+
+    expect(mergeTracks([track])).toEqual([
+      { atStep: 12, event: { type: 'grab', id: 't1/a', x: 0, y: 0 } },
+      { atStep: 16, event: { type: 'clearPins' } },
+    ]);
+  });
+
+  it('clearPins 跟著頭尾修剪走：修在範圍外就不播（比照 tap）', () => {
+    const track: OverlayTrack = {
+      startStep: 0,
+      idPrefix: 't1/',
+      inStep: 3,
+      outStep: 7,
+      steps: [
+        { atStep: 2, event: { type: 'clearPins' } }, // < in，丟
+        { atStep: 5, event: { type: 'clearPins' } }, // 範圍內，留（平移到 atStep 2）
+        { atStep: 9, event: { type: 'clearPins' } }, // > out，丟
+      ],
+    };
+
+    expect(mergeTracks([track])).toEqual([{ atStep: 2, event: { type: 'clearPins' } }]);
+  });
+
   it('同一個全域 atStep 上，先列的 Track 事件排在前面（穩定排序，決定性）', () => {
     const a: OverlayTrack = {
       startStep: 5,
