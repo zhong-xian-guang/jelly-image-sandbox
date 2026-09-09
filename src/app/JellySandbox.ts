@@ -111,6 +111,7 @@ import {
   type Bbox,
   type BoundaryMode,
   InfiniteBoundary,
+  type Point,
   SimCore,
   softnessToParams,
   WalledBoundary,
@@ -122,6 +123,7 @@ import {
   DemoRunner,
   mergeTracks,
   overlappingCameraTrackIds,
+  setupPinsTrack,
   STEP_SECONDS,
   secondsToStep,
   stepToSeconds,
@@ -252,6 +254,14 @@ export class JellySandbox {
   /** 下一條 Track 的流水號，兼作 `id`／`PointerId` 前綴（各條唯一）與預設標籤編號。 */
   private nextTrackNum = 1;
   /**
+   * 片段初始 Pin 快照（issue #39 / ADR-0007 追記）——每個元素是一個 Pin 附著點在
+   * **rest 形狀**下的世界座標（`sim.restAttachPoint`），獨立於任何 Track。`playAll`
+   * 在 `sim.reset()` 之後、`demoRunner.start` 之前，把它組成一條合成 `OverlayTrack`
+   *（`setupPinsTrack`）排在 `mergeTracks` 輸入最前面，於 step 0 一次還原。生命週期
+   * 比照 `tracks`：`停止／重設` 保留、重新匯入 PNG 清空（座標對舊網格沒意義）。
+   */
+  private setupPins: Point[] = [];
+  /**
    * Track 群組清單（issue #43 / V2 T1-8，見 ADR-0008）——`groups[0]` 永遠是預設
    * 群組（`DEFAULT_GROUP_ID`、不可刪、新錄好的 Track 自動加入）。生命週期比照
    * `tracks`：`停止／重設` 保留、重新匯入 PNG 重建成只剩預設群組。
@@ -322,6 +332,8 @@ export class JellySandbox {
       },
       onToggleRecording: () => this.toggleRecording(),
       onPlayAll: () => this.playAll(),
+      onSnapshotSetupPins: () => this.snapshotSetupPins(),
+      onClearSetupPins: () => this.clearSetupPins(),
       onTogglePause: () => this.togglePause(),
       onTrackStartTimeChange: (id, seconds) => this.setTrackStartTime(id, seconds),
       onTrackTrimInChange: (id, seconds) => this.setTrackTrimIn(id, seconds),
@@ -526,6 +538,29 @@ export class JellySandbox {
   }
 
   /**
+   * 「片段初始 Pin：設為目前 Pin」（issue #39 / ADR-0007 追記）——把畫面上現在所有
+   * Pin（`sim.listPins()`）的**rest 形狀附著座標**（`sim.restAttachPoint`）拍成快照，
+   * 取代上一份。存 rest 座標而非目前變形座標：`playAll` 會先 `sim.reset()`，還原時
+   * 這些座標才精準落在原本的表面點，也不隨拍快照當下的變形而偏。`ControlPanel`
+   * 那邊錄製中／播放中已把這顆鈕鎖住，這裡不用再擋。
+   */
+  private snapshotSetupPins(): void {
+    this.setupPins = this.sim.listPins().flatMap((pin) => {
+      // `restAttachPoint` 回傳全新的 `Point`；作用中的 Pin 必有約束，`null` 只是防呆。
+      const rest = this.sim.restAttachPoint(pin.id);
+      return rest ? [rest] : [];
+    });
+    this.syncPanelTracks();
+  }
+
+  /** 「片段初始 Pin：清除」（issue #39）——清空快照，之後 `playAll` 不再放任何初始 Pin。 */
+  private clearSetupPins(): void {
+    if (this.setupPins.length === 0) return;
+    this.setupPins = [];
+    this.syncPanelTracks();
+  }
+
+  /**
    * 「＋ 新增群組」（issue #43）——新群組預設**開啟**（ADR-0008）；沒有成員，
    * 使用者再用各條 Track 的 `群組 ▾` 指派進來。新增動作讓進行中的獨奏還原點作廢。
    */
@@ -626,6 +661,7 @@ export class JellySandbox {
       })),
     );
     this.controlPanel.setPlayableTrackCount(tracksInEnabledGroups(this.tracks, this.groups).length);
+    this.controlPanel.setSetupPinCount(this.setupPins.length);
   }
 
   /** 一條 Track 的 `群組 ▾` 勾選資料（issue #43 動作軌；issue #37 相機軌）——每個群組一項 + 這條是否屬於它。 */
@@ -682,8 +718,13 @@ export class JellySandbox {
       this.cameraCommands.push({ type: 'frame' });
     }
     this.demoRunner.start(
-      mergeTracks(
-        active.map((t) => ({
+      mergeTracks([
+        // 片段初始 Pin 合成軌排在最前面（issue #39）：`setup/` 前綴不撞 Action Track
+        // 的 `t{n}/`，一串 `atStep: 0` 的 `pin` 事件靠穩定排序落在所有軌的 step-0
+        // 事件之前——`sim.reset()` 後先在 step 0 還原初始 Pin，再開演。空快照時這條
+        // steps 為空，`mergeTracks` 不貢獻任何事件。
+        setupPinsTrack(this.setupPins),
+        ...active.map((t) => ({
           startStep: t.startStep,
           idPrefix: `${t.id}/`,
           steps: t.steps,
@@ -691,7 +732,7 @@ export class JellySandbox {
           outStep: t.outStep,
           startCamera: t.startCamera,
         })),
-      ),
+      ]),
     );
     this.setPlaybackLocked(true); // 立即鎖住，理由同 runDemo
   }
@@ -755,8 +796,8 @@ export class JellySandbox {
   /**
    * 「停止／重設」（issue #14；issue #15 追加停 Demo；issue #38 收束播放／錄製）：
    * 先 `haltPlaybackAndRecording()`，再 `sim.reset()` 把 Jelly 回 rest 座標、速度
-   * 歸零、清掉所有 Grab／Pin。Track／群組清單**保留**（拓撲沒變，錄好的還能疊加
-   * 播放）——只有 `replaceJelly` 才清空。
+   * 歸零、清掉所有 Grab／Pin。Track／群組清單與片段初始 Pin 快照（issue #39）
+   * **保留**（拓撲沒變，錄好的還能疊加播放）——只有 `replaceJelly` 才清空。
    */
   private resetSim(): void {
     this.haltPlaybackAndRecording();
@@ -890,6 +931,7 @@ export class JellySandbox {
     // 生命週期）。
     this.tracks = [];
     this.nextTrackNum = 1;
+    this.setupPins = []; // 片段初始 Pin 座標是對著舊網格算的，套到新網格沒意義（issue #39）
     this.groups = [createDefaultGroup()];
     this.nextGroupNum = 1;
     this.soloState = null;

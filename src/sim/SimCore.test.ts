@@ -511,6 +511,67 @@ describe('SimCore — Pin', () => {
   });
 });
 
+describe('SimCore — restAttachPoint（片段初始 Pin 的 rest 座標，issue #39）', () => {
+  it('同一個 Pin，Jelly 變形前後回傳同一個 rest 附著座標', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'pin', id: 'p', x: 24, y: 24 });
+    const before = sim.restAttachPoint('p');
+    expect(before).not.toBeNull();
+    expect(before!.x).toBeCloseTo(24, 6);
+    expect(before!.y).toBeCloseTo(24, 6);
+
+    // 拉另一角大幅變形，跑到穩定
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+    sim.applyInput({ type: 'moveGrab', id: 'g', x: 170, y: 150 });
+    run(sim, 90);
+
+    expect(sim.restAttachPoint('p')).toEqual(before);
+  });
+
+  it('回算的是原始三角形＋重心座標套在 rest 上：movePin 把附著點拖走後仍不動', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'pin', id: 'p', x: 24, y: 24 });
+    const rest = sim.restAttachPoint('p')!;
+    expect(rest.x).toBeCloseTo(24, 6);
+    expect(rest.y).toBeCloseTo(24, 6);
+
+    // movePin 只改目標點、不改三角形／重心座標 → attachPoint（目前）跟去新位置
+    sim.applyInput({ type: 'movePin', id: 'p', x: 80, y: 70 });
+    run(sim, 60);
+
+    const now = sim.attachPoint('p')!;
+    expect(Math.hypot(now.x - 80, now.y - 70)).toBeLessThan(1); // 目前附著點被拖到 (80,70)
+    expect(sim.restAttachPoint('p')).toEqual(rest); // rest 回算仍在原本的表面點
+  });
+
+  it('拍快照時 Jelly 正在晃 → 回傳的 rest 座標之後不再隨變形改變', () => {
+    const sim = new SimCore(MESH());
+    // 先讓網格晃起來
+    sim.applyInput({ type: 'grab', id: 'g', x: 0, y: 0 });
+    sim.applyInput({ type: 'moveGrab', id: 'g', x: -20, y: -16 });
+    run(sim, 10);
+    sim.applyInput({ type: 'release', id: 'g' });
+    run(sim, 3);
+
+    // 晃動中把靠近中心的一點 picking 成 Pin
+    sim.applyInput({ type: 'pin', id: 'p', x: 48, y: 48 });
+    const rest = sim.restAttachPoint('p')!;
+    // 落在 rest 形狀的網格範圍內、靠近被 pick 的中心區
+    expect(rest.x).toBeGreaterThan(24);
+    expect(rest.x).toBeLessThan(72);
+    expect(rest.y).toBeGreaterThan(24);
+    expect(rest.y).toBeLessThan(72);
+
+    run(sim, 60);
+    expect(sim.restAttachPoint('p')).toEqual(rest);
+  });
+
+  it('未知 id → null', () => {
+    const sim = new SimCore(MESH());
+    expect(sim.restAttachPoint('nope')).toBeNull();
+  });
+});
+
 /** 把所有 Particle 對質心 (48,48) 水平拉伸、垂直壓成一條近水平線。 */
 function squash(sim: SimCore): void {
   const p = sim.positions; // 極端初始狀態：測試直接改動內部緩衝（非算繪端）
