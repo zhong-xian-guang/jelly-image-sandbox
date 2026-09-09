@@ -184,8 +184,8 @@ const REDUCED_TARGET_PARTICLE_COUNT = Math.round(DEFAULT_PARAMS.targetParticleCo
 /**
  * 一條已錄好的 Track（issue #33 / V2 T1-1；issue #36 / V2 T1-4 加相機軌）——
  * `steps` 是相對自己起點的時間軸，`startStep` 是它在疊加時間軸上的起始 sim step
- * （UI 以「秒」編輯，`STEP_SECONDS` 換算），`label` 是清單上顯示的簡短標籤，`id`
- * 兼作 `mergeTracks` 的 `PointerId` 前綴來源（各條唯一）。
+ * （UI 以「秒」編輯，`STEP_SECONDS` 換算），`label`／`customLabel` 是清單上顯示的
+ * 名稱（見各欄註解），`id` 兼作 `mergeTracks` 的 `PointerId` 前綴來源（各條唯一）。
  *
  * `inStep`／`outStep`（issue #35 / V2 T1-3）是本地時間的頭尾修剪範圍（同樣以
  * step 存、UI 以「秒」編輯）：播放時只取 `[inStep, outStep]` 之間的排程項，其餘
@@ -204,7 +204,17 @@ const REDUCED_TARGET_PARTICLE_COUNT = Math.round(DEFAULT_PARAMS.targetParticleCo
 interface RecordedTrack {
   id: string;
   kind: 'action' | 'camera';
+  /**
+   * `addTrack` 當下用 `summarizeTrack` 算一次的自動摘要（`動作軌 1（拖曳 · Pin）`），
+   * 之後**不再重算**——調整起始／修剪／分群都不動它。
+   */
   label: string;
+  /**
+   * 使用者在清單內改的名字（issue #54 / V2 T2-1）——非 `null` 時取代 `label` 顯示、
+   * 也是之後寫進存檔的名稱（issue #57）。在欄位裡清成空字串 → 設回 `null`，顯示
+   * 退回自動摘要 `label`。
+   */
+  customLabel: string | null;
   startStep: number;
   inStep: number;
   outStep: number;
@@ -356,6 +366,7 @@ export class JellySandbox {
       onTrackTrimInChange: (id, seconds) => this.setTrackTrimIn(id, seconds),
       onTrackTrimOutChange: (id, seconds) => this.setTrackTrimOut(id, seconds),
       onDeleteTrack: (id) => this.deleteTrack(id),
+      onTrackRename: (id, name) => this.renameTrack(id, name),
       onAddGroup: () => this.addGroup(),
       onGroupEnabledChange: (id, enabled) => this.setGroupEnabled(id, enabled),
       onGroupRename: (id, name) => this.renameGroup(id, name),
@@ -499,6 +510,7 @@ export class JellySandbox {
         kind === 'camera'
           ? summarizeTrack(`相機軌 ${num}`, steps, CAMERA_TRACK_KIND_LABELS)
           : summarizeTrack(`動作軌 ${num}`, steps, ACTION_TRACK_KIND_LABELS),
+      customLabel: null,
       startStep: 0,
       inStep: 0,
       outStep: lastEventStep(steps),
@@ -553,6 +565,22 @@ export class JellySandbox {
 
   private deleteTrack(id: string): void {
     this.tracks = this.tracks.filter((t) => t.id !== id);
+    this.syncPanelTracks();
+  }
+
+  /**
+   * Track 清單內改名（issue #54 / V2 T2-1）——比照 `renameGroup`（`ControlPanel` 在
+   * 失焦／Enter 回報一次、已 trim，這裡就信任呼叫端不再 trim），差別是空字串不忽略：
+   * → `customLabel` 設回 `null`，顯示退回 `addTrack` 當下算的自動摘要 `label`。非空
+   * → 存成覆寫，之後調整起始／修剪／分群都不會蓋回（那些只改 step 欄位、不碰
+   * `customLabel`）。
+   */
+  private renameTrack(id: string, name: string): void {
+    const track = this.tracks.find((t) => t.id === id);
+    if (!track) return;
+    const next = name === '' ? null : name;
+    if (track.customLabel === next) return;
+    track.customLabel = next;
     this.syncPanelTracks();
   }
 
@@ -667,7 +695,7 @@ export class JellySandbox {
       this.tracks.map((t) => ({
         id: t.id,
         kind: t.kind,
-        label: t.label,
+        label: t.customLabel ?? t.label,
         startSeconds: stepToSeconds(t.startStep),
         inSeconds: stepToSeconds(t.inStep),
         outSeconds: stepToSeconds(t.outStep),

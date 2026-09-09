@@ -273,12 +273,11 @@ body {
   font-size: 0.7rem;
 }
 
-.jelly-track-label {
+/** Track 名稱欄位（issue #54）——原地可編輯，比照群組名稱欄位（`jelly-group-name`）。 */
+.jelly-track-row input.jelly-track-label {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  font: inherit;
 }
 
 .jelly-track-row input.jelly-track-seconds {

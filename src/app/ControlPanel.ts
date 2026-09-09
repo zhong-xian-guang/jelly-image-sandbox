@@ -51,7 +51,11 @@ export interface DemoMenuItem {
 export interface TrackListRow {
   id: string;
   kind: 'action' | 'camera';
-  /** 簡短標籤（例如「動作軌 1（拖曳 · 輕拍 · Pin）」「相機軌 2（平移 · 縮放）」）。 */
+  /**
+   * 清單上顯示的名稱：使用者自訂名（issue #54），或未改過時的自動摘要
+   * （例如「動作軌 1（拖曳 · 輕拍 · Pin）」「相機軌 2（平移 · 縮放）」）。
+   * 這一列是可原地編輯的 `input`（見 `trackRowEl`）。
+   */
   label: string;
   /** 這條 Track 在片段時間軸上的起始秒數（可編輯）。 */
   startSeconds: number;
@@ -166,6 +170,12 @@ export interface ControlPanelOptions {
   onTrackTrimOutChange: (id: string, seconds: number) => void;
   /** 某條 Track 的刪除鈕被按（issue #33）。 */
   onDeleteTrack: (id: string) => void;
+  /**
+   * 某條 Track 在清單內被改名（issue #54 / V2 T2-1）——比照群組改名的互動
+   * （失焦／Enter 回報一次、`name` 已 trim），差別是**空字串照樣回報**：呼叫端
+   * 據此把使用者覆寫清掉、顯示退回自動摘要（群組改名則是把空字串吞掉不回報）。
+   */
+  onTrackRename: (id: string, name: string) => void;
 }
 
 export class ControlPanel {
@@ -211,6 +221,7 @@ export class ControlPanel {
   private readonly onTrackTrimInChange: (id: string, seconds: number) => void;
   private readonly onTrackTrimOutChange: (id: string, seconds: number) => void;
   private readonly onDeleteTrack: (id: string) => void;
+  private readonly onTrackRename: (id: string, name: string) => void;
   private readonly onAddGroup: () => void;
   private readonly onGroupEnabledChange: (id: string, enabled: boolean) => void;
   private readonly onGroupRename: (id: string, name: string) => void;
@@ -242,6 +253,7 @@ export class ControlPanel {
     this.onTrackTrimInChange = opts.onTrackTrimInChange;
     this.onTrackTrimOutChange = opts.onTrackTrimOutChange;
     this.onDeleteTrack = opts.onDeleteTrack;
+    this.onTrackRename = opts.onTrackRename;
     this.onAddGroup = opts.onAddGroup;
     this.onGroupEnabledChange = opts.onGroupEnabledChange;
     this.onGroupRename = opts.onGroupRename;
@@ -856,10 +868,13 @@ export class ControlPanel {
   }
 
   /**
-   * Track 清單的一列（issue #33；issue #35 加頭尾修剪）。兩行：
-   * 第一行 種類標記（動作／相機）＋簡短標籤＋刪除鈕；
+   * Track 清單的一列（issue #33；issue #35 加頭尾修剪；issue #54 名稱可原地編輯）。兩行：
+   * 第一行 種類標記（動作／相機）＋可編輯的名稱欄位＋刪除鈕；
    * 第二行 可編輯的「起始 / 從 / 到」秒數欄位，加一段唯讀的「錄到 X–Y 秒」提示
    * （第一筆～最後一筆操作的本地秒數，幫使用者抓修剪起訖值）。
+   * 名稱欄位比照群組改名（`groupRowEl`）的 `change`（失焦／Enter）回報一次、trim，
+   * 但空字串不吞掉：走 `onTrackRename(id, '')` 由 `JellySandbox` 退回自動摘要；種類
+   * 靠標記與分區顯示辨識、不靠名字。
    * 所有 `input`／`button` 的鎖定由 `updateTrackControlsState` 在錄製／播放中統一關掉
    *（「修剪欄位在播放中鎖住」的驗收條件）。
    */
@@ -873,9 +888,16 @@ export class ControlPanel {
     badge.className = 'jelly-track-badge';
     badge.textContent = row.kind === 'camera' ? '相機' : '動作';
 
-    const label = document.createElement('span');
+    const label = document.createElement('input');
+    label.type = 'text';
     label.className = 'jelly-track-label';
-    label.textContent = row.label;
+    label.value = row.label;
+    label.title = '這條 Track 的名稱——清空以退回自動摘要';
+    label.addEventListener('change', () => {
+      // 空字串（trim 後）＝退回自動摘要，交給 `JellySandbox` 把覆寫清掉；
+      // 整列會在 syncPanelTracks 後整份重繪，欄位值隨之校正回實際顯示名。
+      this.onTrackRename(row.id, label.value.trim());
+    });
 
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';

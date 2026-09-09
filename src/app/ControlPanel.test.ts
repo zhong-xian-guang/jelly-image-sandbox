@@ -51,6 +51,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onTrackTrimInChange: vi.fn(),
     onTrackTrimOutChange: vi.fn(),
     onDeleteTrack: vi.fn(),
+    onTrackRename: vi.fn(),
     ...overrides,
   };
 }
@@ -137,8 +138,10 @@ describe('ControlPanel — 依群組分區的 Track 清單（issue #43）', () =
     const [defaultSec, g1Sec] = sections();
     expect([...defaultSec!.querySelectorAll('.jelly-track-row')]).toHaveLength(1); // 只有 t1
     expect([...g1Sec!.querySelectorAll('.jelly-track-row')]).toHaveLength(2); // t1 + t2
-    expect(g1Sec!.textContent).toContain('動作軌 t1');
-    expect(g1Sec!.textContent).toContain('動作軌 t2');
+    const labels = [...g1Sec!.querySelectorAll('input.jelly-track-label')].map(
+      (i) => (i as HTMLInputElement).value,
+    );
+    expect(labels).toEqual(['動作軌 t1', '動作軌 t2']);
   });
 
   it('動作軌與相機軌卡片都有 `群組 ▾`（issue #37：相機軌接進分群 UI）', () => {
@@ -266,5 +269,69 @@ describe('ControlPanel — 片段初始 Pin 列（issue #39）', () => {
     expect(buttons().every((b) => b.disabled)).toBe(true);
     panel.setPlaybackControlsEnabled(true);
     expect(buttons().every((b) => !b.disabled)).toBe(true);
+  });
+});
+
+describe('ControlPanel — Track 清單內改名（issue #54 / V2 T2-1）', () => {
+  let panel: ControlPanel;
+  let opts: ControlPanelOptions;
+
+  beforeEach(() => {
+    opts = makeOptions();
+    panel = new ControlPanel(opts);
+    panel.setGroups(groupRows());
+  });
+
+  function labelInput(): HTMLInputElement {
+    return panel.element.querySelector('input.jelly-track-label') as HTMLInputElement;
+  }
+
+  it('每列的名稱是可編輯 input，值為目前的 label', () => {
+    panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    const input = labelInput();
+    expect(input).toBeTruthy();
+    expect(input.tagName).toBe('INPUT');
+    expect(input.value).toBe('動作軌 t1');
+  });
+
+  it('改名並失焦 → onTrackRename(id, 修剪後的新名)', () => {
+    panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    const input = labelInput();
+    input.value = '  左上角慢慢拉  ';
+    input.dispatchEvent(new Event('change'));
+    expect(opts.onTrackRename).toHaveBeenCalledWith('t1', '左上角慢慢拉');
+  });
+
+  it('清空名稱 → onTrackRename(id, "")（呼叫端據此退回自動摘要）', () => {
+    panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    const input = labelInput();
+    input.value = '   ';
+    input.dispatchEvent(new Event('change'));
+    expect(opts.onTrackRename).toHaveBeenCalledWith('t1', '');
+  });
+
+  it('種類標記（動作／相機）與名稱欄位並存，改名不影響種類辨識', () => {
+    panel.setTracks([actionRow('a1', ['default'], GROUPS_META), cameraRow('c1', GROUPS_META)]);
+    const [defaultSec] = [...panel.element.querySelectorAll('.jelly-group-section')];
+    const cards = [...defaultSec!.querySelectorAll('.jelly-track-row')];
+    const badges = cards.map((c) => c.querySelector('.jelly-track-badge')?.textContent);
+    expect(badges).toEqual(['動作', '相機']);
+    expect(cards.every((c) => c.querySelector('input.jelly-track-label'))).toBe(true);
+  });
+
+  it('錄製中 → 名稱欄位一併鎖住，結束後解鎖', () => {
+    panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    panel.setRecordingActive(true);
+    expect(labelInput().disabled).toBe(true);
+    panel.setRecordingActive(false);
+    expect(labelInput().disabled).toBe(false);
+  });
+
+  it('播放中 → 名稱欄位一併鎖住', () => {
+    panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    panel.setPlaybackControlsEnabled(false);
+    expect(labelInput().disabled).toBe(true);
+    panel.setPlaybackControlsEnabled(true);
+    expect(labelInput().disabled).toBe(false);
   });
 });
