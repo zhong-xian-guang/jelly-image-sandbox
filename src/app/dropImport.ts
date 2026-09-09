@@ -59,12 +59,15 @@ export interface ImageBytesHandlers {
  * - 讀檔本身失敗 → `console.warn` + `onReject`。
  */
 export function readSelectedImageFile(
-  files: FileList | null | undefined,
+  files: Iterable<File> | ArrayLike<File> | null | undefined,
   handlers: ImageBytesHandlers,
 ): void {
-  const file = selectSupportedImageFile(files);
+  // 正規化成陣列：呼叫端可能傳 live `FileList`（`DataTransfer.files`）或已複製的
+  // `File[]`（`FileImportInput` 先複製再清 `input.value`，見那邊註解）。
+  const list = files ? Array.from(files) : [];
+  const file = selectSupportedImageFile(list);
   if (!file) {
-    if (files && files.length > 0) {
+    if (list.length > 0) {
       console.warn('[jelly] 檔案不是支援的圖片格式（僅支援 PNG / JPEG / GIF），已略過');
       handlers.onReject?.('不支援這個格式，請改用 PNG / JPEG / GIF 圖片');
     }

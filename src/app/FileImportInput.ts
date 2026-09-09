@@ -43,7 +43,10 @@ export class FileImportInput {
   }
 
   private onChange = (): void => {
-    const files = this.input.files;
+    // `input.files` 是跟著 input 的 live FileList——先複製出來再清 `value`，否則
+    // `input.value = ''`（依 HTML 規範會清空「已選檔案清單」）會連同把手上這份
+    // 也清掉，`readSelectedImageFile` 拿到空清單、靜默返回，選好的圖沒反應。
+    const files = this.input.files ? Array.from(this.input.files) : null;
     // 選同一個檔第二次也要能再觸發 `change`（否則「匯入同一張圖」第二次起沒反應）——用完即清空。
     this.input.value = '';
     readSelectedImageFile(files, this.opts);

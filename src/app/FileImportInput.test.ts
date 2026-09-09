@@ -27,9 +27,24 @@ function hiddenInput(): HTMLInputElement {
   return el as HTMLInputElement;
 }
 
-/** 設 `input.files` 後派發 `change`（jsdom 不會因為賦值 `.files` 自動派發）。 */
+/**
+ * 模擬瀏覽器選檔：`input.files` 是 live FileList，設 `input.value = ''`（依 HTML
+ * 規範）會**就地清空同一個** FileList 物件。jsdom 不實作這個連動，這裡手動接上，
+ * 好讓「先複製再清 value」的迴歸缺陷測得出來（就地清空，不是換一個新物件——
+ * 換新物件的話還握著舊參照的程式碼就測不出來了）。派發 `change`。
+ */
 function chooseFiles(input: HTMLInputElement, files: unknown[]): void {
-  Object.defineProperty(input, 'files', { value: fakeFileList(files), configurable: true });
+  const listObj = fakeFileList(files) as unknown as Record<number, unknown> & { length: number };
+  Object.defineProperty(input, 'files', { configurable: true, get: () => listObj });
+  Object.defineProperty(input, 'value', {
+    configurable: true,
+    get: () => (listObj.length > 0 ? `C:\\fakepath\\${(listObj[0] as File).name}` : ''),
+    set: (v: string) => {
+      if (v !== '') return;
+      for (let i = 0; i < listObj.length; i++) delete listObj[i];
+      listObj.length = 0;
+    },
+  });
   input.dispatchEvent(new Event('change'));
 }
 
@@ -54,7 +69,9 @@ describe('FileImportInput', () => {
     expect(hiddenInput().accept).toBe('image/png,image/jpeg,image/gif');
   });
 
-  it('選到支援的圖 → change 轉呼叫 readSelectedImageFile，最終 onImport 帶位元組', async () => {
+  it('選到支援的圖 → onImport 帶位元組（即使 onChange 內先清了 input.value）', async () => {
+    // 迴歸：`onChange` 若先清 `input.value` 再讀 `files`，live FileList 已被清空，
+    // 選好的圖沒反應。修法是先 `Array.from` 複製再清 value。
     const onImport = vi.fn();
     new FileImportInput(document, { onImport });
 
