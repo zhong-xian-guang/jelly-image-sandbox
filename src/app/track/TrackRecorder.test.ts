@@ -112,6 +112,32 @@ describe('TrackRecorder', () => {
     });
   });
 
+  it('clearPins 落在 action 份、不在 camera 份（issue #51）', () => {
+    const recorder = new TrackRecorder();
+    recorder.start('both');
+    recorder.record({ type: 'pin', id: 'p', x: 0, y: 0 });
+    recorder.record({ type: 'clearPins' });
+    recorder.record({ type: 'panBy', dxScreen: 1, dyScreen: 0 });
+
+    const { action, camera } = recorder.stop();
+    expect(action).toEqual([
+      { atStep: 0, event: { type: 'pin', id: 'p', x: 0, y: 0 } },
+      { atStep: 0, event: { type: 'clearPins' } },
+    ]);
+    expect(camera).toEqual([{ atStep: 0, event: { type: 'panBy', dxScreen: 1, dyScreen: 0 } }]);
+  });
+
+  it('錄製目標為 camera 時 clearPins 不進任何一份（只錄運鏡，issue #51）', () => {
+    const recorder = new TrackRecorder();
+    recorder.start('camera');
+    recorder.record({ type: 'clearPins' });
+    recorder.record({ type: 'frame' });
+
+    const { action, camera } = recorder.stop();
+    expect(action).toEqual([]);
+    expect(camera).toEqual([{ atStep: 0, event: { type: 'frame' } }]);
+  });
+
   describe('起點鏡頭快照 startCamera（issue #36 / V2 T1-4）', () => {
     it('start() 帶進來的快照原樣夾帶在 stop() 回傳裡', () => {
       const recorder = new TrackRecorder();
