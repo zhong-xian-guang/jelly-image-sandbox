@@ -127,6 +127,11 @@ export interface ControlPanelOptions {
   tapStrengthRange: { min: number; max: number; step: number };
   /** 「Demo」按鈕列表（issue #15），依序顯示；點下呼叫 `onRunDemo(id)`。 */
   demos: readonly DemoMenuItem[];
+  /**
+   * 「匯入圖片」按鈕被按（issue #56 / V2 T2-3）——開瀏覽器原生檔案選擇器，選到的圖
+   * 走跟拖放匯入完全相同的後續路徑。角落常駐提示字的點擊也接同一個回呼。
+   */
+  onImportImage: () => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -271,6 +276,7 @@ export class ControlPanel {
 
     panel.append(
       this.perfStatus,
+      this.buttonRow('匯入圖片…', opts.onImportImage),
       this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange),
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
       this.rangeRow('軟硬度', 0, 1, 0.01, opts.initial.softness, opts.onSoftnessChange),

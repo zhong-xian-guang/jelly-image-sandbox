@@ -67,7 +67,8 @@ body {
  * 常駐匯入提示（issue #12 追加）：`.jelly-drop-hint` 只在拖曳檔案經過畫面時
  * 才出現——沒人告訴使用者「拖 PNG 進來可以匯入」這件事本身存在，第一次使用
  * 完全無從發現。低調小字放在角落，拖曳中時會被上面全螢幕的 `.jelly-drop-hint`
- * 蓋住，不會兩層提示疊在一起。
+ * 蓋住，不會兩層提示疊在一起。issue #56 讓它本身可點（開檔案選擇器），所以
+ * 收下指標事件並給游標／hover 回饋；它只佔右下角一小塊，不擋主要操作。
  */
 .jelly-import-hint {
   position: absolute;
@@ -79,7 +80,12 @@ body {
   background: rgba(0, 0, 0, 0.4);
   color: rgba(255, 255, 255, 0.7);
   font-size: 0.8rem;
-  pointer-events: none;
+  cursor: pointer;
+}
+
+.jelly-import-hint:hover {
+  background: rgba(0, 0, 0, 0.6);
+  color: rgba(255, 255, 255, 0.95);
 }
 
 /**

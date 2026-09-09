@@ -136,6 +136,7 @@ import {
   stepToSeconds,
 } from './demos';
 import { DropImportInput } from './DropImportInput';
+import { FileImportInput } from './FileImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
@@ -229,6 +230,8 @@ export class JellySandbox {
   private input: PointerInput;
   private cameraInput: CameraInput;
   private readonly dropImportInput: DropImportInput;
+  /** 「匯入圖片」按鈕與角落提示字點擊 → 原生檔案選擇器 → 與拖放相同的匯入路徑（issue #56）。 */
+  private readonly fileImportInput: FileImportInput;
   private readonly controlPanel: ControlPanel;
   private readonly pinMarkers: PinMarkers;
   private readonly demoRunner = new DemoRunner();
@@ -329,6 +332,13 @@ export class JellySandbox {
         this.dropHint.classList.toggle(DROP_HINT_ACTIVE_CLASS, active),
       onReject: (message) => this.showNotice(message),
     });
+    // 匯入圖片的第二條入口（issue #56）：按鈕與角落常駐提示字都開這個隱藏 file input，
+    // 選到的圖走 `onDropImport` ——與拖放完全相同的後續路徑。
+    this.fileImportInput = new FileImportInput(root.ownerDocument, {
+      onImport: this.onDropImport,
+      onReject: (message) => this.showNotice(message),
+    });
+    this.importHint.addEventListener('click', this.onImportHintClick);
 
     this.controlPanel = new ControlPanel({
       initial: {
@@ -343,6 +353,7 @@ export class JellySandbox {
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
+      onImportImage: () => this.fileImportInput.open(),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -425,7 +436,9 @@ export class JellySandbox {
     this.stop();
     window.removeEventListener('resize', this.onResize);
     this.dropImportInput.destroy();
+    this.fileImportInput.destroy();
     this.dropHint.remove();
+    this.importHint.removeEventListener('click', this.onImportHintClick);
     this.importHint.remove();
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     this.notice.remove();
@@ -1074,16 +1087,21 @@ export class JellySandbox {
   }
 
   /**
-   * 常駐的匯入提示（issue #12 追加）——`jelly-drop-hint` 只在拖曳中才顯示，
-   * 使用者不會知道「拖圖片進來可以匯入」這個功能本身存在。低調小字放在角落，
-   * 不擋任何操作、拖曳時會被上面的 `jelly-drop-hint` 蓋住。
+   * 常駐的匯入提示（issue #12 追加；issue #56 讓它本身可點）——`jelly-drop-hint`
+   * 只在拖曳中才顯示，使用者不會知道「拖圖片進來可以匯入」這個功能本身存在。
+   * 低調小字放在角落，拖曳時會被上面的 `jelly-drop-hint` 蓋住。點它等同按控制面板
+   * 的「匯入圖片」鈕，開同一個檔案選擇器（`onImportHintClick`）。
    */
   private createImportHint(): HTMLDivElement {
     const hint = document.createElement('div');
     hint.className = 'jelly-import-hint';
-    hint.textContent = '拖曳一張圖片（PNG / JPEG / GIF）到畫面上以匯入';
+    hint.textContent = '拖曳圖片到畫面上，或點這裡選檔匯入（PNG / JPEG / GIF）';
     return hint;
   }
+
+  private onImportHintClick = (): void => {
+    this.fileImportInput.open();
+  };
 
   /**
    * 匯入被拒／失敗時的畫面提示（issue #55 檢視追加）——`console.warn` 只有開
