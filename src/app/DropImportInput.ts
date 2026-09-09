@@ -67,8 +67,19 @@ export class DropImportInput {
     this.dragDepth = 0;
     this.opts.onDragActiveChange(false);
 
-    const file = selectSupportedImageFile(ev.dataTransfer?.files);
-    if (!file) return; // 非圖片／不支援格式：忽略、不崩（issue #12 驗收條件）
+    const files = ev.dataTransfer?.files;
+    const file = selectSupportedImageFile(files);
+    if (!file) {
+      // 真的拖了檔案、只是格式不支援（webp/avif/bmp…）→ 主控台一行警告後略過
+      // （issue #55 驗收條件：「畫面無變化、主控台一行警告、原本的果凍不受影響」）。
+      // 純文字／連結拖曳沒有 files，不吭聲。
+      if (files && files.length > 0) {
+        console.warn(
+          '[jelly] 拖進來的檔案不是支援的圖片格式（僅支援 PNG / JPEG / GIF），已略過',
+        );
+      }
+      return;
+    }
     file
       .arrayBuffer()
       .then((buf) => this.opts.onImport(new Uint8Array(buf)))
