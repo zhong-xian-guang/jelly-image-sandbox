@@ -15,12 +15,12 @@
  * **拖放匯入**：`DropImportInput`（薄的接線層，對照 `PointerInput`/`CameraInput`）
  * 挑出拖放的影像檔（png/jpeg/gif）、讀成位元組後回呼 `importImage` → `buildSimMesh` → 換一套新的
  * `SimCore` + `JellyRenderer`（拓撲變了、舊 Mesh geometry 沒法沿用）。新 Renderer
- * 先建好、確定成功了才拆舊的，畫面不會有空檔；解碼／建網格失敗（非圖片、壞檔）
- * 一律 `console.warn` 後放棄，不影響原本的 Jelly。匯入時把控制面板目前設定
- * （Softness、輕拍力道、Boundary 模式）重新套到新的 `SimCore`，面板不會顯示跟
- * 實際物理不一致的值。`importHint`（issue #12 追加）是常駐在角落的低調小字，
- * 提示「可以拖圖片進來」——`dropHint` 只在拖曳中才出現，沒有這個常駐提示的話
- * 使用者無從發現這個功能本身存在。
+ * 先建好、確定成功了才拆舊的，畫面不會有空檔；解碼／建網格失敗（非圖片、不支援
+ * 格式、壞檔）一律 `console.warn` ＋ 畫面上閃一行 `notice` 後放棄，不影響原本的
+ * Jelly。匯入時把控制面板目前設定（Softness、輕拍力道、Boundary 模式）重新套到
+ * 新的 `SimCore`，面板不會顯示跟實際物理不一致的值。`importHint`（issue #12 追加）
+ * 是常駐在角落的低調小字，提示「可以拖圖片進來」——`dropHint` 只在拖曳中才出現，
+ * 沒有這個常駐提示的話使用者無從發現這個功能本身存在。
  *
  * **控制面板**：`ControlPanel`（同樣是薄的 DOM 接線層）建 UI、回呼往外送；實際
  * 換算邏輯都在純函式模組——Softness 曲線見 `../sim/softness`，Walled 邊界範圍見
@@ -157,6 +157,9 @@ import { computeWalledBounds } from './walledBounds';
 const CAMERA_MAX_DT = 0.1;
 /** 拖曳中疊在畫面上的提示層 class（樣式見 `style.css`）。 */
 const DROP_HINT_ACTIVE_CLASS = 'is-active';
+/** 匯入被拒／失敗提示（`jelly-notice`）顯示中的 class，以及自動隱藏的秒數。 */
+const NOTICE_VISIBLE_CLASS = 'is-visible';
+const NOTICE_DURATION_MS = 4000;
 /**
  * 輕拍力道滑桿的範圍；中點 = `DEFAULT_SIM_PARAMS.tapStrength`（6000）——同
  * `../sim/softness` 的理由，滑桿沒被動過時中點顯示的值要跟實際生效的一致。
@@ -225,6 +228,10 @@ export class JellySandbox {
   private readonly root: HTMLElement;
   private readonly dropHint: HTMLDivElement;
   private readonly importHint: HTMLDivElement;
+  /** 匯入被拒／失敗時，畫面上短暫顯示一行說明的浮層（見 `showNotice`）。 */
+  private readonly notice: HTMLDivElement;
+  /** `notice` 的自動隱藏計時器（`window.setTimeout` 的回傳值，0 = 沒有）。 */
+  private noticeTimer = 0;
 
   private cameraState: CameraState;
   /** `CameraInput` 逐事件塞入，主迴圈每幀取出餵 `updateCamera` 後清空。 */
@@ -304,10 +311,13 @@ export class JellySandbox {
     root.appendChild(this.dropHint);
     this.importHint = this.createImportHint();
     root.appendChild(this.importHint);
+    this.notice = this.createNotice();
+    root.appendChild(this.notice);
     this.dropImportInput = new DropImportInput(root, {
       onImport: this.onDropImport,
       onDragActiveChange: (active) =>
         this.dropHint.classList.toggle(DROP_HINT_ACTIVE_CLASS, active),
+      onReject: (message) => this.showNotice(message),
     });
 
     this.controlPanel = new ControlPanel({
@@ -406,6 +416,8 @@ export class JellySandbox {
     this.dropImportInput.destroy();
     this.dropHint.remove();
     this.importHint.remove();
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.notice.remove();
     this.controlPanel.destroy();
     this.pinMarkers.destroy();
     this.input.destroy();
@@ -919,7 +931,10 @@ export class JellySandbox {
     if (this.importing) return;
     this.importing = true;
     this.importImage(imageBytes)
-      .catch((err: unknown) => console.warn('[jelly] 影像匯入失敗，已略過', err))
+      .catch((err: unknown) => {
+        console.warn('[jelly] 影像匯入失敗，已略過', err);
+        this.showNotice('這張圖片沒辦法變成果凍，已略過');
+      })
       .finally(() => {
         this.importing = false;
       });
@@ -1040,6 +1055,29 @@ export class JellySandbox {
     hint.className = 'jelly-import-hint';
     hint.textContent = '拖曳一張圖片（PNG / JPEG / GIF）到畫面上以匯入';
     return hint;
+  }
+
+  /**
+   * 匯入被拒／失敗時的畫面提示（issue #55 檢視追加）——`console.warn` 只有開
+   * DevTools 才看得到，使用者拖了不支援的檔案會不知道發生什麼事。置頂置中一行、
+   * `aria-live` 讓螢幕報讀器也讀得到，幾秒後自動淡出。
+   */
+  private createNotice(): HTMLDivElement {
+    const el = document.createElement('div');
+    el.className = 'jelly-notice';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    return el;
+  }
+
+  private showNotice(message: string): void {
+    this.notice.textContent = message;
+    this.notice.classList.add(NOTICE_VISIBLE_CLASS);
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => {
+      this.notice.classList.remove(NOTICE_VISIBLE_CLASS);
+      this.noticeTimer = 0;
+    }, NOTICE_DURATION_MS);
   }
 
   private frame = (nowMs: number): void => {
