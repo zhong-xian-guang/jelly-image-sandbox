@@ -1,7 +1,7 @@
 /**
  * Camera（issue #13 / T12）的型別。
  *
- * Camera 與求解器無關：它只吃 Jelly 的質心／bounding box（`CameraTarget`）＋一串
+ * Camera 與求解器無關：它只吃 Jelly 的 bounding box（`CameraTarget`）＋一串
  * 手動輸入指令（`CameraCommand`），吐世界→螢幕變換（`CameraTransform`）。求解器
  * 不知道 Camera 存在（見 `docs/design/simulation-and-mesh.md`「模組邊界」）。
  *
@@ -27,9 +27,12 @@ export interface CanvasSize {
   height: number;
 }
 
-/** 自動跟隨的驅動來源：Jelly 目前的質心（平移）＋ bounding box（zoom-to-fit）。 */
+/**
+ * 自動跟隨的驅動來源：Jelly 目前的 bounding box。平移分量對準 bbox 中心、縮放
+ * 對 bbox 做 zoom-to-fit——跟「框住果凍」與匯入初始鏡位同一個錨點，跟隨會收斂到
+ * 跟按一次「框住果凍」完全相同的鏡位（見 `updateCamera`）。
+ */
 export interface CameraTarget {
-  centroid: Point;
   bbox: Bbox;
 }
 
@@ -47,8 +50,8 @@ export interface CameraFollowConfig {
   /** zoom-to-fit 從可用畫布尺寸總共扣掉的邊距（CSS px，兩側均分）。 */
   fitMarginPx: number;
   /**
-   * 自動跟隨時，質心離畫面中心的硬上限＝短邊 × 此比例。甩太快、跟隨還沒補上時
-   * 由它保證 Jelly 不跑出畫面（一般跟隨誤差遠小於此、不會觸發）。
+   * 自動跟隨時，bbox 中心離畫面中心的硬上限（各軸獨立）＝該軸畫布尺寸 × 此比例。
+   * 甩太快、跟隨還沒補上時由它保證 Jelly 不跑出畫面（一般跟隨誤差遠小於此、不會觸發）。
    */
   keepInFrameFrac: number;
   /** scale 下限（防呆：極大 bbox 不會把 Jelly 縮成看不見）。 */

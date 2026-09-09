@@ -65,7 +65,7 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 - **Sim mesh 生成是一個模組**：`(Contour, 內部點參數) → (positions, indices, uv, restAreas)`。換掉三角化實作（如日後改 spade→wasm）只動這裡。
 - **Grab／Pin 是 `(世界座標點) → {三角形, 重心座標}` 的 picking + 一條位置約束**。輸入層負責 picking（點擊命中哪個三角形），求解器只認 `{三角形, 重心座標, 目標點, locked}`。
 - **輸入走 `applyInput(event)` 單一介面**（見上「輸入介面」）。即時輸入層、Demo、v2 錄製器都經由它，不繞過。
-- **Camera 與求解器無關**：Camera 吃 Jelly 的質心／bbox + `cameraMove` event，吐世界→螢幕變換；求解器不知道 Camera 存在。
+- **Camera 與求解器無關**：Camera 吃 Jelly 的 bbox + `cameraMove` event，吐世界→螢幕變換；求解器不知道 Camera 存在。
 
 ## 輸入介面
 
@@ -87,11 +87,14 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 （決定性、無 DOM，同 ADR-0005）＋ `CameraGestures`/`CameraInput`（DOM 手勢 → 指令）。
 `state.transform`（`{ x, y, scale }`）給算繪與 picking 用。
 
-- **自動跟隨**：平移分量對 Jelly 質心、縮放對 bounding box 的 zoom-to-fit（帶邊距），
-  各做 frame-rate 無關的指數平滑（`α = 1 − e^(−λ·dt)`）。λ 是參數（`CameraFollowConfig`，
-  有預設值 `DEFAULT_CAMERA_FOLLOW_CONFIG`，同求解器的 `SimParams`）。追不上時（用力甩
-  遠、bbox 突然變大）有硬上限頂住：質心離畫面中心的距離不超過短邊 × `keepInFrameFrac`、
-  縮放需要「縮小才塞得下」時立即到位——保證 Jelly 不會跑出畫面／被裁掉。
+- **自動跟隨**：平移分量與縮放都對 Jelly bounding box 的 zoom-to-fit（帶邊距）——平移
+  對準 bbox 中心、縮放塞進畫布——各做 frame-rate 無關的指數平滑（`α = 1 − e^(−λ·dt)`）。
+  λ 是參數（`CameraFollowConfig`，有預設值 `DEFAULT_CAMERA_FOLLOW_CONFIG`，同求解器的
+  `SimParams`）。錨點刻意跟「框住果凍」與匯入初始鏡位一致——靜置跟隨會收斂到跟按一次
+  「框住果凍」相同的鏡位，不會因 Jelly 形狀不對稱（質心 ≠ bbox 中心）而偏掉。追不上時
+  （用力甩遠、bbox 突然變大）有硬上限頂住：bbox 中心離畫面中心的距離（各軸獨立）不超過
+  該軸畫布尺寸 × `keepInFrameFrac`、縮放需要「縮小才塞得下」時立即到位——保證 Jelly 不會
+  跑出畫面／被裁掉。
 - **手動平移／縮放**：滾輪／pinch → `zoomBy`（對準指標處）、拖背景／雙指拖 → `panBy`
   （螢幕像素）。手動輸入期間 `sinceManualSeconds` 歸零 → **暫停自動跟隨**；閒置 **~2s**
   （`resumeDelaySeconds`）後緩動回歸。「背景」＝ `pointerdown` 時 `sim.pick()` 沒命中。

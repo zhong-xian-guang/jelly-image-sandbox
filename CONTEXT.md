@@ -53,7 +53,7 @@ _Avoid_: poke、click、戳
 _Avoid_: lock、fix、錨定（一般動詞）、centroid lock
 
 **Camera follow（相機跟隨）**：
-Camera 由 Jelly 的質心／bounding box 自動平移縮放的行為。使用者手動平移／縮放時暫停，閒置後緩動回歸；「鎖定跟隨」開關可完全關閉。
+Camera 由 Jelly 的 bounding box 自動平移縮放的行為（平移對準 bbox 中心、縮放 zoom-to-fit，與「框住果凍」同錨點）。使用者手動平移／縮放時暫停，閒置後緩動回歸；「鎖定跟隨」開關可完全關閉。
 _Avoid_: auto-cam、tracking
 
 **Boundary（邊界）**：
