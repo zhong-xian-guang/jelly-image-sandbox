@@ -34,6 +34,7 @@
  * 不會產生多餘的 reflow（在想省效能的降級路徑上，多餘 DOM 寫入是反效果）。
  */
 
+import type { ToolId } from '../input';
 import type { BoundaryMode } from '../sim';
 import type { RecordTarget } from './track';
 
@@ -108,6 +109,8 @@ export interface GroupListRow {
 }
 
 export interface ControlPanelInitial {
+  /** 「目前工具」選擇器的初始值（issue #65 / V2 T3-1；ADR-0011）。 */
+  activeTool: ToolId;
   boundary: BoundaryMode;
   /** Softness 滑桿目前值，0–1（見 `../sim/softness`）。 */
   softness: number;
@@ -143,6 +146,11 @@ export interface ControlPanelOptions {
    * 整包取代目前場景（走跟「重新匯入圖片」相同的收束路徑）。
    */
   onLoadClip: () => void;
+  /**
+   * 「目前工具」選擇器變更（issue #65 / V2 T3-1；ADR-0011）——目前只有「一般操作」
+   * 一個選項，切換給 `JellySandbox` 轉發到 `PointerInput.setActiveTool`。
+   */
+  onToolChange: (tool: ToolId) => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -293,6 +301,8 @@ export class ControlPanel {
     const followLock = this.followLockRow(opts.initial.followLocked, opts.onFollowLockChange);
     this.followLockCheckbox = followLock.checkbox;
 
+    const tool = this.toolRow(opts.initial.activeTool, opts.onToolChange);
+
     const boundary = this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange);
     this.boundarySelect = boundary.select;
     const softness = this.rangeRow(
@@ -319,6 +329,7 @@ export class ControlPanel {
       this.buttonRow('匯入圖片…', opts.onImportImage),
       this.buttonRow('儲存片段', opts.onSaveClip),
       this.buttonRow('載入片段…', opts.onLoadClip),
+      tool.row,
       boundary.row,
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
       softness.row,
@@ -579,6 +590,33 @@ export class ControlPanel {
 
   destroy(): void {
     this.element.remove();
+  }
+
+  /**
+   * 「目前工具」下拉（issue #65 / V2 T3-1；ADR-0011）——只涵蓋新增的沙盒工具，
+   * 目前只有「一般操作」（＝維持既有 Grab/Pin/Tap 純手勢），選中它時 `ToolRouter`
+   * 原封不動委派給既有 `GestureTracker`。後續電風扇／編隊抓取／撒 Pin／移除 Pin
+   * 上線時在這裡加選項。
+   */
+  private toolRow(
+    initial: ToolId,
+    onChange: (tool: ToolId) => void,
+  ): { row: HTMLElement; select: HTMLSelectElement } {
+    const row = document.createElement('label');
+    row.className = 'jelly-control-row';
+
+    const select = document.createElement('select');
+    for (const [value, text] of [['general', '一般操作']] as const) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      option.selected = value === initial;
+      select.appendChild(option);
+    }
+    select.addEventListener('change', () => onChange(select.value as ToolId));
+
+    row.append('目前工具', select);
+    return { row, select };
   }
 
   private boundaryRow(

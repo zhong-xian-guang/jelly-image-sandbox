@@ -104,7 +104,7 @@ import {
   updateCamera,
   worldToScreen,
 } from '../camera';
-import { PointerInput, routeForPinMode } from '../input';
+import { type ToolId, PointerInput, routeForPinMode } from '../input';
 import {
   buildSimMesh,
   DEFAULT_PARAMS,
@@ -270,6 +270,11 @@ export class JellySandbox {
   private wallBox: Bbox | null = null;
   /** 控制面板「Pin 模式」開關；`attachInputHandlers` 的 `applyInput` 靠它轉接。 */
   private pinModeEnabled = false;
+  /**
+   * 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，
+   * 重新匯入圖片換綁新 canvas 時要靠這個重套（見 `attachInputHandlers` 呼叫處）。
+   */
+  private activeTool: ToolId = 'general';
   /** 「顯示 Pin」開關——關閉時 `pinMarkers` 整層藏起來、跳過每幀的投影計算。 */
   private pinsVisible = true;
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
@@ -381,6 +386,7 @@ export class JellySandbox {
 
     this.controlPanel = new ControlPanel({
       initial: {
+        activeTool: this.activeTool,
         boundary: this.boundaryMode,
         softness: DEFAULT_SOFTNESS,
         tapStrength: this.sim.params.tapStrength,
@@ -395,6 +401,7 @@ export class JellySandbox {
       onImportImage: () => this.fileImportInput.open(),
       onSaveClip: () => this.saveClip(),
       onLoadClip: () => this.clipFileInput.open(),
+      onToolChange: (tool) => this.setActiveTool(tool),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -961,6 +968,16 @@ export class JellySandbox {
   }
 
   /**
+   * 「目前工具」選擇器變更（issue #65 / V2 T3-1）——轉發給 `PointerInput.setActiveTool`；
+   * `activeTool` 另外存一份給重新匯入圖片後換綁新 canvas 時重套（見 `attachInputHandlers`
+   * 呼叫處，比照 `applyPinModeCursor` 的手法）。
+   */
+  private setActiveTool(tool: ToolId): void {
+    this.activeTool = tool;
+    this.input.setActiveTool(tool);
+  }
+
+  /**
    * 「清除所有 Pin」按鈕（issue #14；issue #51 起改走窄介面）——跟指標事件同一條
    * 路：一個無 `id` 的「清除 Pin 事件」`InputEvent` 送進 `sim.applyInput`，同時
    * `trackRecorder.record`（no-op 除非正在錄製）。不再直呼 `sim.clearPins()`，回到
@@ -1227,6 +1244,7 @@ export class JellySandbox {
     ));
     this.renderer.setCamera(this.cameraState.transform);
     this.applyPinModeCursor(); // 新 canvas 是全新元素，游標樣式要重套
+    this.input.setActiveTool(this.activeTool); // 新 PointerInput 預設回一般操作，要重套
     this.renderer.setWireframeVisible(this.wireframeVisible); // 新 JellyRenderer 預設隱藏，要重套
     this.renderer.setWallBounds(this.wallBox); // 新 JellyRenderer 預設沒有牆框，要重套
   }

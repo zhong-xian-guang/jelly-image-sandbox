@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { isSupportedImageFile, readSelectedImageFile, selectSupportedImageFile } from './dropImport';
+import {
+  isSupportedImageFile,
+  readSelectedImageFile,
+  selectSupportedImageFile,
+} from './dropImport';
 import { fakeFileList } from './testFixtures';
 
 describe('selectSupportedImageFile', () => {
