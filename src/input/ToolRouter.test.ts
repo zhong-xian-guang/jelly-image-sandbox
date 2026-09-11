@@ -46,6 +46,20 @@ describe('ToolRouter — 「一般操作」委派給內部 GestureTracker，行�
     ]);
   });
 
+  it('按太久（> 250ms）→ 不算 tap', () => {
+    const { router, events } = makeRouter();
+    router.down(1, 0, 0, 0);
+    router.up(1, 1, 1, 300);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'release']);
+  });
+
+  it('位移太大（> 6px）→ 不算 tap，即使很快', () => {
+    const { router, events } = makeRouter();
+    router.down(1, 0, 0, 0);
+    router.up(1, 10, 0, 50);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'release']);
+  });
+
   it('config 可調 tap 門檻（轉傳給內部 GestureTracker）', () => {
     const { router, events } = makeRouter({ tapMaxMs: 100, tapMaxDist: 2 });
     router.down(1, 0, 0, 0);
