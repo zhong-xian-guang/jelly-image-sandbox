@@ -1,13 +1,22 @@
 /**
- * `clipFile` 序列化端的單元測試（issue #57 / V2 T2-4）——聚焦 `serializeClip`：
- * 產出合法 `version: 1` JSON、涵蓋所有欄位、`image.bytes` 走 base64 逐位元組還原、
- * 不改動傳入的 `ClipState`。`parseClipFile`（反向）由 issue #58 補完，不在此測。
- * prior art：`src/app/track/groups.test.ts`、`src/app/demos/overlay.test.ts`。
+ * `clipFile` 的單元測試——`serializeClip`（issue #57 / V2 T2-4）：產出合法
+ * `version: 1` JSON、涵蓋所有欄位、`image.bytes` 走 base64 逐位元組還原、不改動
+ * 傳入的 `ClipState`。`parseClipFile`（issue #58 / V2 T2-5）：`serializeClip` →
+ * `parseClipFile` round-trip 深度相等，以及各類壞檔（非 JSON／版本不符／欄位缺或
+ * 型別錯）丟 `ClipFileError`。prior art：`src/app/track/groups.test.ts`、
+ * `src/app/demos/overlay.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { CLIP_FILE_VERSION, clipFileTimestamp, serializeClip, type ClipState } from './clipFile';
+import {
+  CLIP_FILE_VERSION,
+  ClipFileError,
+  clipFileTimestamp,
+  parseClipFile,
+  serializeClip,
+  type ClipState,
+} from './clipFile';
 
 /** test-only：base64 → bytes（模組本身只做編碼，解碼由 issue #58 補）。 */
 function decodeBase64(b64: string): Uint8Array {
@@ -163,6 +172,99 @@ describe('serializeClip', () => {
     expect(parsed.setupPins).toEqual([]);
     expect(parsed.image.format).toBe('png');
     expect(Array.from(decodeBase64(parsed.image.bytes))).toEqual([137, 80, 78, 71]);
+  });
+});
+
+describe('parseClipFile', () => {
+  it('round-trip：serializeClip → parseClipFile 對全欄位 ClipState 深度相等', () => {
+    const clip = fullClip();
+    const parsed = parseClipFile(serializeClip(clip));
+    expect(parsed).toEqual(clip);
+    expect(Array.from(parsed.image.bytes)).toEqual(Array.from(clip.image.bytes));
+  });
+
+  it('round-trip：空 tracks / groups / setupPins（預設果凍剛啟動的狀態）', () => {
+    const clip: ClipState = {
+      ...fullClip(),
+      image: { format: 'png', bytes: new Uint8Array([137, 80, 78, 71]) },
+      tracks: [],
+      groups: [{ id: 'default', name: '預設', enabled: true }],
+      setupPins: [],
+    };
+    const parsed = parseClipFile(serializeClip(clip));
+    expect(parsed).toEqual(clip);
+  });
+
+  it('round-trip：image.bytes 含 0 與 255 邊界值逐位元組還原', () => {
+    const clip: ClipState = {
+      ...fullClip(),
+      image: { format: 'jpeg', bytes: new Uint8Array([0, 255, 128, 1, 254]) },
+    };
+    const parsed = parseClipFile(serializeClip(clip));
+    expect(Array.from(parsed.image.bytes)).toEqual([0, 255, 128, 1, 254]);
+  });
+
+  it('非 JSON → ClipFileError', () => {
+    expect(() => parseClipFile('這不是 JSON {{{')).toThrow(ClipFileError);
+  });
+
+  it('version 不是已知值 → ClipFileError', () => {
+    const doc = { ...JSON.parse(serializeClip(fullClip())), version: 2 };
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('頂層不是物件（例如陣列）→ ClipFileError', () => {
+    expect(() => parseClipFile('[1, 2, 3]')).toThrow(ClipFileError);
+  });
+
+  it('image 欄位缺失 → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
+    delete doc.image;
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('image.bytes 不是合法 base64 → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as { image: { bytes: string } };
+    doc.image.bytes = '不是 base64！！！';
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('image.format 不是已知格式 → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as { image: { format: string } };
+    doc.image.format = 'webp';
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('meshParams 欄位型別錯（字串取代數字）→ ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as {
+      meshParams: Record<string, unknown>;
+    };
+    doc.meshParams.targetParticleCount = '350';
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('sim.boundary 不是已知值 → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as { sim: Record<string, unknown> };
+    doc.sim.boundary = 'open';
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('tracks 不是陣列 → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
+    doc.tracks = {};
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('tracks[].kind 不是已知值 → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as { tracks: Record<string, unknown>[] };
+    doc.tracks[0]!.kind = 'weird';
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('counters 欄位缺失 → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
+    delete doc.counters;
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
   });
 });
 
