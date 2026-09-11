@@ -22,6 +22,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       followLocked: false,
       showWireframe: false,
       recordTarget: 'action',
+      showFanHint: true,
     },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     demos: [],
@@ -29,6 +30,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onSaveClip: vi.fn(),
     onLoadClip: vi.fn(),
     onToolChange: vi.fn(),
+    onRemoveFan: vi.fn(),
+    onShowFanHintChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -455,13 +458,13 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
     return select!;
   }
 
-  it('預設選中「一般操作」，目前只有這一個選項', () => {
+  it('預設選中「一般操作」，選項含「一般操作」與「電風扇」', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
 
     const select = findToolSelect(panel);
     expect(select.value).toBe('general');
-    expect([...select.options].map((o) => o.value)).toEqual(['general']);
+    expect([...select.options].map((o) => o.value)).toEqual(['general', 'fan']);
   });
 
   it('切換選項 → onToolChange 收到新值', () => {
@@ -473,5 +476,47 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
     select.dispatchEvent(new Event('change'));
 
     expect(opts.onToolChange).toHaveBeenCalledWith('general');
+  });
+
+  it('切到「電風扇」→ onToolChange 收到 "fan"', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const select = findToolSelect(panel);
+
+    select.value = 'fan';
+    select.dispatchEvent(new Event('change'));
+
+    expect(opts.onToolChange).toHaveBeenCalledWith('fan');
+  });
+});
+
+describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
+  it('面板有一顆「移除風扇」按鈕，點擊呼叫 onRemoveFan', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+
+    const button = [...panel.element.querySelectorAll('button')].find(
+      (b) => b.textContent === '移除風扇',
+    );
+    expect(button).toBeDefined();
+
+    button!.click();
+    expect(opts.onRemoveFan).toHaveBeenCalledTimes(1);
+  });
+
+  it('「顯示風扇提示」checkbox 初始值來自 initial.showFanHint，切換觸發 onShowFanHintChange', () => {
+    const opts = makeOptions({ initial: { ...makeOptions().initial, showFanHint: false } });
+    const panel = new ControlPanel(opts);
+
+    const label = [...panel.element.querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('顯示風扇提示'),
+    );
+    expect(label).toBeDefined();
+    const checkbox = label!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    expect(opts.onShowFanHintChange).toHaveBeenCalledWith(true);
   });
 });
