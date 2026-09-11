@@ -1,9 +1,14 @@
 /**
- * `PointerInput`（issue #11 / T10）——把 DOM 指標事件接到 `GestureTracker`。
+ * `PointerInput`（issue #11 / T10）——把 DOM 指標事件接到 `ToolRouter`。
  *
  * 薄的接線層：`pointerdown/move/up/cancel` → 換算成畫布局部座標 + 時間戳 →
- * 呼叫 `GestureTracker`。所有影響模擬的輸入都經由 tracker 的 `emit`（接
+ * 呼叫 `ToolRouter`。所有影響模擬的輸入都經由 tracker 的 `emit`（接
  * `sim.applyInput`），輸入層不直接碰求解器內部（ADR-0005）。
+ *
+ * issue #65 / V2 T3-1：內部持有的 tracker 從 `GestureTracker` 換成
+ * `ToolRouter`（「一般操作」下原封不動委派給既有 `GestureTracker`，行為不變）
+ * ——`setActiveTool` 轉發給 `ToolRouter`，供 `ControlPanel` 的「目前工具」
+ * 選擇器呼叫（見 ADR-0011）。
  *
  * **不直接把瀏覽器的 `PointerEvent.pointerId` 當 `GestureTracker`／`SimCore` 的
  * `id` 用**——滑鼠裝置的 `pointerId` 依規範永遠是 `1`，如果照樣沿用，兩次分開
@@ -16,13 +21,14 @@
  *
  * **只認滑鼠左鍵／觸控／觸控筆的主要接觸點**（`ev.button === 0`，這是
  * `PointerEvent` 對「主鍵／唯一接觸點」的統一表示法，觸控與觸控筆本來就只
- * 回報 0）。滑鼠中鍵（`button === 1`）整個忽略、不進 `GestureTracker`——
+ * 回報 0）。滑鼠中鍵（`button === 1`）整個忽略、不進 `ToolRouter`——
  * 中鍵留給 `CameraInput` 當相機平移，兩者才不會對同一次按下各自反應（見
  * `CameraInput` 對應的判斷）。
  */
 
 import type { InputEvent, Point } from '../sim';
-import { type GestureConfig, GestureTracker } from './GestureTracker';
+import type { GestureConfig } from './GestureTracker';
+import { type ToolId, ToolRouter } from './ToolRouter';
 
 export interface PointerInputOptions {
   screenToWorld: (screenX: number, screenY: number) => Point;
@@ -36,7 +42,7 @@ export interface PointerInputOptions {
 
 export class PointerInput {
   private readonly target: HTMLElement;
-  private readonly tracker: GestureTracker;
+  private readonly tracker: ToolRouter;
   private readonly now: () => number;
   /** 瀏覽器 `pointerId` → 這次手勢的合成 id；手勢結束（up/cancel）就刪掉。 */
   private readonly sessionIds = new Map<number, number>();
@@ -45,7 +51,7 @@ export class PointerInput {
   constructor(target: HTMLElement, opts: PointerInputOptions) {
     this.target = target;
     this.now = opts.now ?? (() => performance.now());
-    this.tracker = new GestureTracker({
+    this.tracker = new ToolRouter({
       screenToWorld: opts.screenToWorld,
       emit: opts.applyInput,
       hitTest: opts.hitTest,
@@ -67,6 +73,11 @@ export class PointerInput {
 
   get activeCount(): number {
     return this.tracker.activeCount;
+  }
+
+  /** 轉發給 `ToolRouter`（issue #65）——`ControlPanel` 的「目前工具」選擇器變更時呼叫。 */
+  setActiveTool(tool: ToolId): void {
+    this.tracker.setActiveTool(tool);
   }
 
   private localXY(ev: PointerEvent): [number, number] {

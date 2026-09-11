@@ -13,6 +13,7 @@ import { ControlPanel, type ControlPanelOptions, type TrackListRow } from './Con
 function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanelOptions {
   return {
     initial: {
+      activeTool: 'general',
       boundary: 'infinite',
       softness: 0.5,
       tapStrength: 6000,
@@ -27,6 +28,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onImportImage: vi.fn(),
     onSaveClip: vi.fn(),
     onLoadClip: vi.fn(),
+    onToolChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -438,7 +440,38 @@ describe('ControlPanel — 載入片段按鈕（issue #58 / V2 T2-5）', () => {
 
     const sliders = [...panel.element.querySelectorAll('input[type=range]')] as HTMLInputElement[];
     expect(sliders.map((s) => s.value)).toEqual(['0.83', '7300']);
-    const select = panel.element.querySelector('select') as HTMLSelectElement;
-    expect(select.value).toBe('walled');
+    const selects = [...panel.element.querySelectorAll('select')] as HTMLSelectElement[];
+    const boundarySelect = selects.find((s) => s.querySelector('option[value="walled"]'));
+    expect(boundarySelect?.value).toBe('walled');
+  });
+});
+
+describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-0011）', () => {
+  function findToolSelect(panel: ControlPanel): HTMLSelectElement {
+    const select = [...panel.element.querySelectorAll('select')].find((s) =>
+      s.querySelector('option[value="general"]'),
+    ) as HTMLSelectElement | undefined;
+    expect(select).toBeDefined();
+    return select!;
+  }
+
+  it('預設選中「一般操作」，目前只有這一個選項', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+
+    const select = findToolSelect(panel);
+    expect(select.value).toBe('general');
+    expect([...select.options].map((o) => o.value)).toEqual(['general']);
+  });
+
+  it('切換選項 → onToolChange 收到新值', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const select = findToolSelect(panel);
+
+    select.value = 'general';
+    select.dispatchEvent(new Event('change'));
+
+    expect(opts.onToolChange).toHaveBeenCalledWith('general');
   });
 });
