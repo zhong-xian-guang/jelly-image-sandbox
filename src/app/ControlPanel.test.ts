@@ -25,6 +25,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     demos: [],
     onImportImage: vi.fn(),
+    onSaveClip: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -364,5 +365,35 @@ describe('ControlPanel — 匯入圖片按鈕（issue #56）', () => {
     expect(button.disabled).toBe(false);
     button.click();
     expect(opts.onImportImage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ControlPanel — 儲存片段按鈕（issue #57 / V2 T2-4）', () => {
+  it('面板有一顆「儲存片段」按鈕，點擊呼叫 onSaveClip', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+
+    const button = [...panel.element.querySelectorAll('button')].find(
+      (b) => b.textContent === '儲存片段',
+    );
+    expect(button).toBeDefined();
+
+    button!.click();
+    expect(opts.onSaveClip).toHaveBeenCalledTimes(1);
+  });
+
+  it('儲存片段按鈕任何時候都可用（不受播放／錄製鎖定影響）', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const button = [...panel.element.querySelectorAll('button')].find(
+      (b) => b.textContent === '儲存片段',
+    )!;
+
+    panel.setPlaybackControlsEnabled(false);
+    panel.setRecordingActive(true);
+
+    expect(button.disabled).toBe(false);
+    button.click();
+    expect(opts.onSaveClip).toHaveBeenCalledTimes(1);
   });
 });

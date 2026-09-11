@@ -110,6 +110,7 @@ import {
   DEFAULT_PARAMS,
   imageFormatToMime,
   sniffImageFormat,
+  type BuildSimMeshParams,
   type SimMesh,
 } from '../mesh';
 import { JellyRenderer } from '../render';
@@ -123,8 +124,15 @@ import {
   softnessToParams,
   WalledBoundary,
 } from '../sim';
+import {
+  clipFileTimestamp,
+  serializeClip,
+  type ClipImage,
+  type ClipState,
+  type ClipTrack,
+} from './clipFile';
 import { ControlPanel } from './ControlPanel';
-import { createDefaultJelly } from './defaultJelly';
+import { canvasToPng, createDefaultJelly } from './defaultJelly';
 import {
   DEMOS,
   DemoRunner,
@@ -299,6 +307,24 @@ export class JellySandbox {
   /** 目前的「獨奏」狀態（`null` = 沒在獨奏）——狀態轉移見 `track/groups` 的 `toggleSolo`。 */
   private soloState: SoloState | null = null;
 
+  /**
+   * 軟硬度滑桿目前值本身（0–1）——`setSoftness` 收到後即轉成 `cellFrac`／`alphaSm`
+   * 套進 `sim.params`，滑桿原始值 `SimCore` 不留，這裡記著供存檔（issue #57）。
+   */
+  private softness = DEFAULT_SOFTNESS;
+  /**
+   * 最近一次匯入實際餵給 `buildSimMesh` 的**解析後完整**參數（issue #57）——含可能被
+   * 效能退路砍半的 `targetParticleCount`。存檔時原樣寫進 `ClipState.meshParams`，載入端
+   * （issue #58）據此決定性重算 mesh。還沒匯入任何圖時 = `DEFAULT_PARAMS`（內建果凍）。
+   */
+  private lastMeshParams: BuildSimMeshParams = { ...DEFAULT_PARAMS };
+  /**
+   * 最近一次成功匯入的來源影像（issue #57）——存檔時原樣成為 `ClipState.image`。
+   * `null` = 還沒匯入任何圖，仍是內建預設果凍：存檔當下改用
+   * `canvasToPng(defaultTexture)` 拍成 `format: 'png'`（見 `buildClipState`）。
+   */
+  private lastImage: ClipImage | null = null;
+
   private rafId = 0;
   private lastFrameMs = 0;
 
@@ -307,6 +333,8 @@ export class JellySandbox {
     sim: SimCore,
     renderer: JellyRenderer,
     cameraState: CameraState,
+    /** 內建預設果凍的貼圖畫布——沒匯入任何圖時，存檔靠它拍一張 PNG（issue #57）。 */
+    private readonly defaultTexture: HTMLCanvasElement,
   ) {
     this.root = root;
     this.sim = sim;
@@ -354,6 +382,7 @@ export class JellySandbox {
       tapStrengthRange: TAP_STRENGTH_RANGE,
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
       onImportImage: () => this.fileImportInput.open(),
+      onSaveClip: () => this.saveClip(),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -418,7 +447,7 @@ export class JellySandbox {
         height: root.clientHeight,
       },
     );
-    return new JellySandbox(root, sim, renderer, cameraState);
+    return new JellySandbox(root, sim, renderer, cameraState, texture);
   }
 
   start(): void {
@@ -889,8 +918,9 @@ export class JellySandbox {
     }
   }
 
-  /** Softness 滑桿（issue #14）：0–1 → `cellFrac` + `alphaSm`（見 `../sim/softness`）。 */
+  /** Softness 滑桿（issue #14）：0–1 → `cellFrac` + `alphaSm`（見 `../sim/softness`）。滑桿原始值另記一份供存檔（issue #57）。 */
   private setSoftness(t: number): void {
+    this.softness = t;
     const { cellFrac, alphaSm } = softnessToParams(t);
     this.sim.params.cellFrac = cellFrac;
     this.sim.params.alphaSm = alphaSm;
@@ -984,12 +1014,80 @@ export class JellySandbox {
   private async importImage(imageBytes: Uint8Array): Promise<void> {
     // 網格解析度退路（issue #16）：上次 substep 降級以來還沒消化過，這次匯入改用
     // 較低的 targetParticleCount（見 REDUCED_TARGET_PARTICLE_COUNT、PerfMonitor）。
-    const meshParams = this.perfMonitor.consumeMeshFallbackPending()
-      ? { targetParticleCount: REDUCED_TARGET_PARTICLE_COUNT }
-      : {};
+    // 這裡就把參數**解析完整**（不只帶 diff），存檔要原樣寫進 `ClipState.meshParams`
+    // 供載入端決定性重算（issue #57）。
+    const meshParams: BuildSimMeshParams = {
+      ...DEFAULT_PARAMS,
+      ...(this.perfMonitor.consumeMeshFallbackPending()
+        ? { targetParticleCount: REDUCED_TARGET_PARTICLE_COUNT }
+        : {}),
+    };
     const mesh: SimMesh = buildSimMesh(imageBytes, meshParams);
     const texture = await decodeTextureImage(imageBytes);
     await this.replaceJelly(mesh, texture);
+    // 換果凍成功後才記住這次的來源影像與完整參數（供存檔）——`buildSimMesh` / 貼圖
+    // 解碼 / `replaceJelly` 中途丟錯時維持上一份，跟畫面上實際還在的果凍一致。
+    this.lastImage = { format: sniffImageFormat(imageBytes), bytes: imageBytes };
+    this.lastMeshParams = meshParams;
+  }
+
+  /**
+   * 「儲存片段」按鈕（issue #57 / V2 T2-4）——把目前整個片段序列化成一個帶時間戳
+   * 的 `.json` 下載（`jelly-sandbox-<YYYYMMDD-HHMMSS>.json`，多版本不互相覆蓋）。
+   * 任何時候都可用：還沒匯入任何圖時，內建預設果凍在此刻用 `canvasToPng` 拍成
+   * `format: 'png'`（載入端零特例）。
+   */
+  private saveClip(): void {
+    const json = serializeClip(this.buildClipState());
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const doc = this.root.ownerDocument;
+    const a = doc.createElement('a');
+    a.href = url;
+    a.download = `jelly-sandbox-${clipFileTimestamp(new Date())}.json`;
+    a.rel = 'noopener';
+    // 有些瀏覽器（Firefox）對沒掛進 DOM 的 <a> 不觸發下載——掛上、點、拆掉。
+    doc.body.appendChild(a);
+    a.click();
+    a.remove();
+    // 下載串流開始前就撤銷 object URL 會中斷下載——延到下一輪 tick 再撤。
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  /**
+   * 蒐集目前記憶體狀態成 `ClipState`（issue #57）——`RecordedTrack` 攤成 `ClipTrack`
+   * （`groupIds` 的 `Set` → 陣列、`customLabel ?? label` → `name`）、`setupPins`
+   * 拷成純 `{ x, y }`、`sim` 帶滑桿原始值。還沒匯入任何圖時 `image` 用內建預設
+   * 果凍此刻拍下的 PNG。
+   */
+  private buildClipState(): ClipState {
+    const image: ClipImage = this.lastImage ?? {
+      format: 'png',
+      bytes: canvasToPng(this.defaultTexture),
+    };
+    return {
+      image,
+      meshParams: this.lastMeshParams,
+      sim: {
+        softness: this.softness,
+        tapStrength: this.sim.params.tapStrength,
+        boundary: this.boundaryMode,
+      },
+      tracks: this.tracks.map((t): ClipTrack => ({
+        id: t.id,
+        kind: t.kind,
+        name: t.customLabel ?? t.label,
+        startStep: t.startStep,
+        inStep: t.inStep,
+        outStep: t.outStep,
+        steps: t.steps,
+        startCamera: t.startCamera,
+        groupIds: [...t.groupIds],
+      })),
+      groups: this.groups.map((g) => ({ id: g.id, name: g.name, enabled: g.enabled })),
+      setupPins: this.setupPins.map((p) => ({ x: p.x, y: p.y })),
+      counters: { nextTrackNum: this.nextTrackNum, nextGroupNum: this.nextGroupNum },
+    };
   }
 
   /**
