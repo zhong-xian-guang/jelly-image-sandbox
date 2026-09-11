@@ -138,6 +138,11 @@ export interface ControlPanelOptions {
    * 時間戳的 `.json` 下載。任何時候都可用（含還沒匯入任何圖、只有內建預設果凍時）。
    */
   onSaveClip: () => void;
+  /**
+   * 「載入片段」按鈕被按（issue #58 / V2 T2-5）——開檔案選擇器挑一個 `.json` 片段檔，
+   * 整包取代目前場景（走跟「重新匯入圖片」相同的收束路徑）。
+   */
+  onLoadClip: () => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -258,6 +263,14 @@ export class ControlPanel {
   private readonly perfStatus: HTMLElement;
   /** `setPerfStatus` 比對用；避免值沒變時每幀重寫 DOM。 */
   private lastPerfText: string | null = null;
+  /**
+   * Softness／輕拍力道滑桿與邊界模式下拉——`JellySandbox.applyClipState`（issue #58）
+   * 載入片段後靠 `setSoftness`／`setTapStrength`／`setBoundary` 把存檔值灌回面板，
+   * 不然面板顯示的滑桿位置會跟載入後實際生效的物理參數不一致。
+   */
+  private readonly softnessInput: HTMLInputElement;
+  private readonly tapStrengthInput: HTMLInputElement;
+  private readonly boundarySelect: HTMLSelectElement;
 
   constructor(opts: ControlPanelOptions) {
     this.onTrackStartTimeChange = opts.onTrackStartTimeChange;
@@ -280,21 +293,36 @@ export class ControlPanel {
     const followLock = this.followLockRow(opts.initial.followLocked, opts.onFollowLockChange);
     this.followLockCheckbox = followLock.checkbox;
 
+    const boundary = this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange);
+    this.boundarySelect = boundary.select;
+    const softness = this.rangeRow(
+      '軟硬度',
+      0,
+      1,
+      0.01,
+      opts.initial.softness,
+      opts.onSoftnessChange,
+    );
+    this.softnessInput = softness.input;
+    const tapStrength = this.rangeRow(
+      '輕拍力道',
+      opts.tapStrengthRange.min,
+      opts.tapStrengthRange.max,
+      opts.tapStrengthRange.step,
+      opts.initial.tapStrength,
+      opts.onTapStrengthChange,
+    );
+    this.tapStrengthInput = tapStrength.input;
+
     panel.append(
       this.perfStatus,
       this.buttonRow('匯入圖片…', opts.onImportImage),
       this.buttonRow('儲存片段', opts.onSaveClip),
-      this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange),
+      this.buttonRow('載入片段…', opts.onLoadClip),
+      boundary.row,
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
-      this.rangeRow('軟硬度', 0, 1, 0.01, opts.initial.softness, opts.onSoftnessChange),
-      this.rangeRow(
-        '輕拍力道',
-        opts.tapStrengthRange.min,
-        opts.tapStrengthRange.max,
-        opts.tapStrengthRange.step,
-        opts.initial.tapStrength,
-        opts.onTapStrengthChange,
-      ),
+      softness.row,
+      tapStrength.row,
       ...this.pinRows(
         opts.initial.pinMode,
         opts.initial.showPins,
@@ -518,6 +546,27 @@ export class ControlPanel {
   }
 
   /**
+   * 載入片段後（issue #58）把 Softness 滑桿位置灌回面板——`JellySandbox.applyClipState`
+   * 呼叫，跟 `setSoftness` 本身觸發的 sim 端變更分開（這裡只管顯示，不觸發 `input`
+   * 事件、不會呼叫 `onSoftnessChange` 造成迴圈）。
+   */
+  setSoftness(value: number): void {
+    const text = String(value);
+    if (this.softnessInput.value !== text) this.softnessInput.value = text;
+  }
+
+  /** 載入片段後把輕拍力道滑桿位置灌回面板（issue #58）。同 `setSoftness` 的理由。 */
+  setTapStrength(value: number): void {
+    const text = String(value);
+    if (this.tapStrengthInput.value !== text) this.tapStrengthInput.value = text;
+  }
+
+  /** 載入片段後把邊界模式下拉灌回面板（issue #58）。同 `setSoftness` 的理由。 */
+  setBoundary(mode: BoundaryMode): void {
+    if (this.boundarySelect.value !== mode) this.boundarySelect.value = mode;
+  }
+
+  /**
    * `JellySandbox` 每幀同步一次目前的 substep 數／是否處於降級狀態（issue #16）。
    * 只在文字真的變了才寫 DOM（見類別頂端說明）。
    */
@@ -532,7 +581,10 @@ export class ControlPanel {
     this.element.remove();
   }
 
-  private boundaryRow(initial: BoundaryMode, onChange: (mode: BoundaryMode) => void): HTMLElement {
+  private boundaryRow(
+    initial: BoundaryMode,
+    onChange: (mode: BoundaryMode) => void,
+  ): { row: HTMLElement; select: HTMLSelectElement } {
     const row = document.createElement('label');
     row.className = 'jelly-control-row';
 
@@ -550,7 +602,7 @@ export class ControlPanel {
     select.addEventListener('change', () => onChange(select.value as BoundaryMode));
 
     row.append('邊界', select);
-    return row;
+    return { row, select };
   }
 
   private rangeRow(
@@ -560,7 +612,7 @@ export class ControlPanel {
     step: number,
     value: number,
     onChange: (n: number) => void,
-  ): HTMLElement {
+  ): { row: HTMLElement; input: HTMLInputElement } {
     const row = document.createElement('label');
     row.className = 'jelly-control-row';
 
@@ -573,7 +625,7 @@ export class ControlPanel {
     input.addEventListener('input', () => onChange(Number(input.value)));
 
     row.append(labelText, input);
-    return row;
+    return { row, input };
   }
 
   /**

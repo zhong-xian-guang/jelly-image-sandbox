@@ -26,6 +26,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     demos: [],
     onImportImage: vi.fn(),
     onSaveClip: vi.fn(),
+    onLoadClip: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -395,5 +396,49 @@ describe('ControlPanel — 儲存片段按鈕（issue #57 / V2 T2-4）', () => {
     expect(button.disabled).toBe(false);
     button.click();
     expect(opts.onSaveClip).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ControlPanel — 載入片段按鈕（issue #58 / V2 T2-5）', () => {
+  it('面板有一顆「載入片段」按鈕，點擊呼叫 onLoadClip', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+
+    const button = [...panel.element.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('載入片段'),
+    );
+    expect(button).toBeDefined();
+
+    button!.click();
+    expect(opts.onLoadClip).toHaveBeenCalledTimes(1);
+  });
+
+  it('載入片段按鈕任何時候都可用（不受播放／錄製鎖定影響——載入自帶場景收束）', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const button = [...panel.element.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('載入片段'),
+    )!;
+
+    panel.setPlaybackControlsEnabled(false);
+    panel.setRecordingActive(true);
+
+    expect(button.disabled).toBe(false);
+    button.click();
+    expect(opts.onLoadClip).toHaveBeenCalledTimes(1);
+  });
+
+  it('setSoftness／setTapStrength／setBoundary 把值灌回面板對應的控制項', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+
+    panel.setSoftness(0.83);
+    panel.setTapStrength(7300);
+    panel.setBoundary('walled');
+
+    const sliders = [...panel.element.querySelectorAll('input[type=range]')] as HTMLInputElement[];
+    expect(sliders.map((s) => s.value)).toEqual(['0.83', '7300']);
+    const select = panel.element.querySelector('select') as HTMLSelectElement;
+    expect(select.value).toBe('walled');
   });
 });

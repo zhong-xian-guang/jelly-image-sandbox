@@ -124,8 +124,11 @@ import {
   softnessToParams,
   WalledBoundary,
 } from '../sim';
+import { ClipFileInput } from './ClipFileInput';
 import {
+  ClipFileError,
   clipFileTimestamp,
+  parseClipFile,
   serializeClip,
   type ClipImage,
   type ClipState,
@@ -240,6 +243,8 @@ export class JellySandbox {
   private readonly dropImportInput: DropImportInput;
   /** 「匯入圖片」按鈕與角落提示字點擊 → 原生檔案選擇器 → 與拖放相同的匯入路徑（issue #56）。 */
   private readonly fileImportInput: FileImportInput;
+  /** 「載入片段」按鈕 → 原生檔案選擇器挑 `.json` → `onLoadClip`（issue #58）。 */
+  private readonly clipFileInput: ClipFileInput;
   private readonly controlPanel: ControlPanel;
   private readonly pinMarkers: PinMarkers;
   private readonly demoRunner = new DemoRunner();
@@ -367,6 +372,12 @@ export class JellySandbox {
       onReject: (message) => this.showNotice(message),
     });
     this.importHint.addEventListener('click', this.onImportHintClick);
+    // 「載入片段」按鈕（issue #58）：選到的 .json 檔走 onLoadClip ——解析／驗證失敗
+    // 或場景整包取代失敗都在那裡 catch，原本的 Jelly 不受影響。
+    this.clipFileInput = new ClipFileInput(root.ownerDocument, {
+      onLoad: this.onLoadClip,
+      onReject: (message) => this.showNotice(message),
+    });
 
     this.controlPanel = new ControlPanel({
       initial: {
@@ -383,6 +394,7 @@ export class JellySandbox {
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
       onImportImage: () => this.fileImportInput.open(),
       onSaveClip: () => this.saveClip(),
+      onLoadClip: () => this.clipFileInput.open(),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -466,6 +478,7 @@ export class JellySandbox {
     window.removeEventListener('resize', this.onResize);
     this.dropImportInput.destroy();
     this.fileImportInput.destroy();
+    this.clipFileInput.destroy();
     this.dropHint.remove();
     this.importHint.removeEventListener('click', this.onImportHintClick);
     this.importHint.remove();
@@ -1091,6 +1104,75 @@ export class JellySandbox {
   }
 
   /**
+   * `ClipFileInput` 選到 `.json` 檔讀出文字後的回呼（issue #58）：`parseClipFile`
+   * 解析／驗證失敗（非 JSON／版本不符／欄位缺或型別錯）就在這裡接住、顯示提示、
+   * 目前場景**完全不動**（不進 `applyClipState`，不觸碰任何既有狀態）。解析成功
+   * 才交給 `applyClipState` 走場景整包取代；`importing` 擋掉跟拖放／按鈕匯入圖片
+   * 重疊的呼叫（共用同一套「換 sim/renderer」機制，不能兩邊同時動）。
+   */
+  private onLoadClip = (text: string): void => {
+    if (this.importing) return;
+    let clip: ClipState;
+    try {
+      clip = parseClipFile(text);
+    } catch (err: unknown) {
+      const message = err instanceof ClipFileError ? err.message : '片段檔案格式不對';
+      console.warn('[jelly] 片段載入失敗，已略過', err);
+      this.showNotice(`這個片段讀不了，已略過（${message}）`);
+      return;
+    }
+    this.importing = true;
+    this.applyClipState(clip)
+      .catch((err: unknown) => {
+        console.warn('[jelly] 片段載入失敗，已略過', err);
+        this.showNotice('這個片段沒辦法載入，已略過');
+      })
+      .finally(() => {
+        this.importing = false;
+      });
+  };
+
+  /**
+   * 「載入片段」整包取代場景（issue #58）：用存檔的影像位元組 + 完整 mesh 參數
+   * 決定性重算 mesh（繞過 `perfMonitor` 的效能退路——存檔當下已經是實際生效的
+   * 完整參數，不該再被目前裝置的降級狀態動）、貼圖依存的格式重建，走跟「重新
+   * 匯入圖片」相同的收束路徑（`replaceJelly`：中斷播放／錄製、清空 Track／群組／
+   * 初始 Pin，換新 `SimCore` + `JellyRenderer`，鏡頭自動框住新果凍——即「剛匯入
+   * 一張圖」的鏡位，不保存存檔時的手動平移／縮放）。`replaceJelly` 成功後才把
+   * `ClipState` 其餘欄位灌回：軟硬度／輕拍力道／邊界模式（同時同步面板顯示，
+   * `setSoftness`/`setTapStrength`/`setBoundaryMode` 只動 sim、不動面板 DOM）、
+   * 所有 Track（`hydrateClipTrack`：`groupIds` 陣列 → `Set`，`name` 同時填入
+   * `customLabel`／`label`——載入後顯示的就是存檔當下的名字）、所有群組、片段
+   * 初始 Pin、流水號。任何一步丟錯（壞影像位元組、mesh 建置失敗）都讓呼叫端
+   * `onLoadClip` 的 catch 接住，原本的 Jelly 已經在 `replaceJelly` 成功時被換掉，
+   * 但那一步失敗代表新 Jelly 根本沒建出來、舊的還在——跟 `importImage` 失敗時
+   * 的行為一致。
+   */
+  private async applyClipState(clip: ClipState): Promise<void> {
+    const mesh: SimMesh = buildSimMesh(clip.image.bytes, clip.meshParams);
+    const texture = await decodeTextureImage(clip.image.bytes);
+    await this.replaceJelly(mesh, texture);
+
+    this.lastImage = clip.image;
+    this.lastMeshParams = clip.meshParams;
+
+    this.setSoftness(clip.sim.softness);
+    this.controlPanel.setSoftness(clip.sim.softness);
+    this.setTapStrength(clip.sim.tapStrength);
+    this.controlPanel.setTapStrength(clip.sim.tapStrength);
+    this.setBoundaryMode(clip.sim.boundary);
+    this.controlPanel.setBoundary(clip.sim.boundary);
+
+    this.groups = clip.groups.map((g) => ({ ...g }));
+    this.tracks = clip.tracks.map(hydrateClipTrack);
+    this.nextTrackNum = clip.counters.nextTrackNum;
+    this.nextGroupNum = clip.counters.nextGroupNum;
+    this.soloState = null;
+    this.setupPins = clip.setupPins.map((p) => ({ x: p.x, y: p.y }));
+    this.syncPanelTracks();
+  }
+
+  /**
    * 建好新的一套（sim + renderer + camera）成功後才拆舊的——畫面不會有空檔。
    * 新 `SimCore` 一律從 `DEFAULT_SIM_PARAMS` 起家，所以要把控制面板目前設定
    * （Softness、輕拍力道、Boundary 模式）重新套上去，面板才不會顯示跟實際物理
@@ -1344,6 +1426,28 @@ function summarizeTrack(
     if (label !== undefined) kinds.add(label);
   }
   return kinds.size > 0 ? `${name}（${[...kinds].join(' · ')}）` : name;
+}
+
+/**
+ * `ClipTrack`（存檔格式）→ `RecordedTrack`（記憶體格式），issue #58——`applyClipState`
+ * 載入每一條 Track 時呼叫。`groupIds` 陣列還原成 `Set`；`name` 同時填入 `customLabel`
+ * 與 `label`，因為存檔的 `name` 已經是 `customLabel ?? label` 攤平後的最終顯示字串、
+ * 分不出原本是使用者自訂還是自動摘要——兩欄位都設成它，載入後顯示的就是存檔當下
+ * 那個名字；使用者之後把名稱欄位清空仍會照 `renameTrack` 的邏輯退回這個 `label`。
+ */
+function hydrateClipTrack(clip: ClipTrack): RecordedTrack {
+  return {
+    id: clip.id,
+    kind: clip.kind,
+    label: clip.name,
+    customLabel: clip.name,
+    startStep: clip.startStep,
+    inStep: clip.inStep,
+    outStep: clip.outStep,
+    steps: clip.steps,
+    startCamera: clip.startCamera,
+    groupIds: new Set(clip.groupIds),
+  };
 }
 
 /**
