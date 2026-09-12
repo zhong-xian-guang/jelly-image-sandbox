@@ -9,6 +9,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ControlPanel, type ControlPanelOptions, type TrackListRow } from './ControlPanel';
 
+/** 依 `<label>` 文字內容找出裡面的 range input——`rangeRow` 產生的每個滑桿都是這個形狀。 */
+function findRangeInputByLabel(panel: ControlPanel, labelText: string): HTMLInputElement {
+  const label = [...panel.element.querySelectorAll('label')].find((l) =>
+    l.textContent?.includes(labelText),
+  );
+  expect(label).toBeDefined();
+  return label!.querySelector('input[type=range]') as HTMLInputElement;
+}
+
 /** 一份把所有回呼都設成 spy 的最小 options，測試各自覆寫需要的欄位。 */
 function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanelOptions {
   return {
@@ -23,8 +32,14 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       showWireframe: false,
       recordTarget: 'action',
       showFanHint: true,
+      fanWidth: 150,
+      fanStrength: 4000,
+      fanFalloffExponent: 2,
     },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
+    fanWidthRange: { min: 20, max: 400, step: 5 },
+    fanStrengthRange: { min: 500, max: 12000, step: 100 },
+    fanFalloffRange: { min: 0.2, max: 5, step: 0.1 },
     demos: [],
     onImportImage: vi.fn(),
     onSaveClip: vi.fn(),
@@ -32,6 +47,9 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onToolChange: vi.fn(),
     onRemoveFan: vi.fn(),
     onShowFanHintChange: vi.fn(),
+    onFanWidthChange: vi.fn(),
+    onFanStrengthChange: vi.fn(),
+    onFanFalloffChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -441,8 +459,8 @@ describe('ControlPanel — 載入片段按鈕（issue #58 / V2 T2-5）', () => {
     panel.setTapStrength(7300);
     panel.setBoundary('walled');
 
-    const sliders = [...panel.element.querySelectorAll('input[type=range]')] as HTMLInputElement[];
-    expect(sliders.map((s) => s.value)).toEqual(['0.83', '7300']);
+    expect(findRangeInputByLabel(panel, '軟硬度').value).toBe('0.83');
+    expect(findRangeInputByLabel(panel, '輕拍力道').value).toBe('7300');
     const selects = [...panel.element.querySelectorAll('select')] as HTMLSelectElement[];
     const boundarySelect = selects.find((s) => s.querySelector('option[value="walled"]'));
     expect(boundarySelect?.value).toBe('walled');
@@ -518,5 +536,38 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event('change'));
     expect(opts.onShowFanHintChange).toHaveBeenCalledWith(true);
+  });
+
+  it('「風扇寬度」滑桿初始值來自 initial.fanWidth，拖動觸發 onFanWidthChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '風扇寬度');
+
+    expect(Number(input.value)).toBe(opts.initial.fanWidth);
+    input.value = '300';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onFanWidthChange).toHaveBeenCalledWith(300);
+  });
+
+  it('「風扇強度」滑桿初始值來自 initial.fanStrength，拖動觸發 onFanStrengthChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '風扇強度');
+
+    expect(Number(input.value)).toBe(opts.initial.fanStrength);
+    input.value = '9000';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onFanStrengthChange).toHaveBeenCalledWith(9000);
+  });
+
+  it('「風扇衰減程度」滑桿初始值來自 initial.fanFalloffExponent，拖動觸發 onFanFalloffChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '風扇衰減程度');
+
+    expect(Number(input.value)).toBe(opts.initial.fanFalloffExponent);
+    input.value = '0.5';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onFanFalloffChange).toHaveBeenCalledWith(0.5);
   });
 });

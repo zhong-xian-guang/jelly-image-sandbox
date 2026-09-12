@@ -28,7 +28,7 @@
 
 import type { InputEvent, Point } from '../sim';
 import type { GestureConfig } from './GestureTracker';
-import { type ToolId, ToolRouter } from './ToolRouter';
+import { type FanParams, type ToolId, ToolRouter } from './ToolRouter';
 
 export interface PointerInputOptions {
   screenToWorld: (screenX: number, screenY: number) => Point;
@@ -78,6 +78,11 @@ export class PointerInput {
   /** 轉發給 `ToolRouter`（issue #65）——`ControlPanel` 的「目前工具」選擇器變更時呼叫。 */
   setActiveTool(tool: ToolId): void {
     this.tracker.setActiveTool(tool);
+  }
+
+  /** 轉發給 `ToolRouter.setFanParams`（issue #67）——面板電風扇滑桿變更時呼叫。 */
+  setFanParams(params: Partial<FanParams>): void {
+    this.tracker.setFanParams(params);
   }
 
   private localXY(ev: PointerEvent): [number, number] {

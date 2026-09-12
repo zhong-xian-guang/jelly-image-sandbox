@@ -125,11 +125,26 @@ export interface ControlPanelInitial {
   recordTarget: RecordTarget;
   /** 電風扇矩形外框提示顯示開關（issue #66）；比照「顯示 Pin」的既有慣例。 */
   showFanHint: boolean;
+  /** 電風扇三個滑桿的初始值（issue #67）——見 `../input` 的 `DEFAULT_FAN_*`。 */
+  fanWidth: number;
+  fanStrength: number;
+  fanFalloffExponent: number;
+}
+
+/** 一個數值滑桿的範圍（issue #67 抽出——`tapStrengthRange` 與三個電風扇範圍共用同一形狀）。 */
+export interface RangeSpec {
+  min: number;
+  max: number;
+  step: number;
 }
 
 export interface ControlPanelOptions {
   initial: ControlPanelInitial;
-  tapStrengthRange: { min: number; max: number; step: number };
+  tapStrengthRange: RangeSpec;
+  /** 電風扇「寬度」／「強度」／「衰減程度」三個滑桿各自的範圍（issue #67）。 */
+  fanWidthRange: RangeSpec;
+  fanStrengthRange: RangeSpec;
+  fanFalloffRange: RangeSpec;
   /** 「Demo」按鈕列表（issue #15），依序顯示；點下呼叫 `onRunDemo(id)`。 */
   demos: readonly DemoMenuItem[];
   /**
@@ -166,6 +181,14 @@ export interface ControlPanelOptions {
    * 純視覺；跟「移除風扇」按鈕的可用狀態無關（理由見 `onRemoveFan`）。
    */
   onShowFanHintChange: (visible: boolean) => void;
+  /**
+   * 電風扇「寬度」／「強度」／「衰減程度」滑桿變更（issue #67）——即時反映到
+   * 場上目前的風扇（若有）與下一次放置，兩件事都交給 `JellySandbox` 處理：
+   * `ControlPanel` 只負責把滑桿的新數值原封不動送出去。
+   */
+  onFanWidthChange: (width: number) => void;
+  onFanStrengthChange: (strength: number) => void;
+  onFanFalloffChange: (falloffExponent: number) => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -339,6 +362,31 @@ export class ControlPanel {
     );
     this.tapStrengthInput = tapStrength.input;
 
+    const fanWidth = this.rangeRow(
+      '風扇寬度',
+      opts.fanWidthRange.min,
+      opts.fanWidthRange.max,
+      opts.fanWidthRange.step,
+      opts.initial.fanWidth,
+      opts.onFanWidthChange,
+    );
+    const fanStrength = this.rangeRow(
+      '風扇強度',
+      opts.fanStrengthRange.min,
+      opts.fanStrengthRange.max,
+      opts.fanStrengthRange.step,
+      opts.initial.fanStrength,
+      opts.onFanStrengthChange,
+    );
+    const fanFalloff = this.rangeRow(
+      '風扇衰減程度',
+      opts.fanFalloffRange.min,
+      opts.fanFalloffRange.max,
+      opts.fanFalloffRange.step,
+      opts.initial.fanFalloffExponent,
+      opts.onFanFalloffChange,
+    );
+
     panel.append(
       this.perfStatus,
       this.buttonRow('匯入圖片…', opts.onImportImage),
@@ -346,8 +394,13 @@ export class ControlPanel {
       this.buttonRow('載入片段…', opts.onLoadClip),
       tool.row,
       // 兩顆控制項各自獨立（不像 Pin 那組「顯示」與「操作」互相鎖住），見上方
-      // `onRemoveFan`／`onShowFanHintChange` 的說明。
+      // `onRemoveFan`／`onShowFanHintChange` 的說明。三個滑桿（issue #67）緊接在
+      // 電風扇控制項旁邊，跟 Softness／輕拍力道那組滑桿分開，一眼看出是同一個
+      // 工具的參數。
       this.checkboxRow('顯示風扇提示', opts.initial.showFanHint, opts.onShowFanHintChange),
+      fanWidth.row,
+      fanStrength.row,
+      fanFalloff.row,
       this.buttonRow('移除風扇', opts.onRemoveFan),
       boundary.row,
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),

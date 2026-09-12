@@ -13,7 +13,7 @@
  * 長度用——「僅更新內部預覽狀態，不逐步 emit，避免洗版」，見 issue #64 的
  * Implementation Decisions）；`up` 用原點→放開點的位移算 `dirX`/`dirY`（正規化
  * 單位向量）與 `length`，連同固定預設的 `width`／`strength`／`falloffExponent`
- * （面板數值調整留給下一張票 issue #67）送一次 `setFan`——取代場上既有的風扇
+ * （`setFanParams`，issue #67：面板三個滑桿即時寫入，供下一次放置用）送一次 `setFan`——取代場上既有的風扇
  * （ADR-0010：整包覆蓋，不用先送 `clearFan`）。位移為 0（點一下沒拖曳）時退回
  * `(1, 0)` 當方向，避免除以 0；風扇這時 `length` 也是 0，`SimCore.applyFan` 對
  * `length <= 0` 直接 no-op，等於沒有實際效果。`cancel` 視為放棄這次放置：只清掉
@@ -32,11 +32,18 @@ export type ToolId = 'general' | 'fan';
 
 export const DEFAULT_TOOL: ToolId = 'general';
 
-/** 電風扇矩形的固定預設值（issue #66）——寬度／強度／衰減冪次的面板調整留給 issue #67，這裡先寫死。 */
+/** 電風扇矩形的初始預設值（issue #66）——`setFanParams`（issue #67）可在執行期間覆寫。 */
 export const DEFAULT_FAN_WIDTH = 150;
 export const DEFAULT_FAN_STRENGTH = 4000;
 /** 沿用 `SimCore.doTap` 既有的正規化距離冪次衰減慣例（`(1 − d/R)²`）。 */
 export const DEFAULT_FAN_FALLOFF_EXPONENT = 2;
+
+/** `setFanParams` 接受的部分更新——三個欄位皆可選，只覆寫有帶到的欄位。 */
+export interface FanParams {
+  width: number;
+  strength: number;
+  falloffExponent: number;
+}
 
 export type ToolRouterOptions = GestureTrackerOptions;
 
@@ -53,6 +60,13 @@ export class ToolRouter {
   private activeTool: ToolId = DEFAULT_TOOL;
   /** 進行中的電風扇放置手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly fanSessions = new Map<PointerId, FanSession>();
+  /**
+   * 下一次電風扇放置要用的寬度／強度／衰減冪次（issue #67）——`setFanParams`
+   * 由面板滑桿即時寫入；`emitFan` 每次 `up` 讀目前值，不需要等下一次 `setActiveTool`。
+   */
+  private fanWidth = DEFAULT_FAN_WIDTH;
+  private fanStrength = DEFAULT_FAN_STRENGTH;
+  private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
 
   constructor(opts: ToolRouterOptions) {
     this.gestureTracker = new GestureTracker(opts);
@@ -62,6 +76,18 @@ export class ToolRouter {
 
   setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
+  }
+
+  /**
+   * 面板三個電風扇滑桿的即時寫入口（issue #67）——只覆寫有帶到的欄位。影響
+   * **下一次**放置（`emitFan` 讀這幾個欄位）；「即時反映到場上目前的風扇」
+   * 由呼叫端（`JellySandbox`）另外對 `sim.applyInput` 補送一次帶新參數、原幾何
+   * 不變的 `setFan`——`ToolRouter` 不知道場上是否已有風扇，這件事不歸它管。
+   */
+  setFanParams(params: Partial<FanParams>): void {
+    if (params.width !== undefined) this.fanWidth = params.width;
+    if (params.strength !== undefined) this.fanStrength = params.strength;
+    if (params.falloffExponent !== undefined) this.fanFalloffExponent = params.falloffExponent;
   }
 
   get currentTool(): ToolId {
@@ -130,9 +156,9 @@ export class ToolRouter {
       dirX,
       dirY,
       length,
-      width: DEFAULT_FAN_WIDTH,
-      strength: DEFAULT_FAN_STRENGTH,
-      falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+      width: this.fanWidth,
+      strength: this.fanStrength,
+      falloffExponent: this.fanFalloffExponent,
     });
   }
 }

@@ -498,3 +498,43 @@ body {
 .jelly-fan-overlay.is-present .jelly-fan-overlay-rect {
   display: block;
 }
+
+/**
+ * 側視圖圖示（issue #67 / V2 T3-3）：`FanOverlay` 的 `<g>` 靠 JS 算好的
+ * `transform="translate(...) rotate(...)"` 定位／轉向，這裡只管形狀的填色／
+ * 線條——本地座標系刻意設得很小（單位跟世界座標無關），靠 `scale` 放大到看得見。
+ */
+.jelly-fan-overlay-icon {
+  display: none;
+  transform-box: fill-box;
+}
+
+.jelly-fan-overlay.is-present .jelly-fan-overlay-icon {
+  display: block;
+}
+
+.jelly-fan-overlay-icon-stand,
+.jelly-fan-overlay-icon-motor {
+  fill: rgba(90, 200, 255, 0.85);
+  stroke: none;
+}
+
+.jelly-fan-overlay-icon-guard {
+  fill: rgba(90, 200, 255, 0.35);
+  stroke: rgba(90, 200, 255, 0.9);
+  stroke-width: 0.6;
+}
+
+.jelly-fan-overlay-icon-blades {
+  fill: none;
+  stroke: rgba(20, 40, 50, 0.7);
+  stroke-width: 0.6;
+}
+
+.jelly-fan-overlay-icon-wind {
+  fill: none;
+  stroke: rgba(90, 200, 255, 0.9);
+  stroke-width: 0.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

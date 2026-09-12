@@ -104,7 +104,15 @@ import {
   updateCamera,
   worldToScreen,
 } from '../camera';
-import { type ToolId, PointerInput, routeForPinMode } from '../input';
+import {
+  type FanParams,
+  type ToolId,
+  DEFAULT_FAN_FALLOFF_EXPONENT,
+  DEFAULT_FAN_STRENGTH,
+  DEFAULT_FAN_WIDTH,
+  PointerInput,
+  routeForPinMode,
+} from '../input';
 import {
   buildSimMesh,
   DEFAULT_PARAMS,
@@ -181,6 +189,15 @@ const NOTICE_DURATION_MS = 4000;
 const TAP_STRENGTH_RANGE = { min: 1000, max: 11000, step: 100 };
 /** Softness 滑桿初始位置（0–1 中點 = `DEFAULT_SIM_PARAMS`，見 `../sim/softness`）。 */
 const DEFAULT_SOFTNESS = 0.5;
+/**
+ * 電風扇三個滑桿的範圍（issue #67）——中點分別對應 `ToolRouter` 的
+ * `DEFAULT_FAN_WIDTH`／`DEFAULT_FAN_STRENGTH`／`DEFAULT_FAN_FALLOFF_EXPONENT`，
+ * 同 `TAP_STRENGTH_RANGE` 的理由。衰減程度下限 0.2（避免趨近 0 次方讓衰減幾乎
+ * 消失、矩形內外力道落差過於突兀）、上限 5（明顯集中在風扇正前方）。
+ */
+const FAN_WIDTH_RANGE = { min: 20, max: 280, step: 5 };
+const FAN_STRENGTH_RANGE = { min: 500, max: 7500, step: 100 };
+const FAN_FALLOFF_RANGE = { min: 0.2, max: 5, step: 0.1 };
 /**
  * Pin 模式下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
  * CSS 直徑（16px）同數量級，換算回世界座標時要除以目前相機縮放（見
@@ -283,6 +300,14 @@ export class JellySandbox {
   private pinsVisible = true;
   /** 「顯示風扇提示」開關（issue #66）——關閉時 `fanOverlay` 整層藏起來、跳過每幀的投影計算。 */
   private fanHintVisible = true;
+  /**
+   * 電風扇「寬度」／「強度」／「衰減程度」滑桿目前值（issue #67）——`PointerInput`
+   * 沒有 getter，這裡另存一份供：(a) 面板初始值、(b) `updateLiveFan` 組出更新
+   * 場上目前風扇要用的完整 `setFan` 事件（該事件是整包覆蓋，缺任何一個欄位都不行）。
+   */
+  private fanWidth = DEFAULT_FAN_WIDTH;
+  private fanStrength = DEFAULT_FAN_STRENGTH;
+  private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
   private wireframeVisible = false;
   /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
@@ -402,8 +427,14 @@ export class JellySandbox {
         showWireframe: this.wireframeVisible,
         recordTarget: this.recordTarget,
         showFanHint: this.fanHintVisible,
+        fanWidth: this.fanWidth,
+        fanStrength: this.fanStrength,
+        fanFalloffExponent: this.fanFalloffExponent,
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
+      fanWidthRange: FAN_WIDTH_RANGE,
+      fanStrengthRange: FAN_STRENGTH_RANGE,
+      fanFalloffRange: FAN_FALLOFF_RANGE,
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
       onImportImage: () => this.fileImportInput.open(),
       onSaveClip: () => this.saveClip(),
@@ -411,6 +442,9 @@ export class JellySandbox {
       onToolChange: (tool) => this.setActiveTool(tool),
       onRemoveFan: () => this.removeFan(),
       onShowFanHintChange: (visible) => this.setFanHintVisible(visible),
+      onFanWidthChange: (width) => this.setFanWidth(width),
+      onFanStrengthChange: (strength) => this.setFanStrength(strength),
+      onFanFalloffChange: (falloffExponent) => this.setFanFalloffExponent(falloffExponent),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -1013,6 +1047,60 @@ export class JellySandbox {
     this.trackRecorder.record(event);
   }
 
+  /** 「風扇寬度」滑桿（issue #67）。 */
+  private setFanWidth(width: number): void {
+    this.fanWidth = width;
+    this.applyFanParamChange({ width });
+  }
+
+  /** 「風扇強度」滑桿（issue #67）。 */
+  private setFanStrength(strength: number): void {
+    this.fanStrength = strength;
+    this.applyFanParamChange({ strength });
+  }
+
+  /** 「風扇衰減程度」滑桿（issue #67）。 */
+  private setFanFalloffExponent(falloffExponent: number): void {
+    this.fanFalloffExponent = falloffExponent;
+    this.applyFanParamChange({ falloffExponent });
+  }
+
+  /**
+   * 三個風扇滑桿共用的收尾（issue #67）——`patch` 只帶剛被改的那個欄位，先轉發給
+   * `ToolRouter`（下一次放置要用，見 `setFanParams`），再呼叫 `updateLiveFan`
+   * 把「目前場上的風扇（若有）」也一併更新。
+   */
+  private applyFanParamChange(patch: Partial<FanParams>): void {
+    this.input.setFanParams(patch);
+    this.updateLiveFan();
+  }
+
+  /**
+   * 「即時反映到目前場上的風扇（若有）」（issue #67）：場上沒有風扇就什麼都不做；
+   * 有的話拿它目前的原點／方向／長度，換上最新的寬度／強度／衰減程度，整包重送
+   * 一次 `setFan`（ADR-0010：`setFan` 本來就是整包覆蓋，不用先 `clearFan`）。
+   * 比照 `clearPins`／`removeFan`：任何直接呼叫 `sim.applyInput` 的分支都同時餵
+   * 給 `trackRecorder`（no-op 除非正在錄製）——錄製中途調整滑桿，重播時風扇的
+   * 手感才跟錄製當下看到的一致，不會停留在放置那一刻的舊參數。
+   */
+  private updateLiveFan(): void {
+    const fan = this.sim.fanState();
+    if (!fan) return;
+    const event: InputEvent = {
+      type: 'setFan',
+      originX: fan.originX,
+      originY: fan.originY,
+      dirX: fan.dirX,
+      dirY: fan.dirY,
+      length: fan.length,
+      width: this.fanWidth,
+      strength: this.fanStrength,
+      falloffExponent: this.fanFalloffExponent,
+    };
+    this.sim.applyInput(event);
+    this.trackRecorder.record(event);
+  }
+
   /**
    * 「顯示 Pin」開關——只管標記的顯示／隱藏。`ControlPanel` 那邊已經在使用者
    * 關掉顯示時順便把「Pin 模式」的勾選框也一起強制關掉（所見即所得），這裡
@@ -1428,10 +1516,16 @@ export class JellySandbox {
       if (this.fanHintVisible) {
         const fan = this.sim.fanState();
         this.fanOverlay.update(
-          fan &&
-            fanRectCorners(fan).map((c) =>
+          fan && {
+            corners: fanRectCorners(fan).map((c) =>
               worldToScreen(this.cameraState.transform, canvasSize, c.x, c.y),
             ),
+            // 世界／螢幕座標同向、等比縮放，角度不用另外經相機轉換（見 `FanOverlay` 說明）。
+            icon: {
+              ...worldToScreen(this.cameraState.transform, canvasSize, fan.originX, fan.originY),
+              angleRad: Math.atan2(fan.dirY, fan.dirX),
+            },
+          },
         );
       }
     }

@@ -240,4 +240,42 @@ describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
     router.down(2, 0, 0, 0);
     expect(events).toEqual([{ type: 'grab', id: 2, x: 1000, y: 1000 }]);
   });
+
+  it('setFanParams（issue #67）只覆寫有帶到的欄位，套用到下一次放置', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('fan');
+    router.setFanParams({ width: 300 });
+    router.down(1, 0, 0, 0);
+    router.up(1, 40, 0, 50);
+
+    expect(events).toEqual([
+      {
+        type: 'setFan',
+        originX: 1000,
+        originY: 1000,
+        dirX: 1,
+        dirY: 0,
+        length: 40,
+        width: 300,
+        strength: DEFAULT_FAN_STRENGTH,
+        falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+      },
+    ]);
+
+    router.setFanParams({ strength: 9000, falloffExponent: 0.5 });
+    router.down(1, 0, 0, 0);
+    router.up(1, 40, 0, 100);
+
+    expect(events[1]).toEqual({
+      type: 'setFan',
+      originX: 1000,
+      originY: 1000,
+      dirX: 1,
+      dirY: 0,
+      length: 40,
+      width: 300, // 上一次設定的值持續生效，不用每次都重帶
+      strength: 9000,
+      falloffExponent: 0.5,
+    });
+  });
 });
