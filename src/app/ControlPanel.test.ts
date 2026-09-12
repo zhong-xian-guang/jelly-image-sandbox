@@ -508,6 +508,86 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
   });
 });
 
+describe('ControlPanel — 切到非一般操作的工具時鎖住 Pin 控制項（issue #67 事後檢視追加）', () => {
+  function findToolSelect(panel: ControlPanel): HTMLSelectElement {
+    return [...panel.element.querySelectorAll('select')].find((s) =>
+      s.querySelector('option[value="fan"]'),
+    ) as HTMLSelectElement;
+  }
+
+  function pinCheckbox(panel: ControlPanel): HTMLInputElement {
+    const label = [...panel.element.querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('Pin 模式'),
+    );
+    return label!.querySelector('input[type=checkbox]') as HTMLInputElement;
+  }
+
+  function clearPinsButton(panel: ControlPanel): HTMLButtonElement {
+    return [...panel.element.querySelectorAll('button')].find(
+      (b) => b.textContent === '清除所有 Pin',
+    ) as HTMLButtonElement;
+  }
+
+  function toolLockHint(panel: ControlPanel): HTMLElement {
+    return [...panel.element.querySelectorAll('.jelly-control-hint')].find((el) =>
+      el.textContent?.includes('Pin 暫時無法使用'),
+    ) as HTMLElement;
+  }
+
+  it('初始為「一般操作」→ Pin 控制項可用、提示隱藏', () => {
+    const panel = new ControlPanel(makeOptions());
+    expect(pinCheckbox(panel).disabled).toBe(false);
+    expect(clearPinsButton(panel).disabled).toBe(false);
+    expect(toolLockHint(panel).hidden).toBe(true);
+  });
+
+  it('切到「電風扇」→ Pin 模式勾選框／清除所有 Pin 都鎖住、提示顯示', () => {
+    const panel = new ControlPanel(makeOptions());
+    const select = findToolSelect(panel);
+
+    select.value = 'fan';
+    select.dispatchEvent(new Event('change'));
+
+    expect(pinCheckbox(panel).disabled).toBe(true);
+    expect(clearPinsButton(panel).disabled).toBe(true);
+    expect(toolLockHint(panel).hidden).toBe(false);
+  });
+
+  it('切回「一般操作」→ 解鎖、提示重新隱藏，且不強制取消勾選 Pin 模式', () => {
+    const panel = new ControlPanel(makeOptions({ initial: { ...makeOptions().initial, pinMode: true } }));
+    const select = findToolSelect(panel);
+
+    select.value = 'fan';
+    select.dispatchEvent(new Event('change'));
+    select.value = 'general';
+    select.dispatchEvent(new Event('change'));
+
+    expect(pinCheckbox(panel).disabled).toBe(false);
+    expect(clearPinsButton(panel).disabled).toBe(false);
+    expect(toolLockHint(panel).hidden).toBe(true);
+    expect(pinCheckbox(panel).checked).toBe(true); // 鎖住期間沒被強制取消勾選
+  });
+
+  it('「顯示 Pin」關閉時切回「一般操作」——兩個鎖住理由是 OR，顯示 Pin 這個理由仍生效', () => {
+    const panel = new ControlPanel(
+      makeOptions({ initial: { ...makeOptions().initial, showPins: false } }),
+    );
+    const select = findToolSelect(panel);
+
+    // 一開始就因為「顯示 Pin」關閉而鎖住。
+    expect(pinCheckbox(panel).disabled).toBe(true);
+
+    select.value = 'fan';
+    select.dispatchEvent(new Event('change'));
+    select.value = 'general';
+    select.dispatchEvent(new Event('change'));
+
+    // 切回一般操作只解除「工具」這個鎖住理由，「顯示 Pin」關閉仍鎖著。
+    expect(pinCheckbox(panel).disabled).toBe(true);
+    expect(toolLockHint(panel).hidden).toBe(true); // 提示只跟「工具」理由掛勾，不會誤植成顯示 Pin 的理由
+  });
+});
+
 describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
   it('面板有一顆「移除風扇」按鈕，點擊呼叫 onRemoveFan', () => {
     const opts = makeOptions();

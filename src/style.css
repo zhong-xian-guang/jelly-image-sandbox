@@ -171,6 +171,17 @@ body {
   opacity: 0.7;
 }
 
+/**
+ * 控制項旁的一行小提示（issue #67 事後檢視追加——「目前工具」非「一般操作」
+ * 時，說明 Pin 控制項為何被鎖住）。低調小字，跟 `.jelly-control-heading`
+ * 同量級但不加粗，避免搶走真正的分區標題。
+ */
+.jelly-control-hint {
+  font-size: 0.75rem;
+  opacity: 0.65;
+  margin: -2px 0 2px;
+}
+
 /** Demo／Track 按鈕列前的小標題（issue #15、issue #29 追加）——跟其他控制項分區，一眼看出這區是自動演出／自己錄的。 */
 .jelly-control-heading {
   margin-top: 4px;

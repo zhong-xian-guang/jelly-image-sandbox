@@ -339,7 +339,23 @@ export class ControlPanel {
     const followLock = this.followLockRow(opts.initial.followLocked, opts.onFollowLockChange);
     this.followLockCheckbox = followLock.checkbox;
 
-    const tool = this.toolRow(opts.initial.activeTool, opts.onToolChange);
+    // 先建 Pin 控制項（`pinRows`）才能把它的 `setToolLocked` 接進「目前工具」
+    // 選擇器的 onChange——切到非「一般操作」的工具時，順手把 Pin 控制項鎖住＋
+    // 顯示提示（issue #67 事後檢視追加，見 `pinRows` 頂端說明）。純面板內部的
+    // 事，不需要 `JellySandbox` 另外傳一個回呼進來。
+    const pins = this.pinRows(
+      opts.initial.pinMode,
+      opts.initial.showPins,
+      opts.onPinModeChange,
+      opts.onClearPins,
+      opts.onShowPinsChange,
+    );
+    pins.setToolLocked(opts.initial.activeTool !== 'general');
+
+    const tool = this.toolRow(opts.initial.activeTool, (t) => {
+      opts.onToolChange(t);
+      pins.setToolLocked(t !== 'general');
+    });
 
     const boundary = this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange);
     this.boundarySelect = boundary.select;
@@ -406,13 +422,7 @@ export class ControlPanel {
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
       softness.row,
       tapStrength.row,
-      ...this.pinRows(
-        opts.initial.pinMode,
-        opts.initial.showPins,
-        opts.onPinModeChange,
-        opts.onClearPins,
-        opts.onShowPinsChange,
-      ),
+      ...pins.rows,
       followLock.row,
       this.buttonRow('框住果凍', opts.onFrameJelly),
       this.demoHeading(),
@@ -742,8 +752,19 @@ export class ControlPanel {
   }
 
   /**
-   * 兩排：「顯示 Pin」開關 + 「Pin 模式」/「清除所有 Pin」。後者的可用狀態跟著
-   * 前者走——關掉顯示就鎖住、強制退出 Pin 模式（所見即所得，見類別頂端說明）。
+   * 三排：「顯示 Pin」開關 + 「Pin 模式」/「清除所有 Pin」+ 一行只在「目前工具」
+   * 不是「一般操作」時才出現的提示。鎖住的理由有兩個、各自獨立疊加
+   * （`recomputeLock` 取兩者的 OR）：
+   *
+   * 1. 「顯示 Pin」關掉——所見即所得，見類別頂端說明；這個理由額外會強制把
+   *    「Pin 模式」勾選框關掉（看不到的東西不能繼續默默放）。
+   * 2. 「目前工具」不是「一般操作」（issue #67 事後檢視追加）——切到電風扇這類
+   *    新工具時，畫布手勢整個被該工具接管，`routeForPinMode` 收不到任何
+   *    `grab` 事件可轉，「Pin 模式」形同虛設，但先前面板上完全看不出來、
+   *    使用者會納悶「怎麼放不了 Pin」。這個理由**不**強制關掉勾選框——只是
+   *    暫時鎖住／灰階＋顯示提示，切回「一般操作」後原本開著的 Pin 模式直接
+   *    恢復作用，不用重新勾一次（跟「顯示 Pin」關閉的情況不同：那邊是「這個
+   *    東西看不到了」，這邊只是「暫時借去用別的工具」，两種語意不一樣）。
    */
   private pinRows(
     initialPinMode: boolean,
@@ -751,7 +772,7 @@ export class ControlPanel {
     onPinModeChange: (enabled: boolean) => void,
     onClearPins: () => void,
     onShowPinsChange: (visible: boolean) => void,
-  ): HTMLElement[] {
+  ): { rows: HTMLElement[]; setToolLocked: (locked: boolean) => void } {
     const pinRow = document.createElement('div');
     pinRow.className = 'jelly-control-row';
 
@@ -773,16 +794,24 @@ export class ControlPanel {
 
     pinRow.append(pinLabel, clearButton);
 
-    /** 「顯示 Pin」關／開時同步鎖住／解鎖 Pin 模式勾選框跟清除按鈕。 */
-    const setPinControlsLocked = (locked: boolean): void => {
+    const toolHint = document.createElement('div');
+    toolHint.className = 'jelly-control-hint';
+    toolHint.textContent = '目前工具不是「一般操作」，Pin 暫時無法使用';
+    toolHint.hidden = true;
+
+    let hiddenLocked = !initialShowPins;
+    let toolLocked = false;
+    const recomputeLock = (): void => {
+      const locked = hiddenLocked || toolLocked;
       pinCheckbox.disabled = locked;
       clearButton.disabled = locked;
     };
-    setPinControlsLocked(!initialShowPins);
+    recomputeLock();
 
     const showRow = this.checkboxRow('顯示 Pin', initialShowPins, (visible) => {
       onShowPinsChange(visible);
-      setPinControlsLocked(!visible);
+      hiddenLocked = !visible;
+      recomputeLock();
       if (!visible && pinCheckbox.checked) {
         // 看不到 Pin 了，不能讓 Pin 模式繼續默默放看不到的 Pin。
         pinCheckbox.checked = false;
@@ -791,7 +820,13 @@ export class ControlPanel {
       }
     });
 
-    return [showRow, pinRow];
+    const setToolLocked = (locked: boolean): void => {
+      toolLocked = locked;
+      toolHint.hidden = !locked;
+      recomputeLock();
+    };
+
+    return { rows: [showRow, pinRow, toolHint], setToolLocked };
   }
 
   private checkboxRow(
