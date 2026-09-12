@@ -123,6 +123,8 @@ export interface ControlPanelInitial {
   showWireframe: boolean;
   /** 「錄製目標」選擇器的初始值（issue #33）。 */
   recordTarget: RecordTarget;
+  /** 電風扇矩形外框提示顯示開關（issue #66）；比照「顯示 Pin」的既有慣例。 */
+  showFanHint: boolean;
 }
 
 export interface ControlPanelOptions {
@@ -147,10 +149,23 @@ export interface ControlPanelOptions {
    */
   onLoadClip: () => void;
   /**
-   * 「目前工具」選擇器變更（issue #65 / V2 T3-1；ADR-0011）——目前只有「一般操作」
-   * 一個選項，切換給 `JellySandbox` 轉發到 `PointerInput.setActiveTool`。
+   * 「目前工具」選擇器變更（issue #65 / V2 T3-1；ADR-0011）——切換給 `JellySandbox`
+   * 轉發到 `PointerInput.setActiveTool`。
    */
   onToolChange: (tool: ToolId) => void;
+  /**
+   * 「移除風扇」按鈕被按（issue #66）——動作上比照「清除所有 Pin」：一個無座標的
+   * `clearFan` 經 `applyInput` 送進去，清掉場上目前的風扇（若有）。**不**跟著
+   * 「顯示風扇提示」關閉而鎖住——跟 Pin 標記是「唯一」的視覺存在不同，風扇即使
+   * 藏起提示，玩家仍能從果凍被持續吹動的效果看出它還在，所見即所得的理由在這裡
+   * 不成立，兩顆控制項刻意保持互相獨立。
+   */
+  onRemoveFan: () => void;
+  /**
+   * 「顯示風扇提示」開關（issue #66）——只管 `FanOverlay` 矩形外框的顯示／隱藏，
+   * 純視覺；跟「移除風扇」按鈕的可用狀態無關（理由見 `onRemoveFan`）。
+   */
+  onShowFanHintChange: (visible: boolean) => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -330,6 +345,10 @@ export class ControlPanel {
       this.buttonRow('儲存片段', opts.onSaveClip),
       this.buttonRow('載入片段…', opts.onLoadClip),
       tool.row,
+      // 兩顆控制項各自獨立（不像 Pin 那組「顯示」與「操作」互相鎖住），見上方
+      // `onRemoveFan`／`onShowFanHintChange` 的說明。
+      this.checkboxRow('顯示風扇提示', opts.initial.showFanHint, opts.onShowFanHintChange),
+      this.buttonRow('移除風扇', opts.onRemoveFan),
       boundary.row,
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
       softness.row,
@@ -593,10 +612,10 @@ export class ControlPanel {
   }
 
   /**
-   * 「目前工具」下拉（issue #65 / V2 T3-1；ADR-0011）——只涵蓋新增的沙盒工具，
-   * 目前只有「一般操作」（＝維持既有 Grab/Pin/Tap 純手勢），選中它時 `ToolRouter`
-   * 原封不動委派給既有 `GestureTracker`。後續電風扇／編隊抓取／撒 Pin／移除 Pin
-   * 上線時在這裡加選項。
+   * 「目前工具」下拉（issue #65 / V2 T3-1；ADR-0011）——只涵蓋新增的沙盒工具。
+   * 「一般操作」＝維持既有 Grab/Pin/Tap 純手勢，選中它時 `ToolRouter` 原封不動
+   * 委派給既有 `GestureTracker`；「電風扇」（issue #66）之後在畫布上按下拖曳放開
+   * 即放置一個風扇。後續編隊抓取／撒 Pin／移除 Pin 上線時在這裡加選項。
    */
   private toolRow(
     initial: ToolId,
@@ -606,7 +625,10 @@ export class ControlPanel {
     row.className = 'jelly-control-row';
 
     const select = document.createElement('select');
-    for (const [value, text] of [['general', '一般操作']] as const) {
+    for (const [value, text] of [
+      ['general', '一般操作'],
+      ['fan', '電風扇'],
+    ] as const) {
       const option = document.createElement('option');
       option.value = value;
       option.textContent = text;

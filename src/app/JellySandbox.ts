@@ -117,6 +117,7 @@ import { JellyRenderer } from '../render';
 import {
   type Bbox,
   type BoundaryMode,
+  type FanState,
   InfiniteBoundary,
   type InputEvent,
   type Point,
@@ -147,6 +148,7 @@ import {
   stepToSeconds,
 } from './demos';
 import { DropImportInput } from './DropImportInput';
+import { FanOverlay } from './FanOverlay';
 import { FileImportInput } from './FileImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { PerfMonitor } from './PerfMonitor';
@@ -247,6 +249,8 @@ export class JellySandbox {
   private readonly clipFileInput: ClipFileInput;
   private readonly controlPanel: ControlPanel;
   private readonly pinMarkers: PinMarkers;
+  /** 電風扇矩形外框提示（issue #66）——比照 `pinMarkers`，每幀由 `frame()` 投影更新。 */
+  private readonly fanOverlay: FanOverlay;
   private readonly demoRunner = new DemoRunner();
   private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
@@ -277,6 +281,8 @@ export class JellySandbox {
   private activeTool: ToolId = 'general';
   /** 「顯示 Pin」開關——關閉時 `pinMarkers` 整層藏起來、跳過每幀的投影計算。 */
   private pinsVisible = true;
+  /** 「顯示風扇提示」開關（issue #66）——關閉時 `fanOverlay` 整層藏起來、跳過每幀的投影計算。 */
+  private fanHintVisible = true;
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
   private wireframeVisible = false;
   /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
@@ -395,6 +401,7 @@ export class JellySandbox {
         followLocked: !this.cameraState.followEnabled,
         showWireframe: this.wireframeVisible,
         recordTarget: this.recordTarget,
+        showFanHint: this.fanHintVisible,
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
@@ -402,6 +409,8 @@ export class JellySandbox {
       onSaveClip: () => this.saveClip(),
       onLoadClip: () => this.clipFileInput.open(),
       onToolChange: (tool) => this.setActiveTool(tool),
+      onRemoveFan: () => this.removeFan(),
+      onShowFanHintChange: (visible) => this.setFanHintVisible(visible),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -437,6 +446,8 @@ export class JellySandbox {
 
     this.pinMarkers = new PinMarkers();
     root.appendChild(this.pinMarkers.element);
+    this.fanOverlay = new FanOverlay();
+    root.appendChild(this.fanOverlay.element);
     this.applyPinModeCursor();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
@@ -992,6 +1003,17 @@ export class JellySandbox {
   }
 
   /**
+   * 「移除風扇」按鈕（issue #66）——比照 `clearPins`：一個無座標的 `clearFan`
+   * 事件經 `sim.applyInput` 送進去，同時餵給 `trackRecorder`（錄製中才會真的記
+   * 下來），讓錄下的「移除風扇」重播時能在正確的 step 讓風扇消失。
+   */
+  private removeFan(): void {
+    const event: InputEvent = { type: 'clearFan' };
+    this.sim.applyInput(event);
+    this.trackRecorder.record(event);
+  }
+
+  /**
    * 「顯示 Pin」開關——只管標記的顯示／隱藏。`ControlPanel` 那邊已經在使用者
    * 關掉顯示時順便把「Pin 模式」的勾選框也一起強制關掉（所見即所得），這裡
    * 不用重複處理；只要單純記著這個旗標，`frame()` 每幀據此決定要不要投影更新。
@@ -999,6 +1021,12 @@ export class JellySandbox {
   private setPinsVisible(visible: boolean): void {
     this.pinsVisible = visible;
     this.pinMarkers.setVisible(visible);
+  }
+
+  /** 「顯示風扇提示」開關（issue #66）——同 `setPinsVisible` 的理由。 */
+  private setFanHintVisible(visible: boolean): void {
+    this.fanHintVisible = visible;
+    this.fanOverlay.setVisible(visible);
   }
 
   /** 「顯示網格」開關（issue #14 追加，debug 用）——記在 `wireframeVisible`，`replaceJelly` 換新 `JellyRenderer` 時要重套。 */
@@ -1382,19 +1410,30 @@ export class JellySandbox {
     this.renderer.setCamera(this.cameraState.transform);
     this.renderer.render();
 
-    if (this.pinsVisible) {
+    if (this.pinsVisible || this.fanHintVisible) {
       const canvasSize = this.canvasSize();
-      this.pinMarkers.update(
-        this.sim.listPins().map((pin) => {
-          const screen = worldToScreen(
-            this.cameraState.transform,
-            canvasSize,
-            pin.point.x,
-            pin.point.y,
-          );
-          return { id: String(pin.id), x: screen.x, y: screen.y };
-        }),
-      );
+      if (this.pinsVisible) {
+        this.pinMarkers.update(
+          this.sim.listPins().map((pin) => {
+            const screen = worldToScreen(
+              this.cameraState.transform,
+              canvasSize,
+              pin.point.x,
+              pin.point.y,
+            );
+            return { id: String(pin.id), x: screen.x, y: screen.y };
+          }),
+        );
+      }
+      if (this.fanHintVisible) {
+        const fan = this.sim.fanState();
+        this.fanOverlay.update(
+          fan &&
+            fanRectCorners(fan).map((c) =>
+              worldToScreen(this.cameraState.transform, canvasSize, c.x, c.y),
+            ),
+        );
+      }
     }
 
     this.rafId = requestAnimationFrame(this.frame);
@@ -1410,6 +1449,29 @@ export class JellySandbox {
   }
 }
 
+/**
+ * 電風扇矩形四個角的世界座標（issue #66）：以 `dirX`/`dirY` 為縱軸、轉 90° 為橫軸，
+ * 縱向 `[0, length]`、橫向 `[-width/2, width/2]`，依序繞一圈（風扇面兩端 → 矩形
+ * 遠端兩端）——`frame()` 每幀拿它的結果各自投影成螢幕座標餵給 `FanOverlay`。
+ */
+function fanRectCorners(fan: FanState): [Point, Point, Point, Point] {
+  const { originX, originY, dirX, dirY, length, width } = fan;
+  const perpX = -dirY;
+  const perpY = dirX;
+  const halfWidth = width / 2;
+  const nearLeft = { x: originX + perpX * halfWidth, y: originY + perpY * halfWidth };
+  const nearRight = { x: originX - perpX * halfWidth, y: originY - perpY * halfWidth };
+  const farLeft = {
+    x: originX + dirX * length + perpX * halfWidth,
+    y: originY + dirY * length + perpY * halfWidth,
+  };
+  const farRight = {
+    x: originX + dirX * length - perpX * halfWidth,
+    y: originY + dirY * length - perpY * halfWidth,
+  };
+  return [nearLeft, farLeft, farRight, nearRight];
+}
+
 /** 事件 `type` → 清單標籤上的操作分類字；沒列到的 type 不進標籤。 */
 const ACTION_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
   grab: '拖曳',
@@ -1420,6 +1482,8 @@ const ACTION_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
   movePin: 'Pin',
   unpin: 'Pin',
   clearPins: 'Pin',
+  setFan: '電風扇',
+  clearFan: '電風扇',
 };
 const CAMERA_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
   panBy: '平移',

@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { InputEvent, Point } from '../sim';
-import { DEFAULT_TOOL, ToolRouter, type ToolRouterOptions } from './ToolRouter';
+import {
+  DEFAULT_FAN_FALLOFF_EXPONENT,
+  DEFAULT_FAN_STRENGTH,
+  DEFAULT_FAN_WIDTH,
+  DEFAULT_TOOL,
+  ToolRouter,
+  type ToolRouterOptions,
+} from './ToolRouter';
 
 /** 同 `GestureTracker.test.ts` 的黑盒手法：`screenToWorld` 把螢幕座標 +1000 好分辨已換算。 */
 function makeRouter(config?: ToolRouterOptions['config']) {
@@ -104,11 +111,133 @@ describe('ToolRouter — 「一般操作」委派給內部 GestureTracker，行�
     expect(router.activeCount).toBe(1);
   });
 
-  it('setActiveTool 切到非一般操作（目前僅 general 存在，這裡直接測還是 general 不受影響）', () => {
+  it('setActiveTool 切到非一般操作 → 一般操作的 down 不再 emit grab', () => {
     const { router, events } = makeRouter();
-    router.setActiveTool('general');
-    expect(router.currentTool).toBe('general');
+    router.setActiveTool('fan');
+    expect(router.currentTool).toBe('fan');
     router.down(1, 0, 0, 0);
-    expect(events).toEqual([{ type: 'grab', id: 1, x: 1000, y: 1000 }]);
+    expect(events).toEqual([]); // 電風扇的 down 只記原點，放開才 emit（見下方 fan 區塊）
+  });
+});
+
+describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
+  it('down → move（僅更新內部預覽，不 emit）→ up → 恰好一個 setFan，欄位對應拖曳的起點/方向/距離', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('fan');
+    router.down(1, 0, 0, 0); // 世界座標（經 screenToWorld +1000）(1000, 1000)
+    router.move(1, 5, 0); // 預覽中，不 emit
+    router.move(1, 40, 0); // 世界座標 (1040, 1000)
+    router.up(1, 40, 0, 100);
+
+    expect(events).toEqual([
+      {
+        type: 'setFan',
+        originX: 1000,
+        originY: 1000,
+        dirX: 1,
+        dirY: 0,
+        length: 40,
+        width: DEFAULT_FAN_WIDTH,
+        strength: DEFAULT_FAN_STRENGTH,
+        falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+      },
+    ]);
+  });
+
+  it('斜向拖曳 → dirX/dirY 是正規化單位向量、length 是實際距離', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('fan');
+    router.down(1, 0, 0, 0); // (1000, 1000)
+    router.up(1, 3, 4, 50); // (1003, 1004) → 位移 (3, 4)，長度 5
+
+    expect(events).toHaveLength(1);
+    const e = events[0] as Extract<InputEvent, { type: 'setFan' }>;
+    expect(e.type).toBe('setFan');
+    expect(e.length).toBeCloseTo(5, 9);
+    expect(e.dirX).toBeCloseTo(0.6, 9);
+    expect(e.dirY).toBeCloseTo(0.8, 9);
+  });
+
+  it('再拖曳一次 → 第二次的 setFan 直接取代（不用先送 clearFan，ADR-0010）', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('fan');
+    router.down(1, 0, 0, 0);
+    router.up(1, 40, 0, 50);
+    router.down(1, 100, 100, 100);
+    router.up(1, 100, 140, 150);
+
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.type === 'setFan')).toBe(true);
+  });
+
+  it('按下沒拖曳（原地放開）→ 仍送一個 length=0 的 setFan，方向退回 (1, 0)（SimCore 對 length<=0 no-op）', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('fan');
+    router.down(1, 10, 10, 0);
+    router.up(1, 10, 10, 50);
+
+    expect(events).toEqual([
+      {
+        type: 'setFan',
+        originX: 1010,
+        originY: 1010,
+        dirX: 1,
+        dirY: 0,
+        length: 0,
+        width: DEFAULT_FAN_WIDTH,
+        strength: DEFAULT_FAN_STRENGTH,
+        falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+      },
+    ]);
+  });
+
+  it('cancel → 放棄這次放置，不 emit 任何事件；沒有進行中的手勢時 cancel 也不 emit', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('fan');
+    router.down(1, 0, 0, 0);
+    router.move(1, 40, 0);
+    router.cancel(1);
+    router.cancel(1); // 已經清掉，不會二次 emit
+    expect(events).toEqual([]);
+  });
+
+  it('cancel 後再 down/up → 是一次全新的放置，不受被取消那次影響', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('fan');
+    router.down(1, 0, 0, 0);
+    router.cancel(1);
+    router.down(1, 50, 50, 0);
+    router.up(1, 90, 50, 50);
+
+    expect(events).toEqual([
+      {
+        type: 'setFan',
+        originX: 1050,
+        originY: 1050,
+        dirX: 1,
+        dirY: 0,
+        length: 40,
+        width: DEFAULT_FAN_WIDTH,
+        strength: DEFAULT_FAN_STRENGTH,
+        falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+      },
+    ]);
+  });
+
+  it('電風扇工具下，一般操作的手勢（Grab/Tap）完全不觸發', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('fan');
+    router.down(1, 0, 0, 0);
+    router.up(1, 1, 1, 50); // 快、幾乎沒動——一般操作下會是 tap，這裡不該有
+    expect(events.some((e) => e.type === 'grab' || e.type === 'tap')).toBe(false);
+  });
+
+  it('切回一般操作 → Grab/Pin/Tap 手勢立刻恢復正常', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('fan');
+    router.down(1, 0, 0, 0);
+    router.setActiveTool('general'); // 切換過程中沒有殘留任何一般操作的追蹤
+    router.down(2, 0, 0, 0);
+    expect(events).toEqual([{ type: 'grab', id: 2, x: 1000, y: 1000 }]);
   });
 });

@@ -36,6 +36,13 @@ export type PointerId = number | string;
  *   Grab 不受影響。無 `id`——不是針對單一約束。控制面板「清除所有 Pin」按鈕走
  *   這條窄介面，讓 `TrackRecorder` 錄得到（issue #51 / ADR-0007 追記）。不夾帶
  *   「清掉了哪些」的快照：決定性重播，到那個 step 畫面上有什麼 Pin 就清什麼。
+ * - `setFan`（issue #66 / V2 T3-2；ADR-0010）：放置／取代電風扇——場上同時只有
+ *   一個（無 `id`，見 `FanState`）。`originX/originY` 是風扇面原點、`dirX/dirY`
+ *   是正規化後的吹風方向單位向量、`length` 是矩形沿吹風方向的長度、`width` 是
+ *   垂直吹風方向的矩形寬度、`strength`／`falloffExponent` 決定推力大小與隨縱向
+ *   距離衰減的冪次（沿用 Tap 的正規化距離冪次慣例）。取代即整包覆蓋，不用先送
+ *   `clearFan`。
+ * - `clearFan`：移除場上的電風扇（若有）。無 `id`。
  */
 export type InputEvent =
   | { type: 'grab'; id: PointerId; x: number; y: number; radius?: number }
@@ -45,7 +52,9 @@ export type InputEvent =
   | { type: 'unpin'; id: PointerId }
   | { type: 'movePin'; id: PointerId; x: number; y: number }
   | { type: 'tap'; x: number; y: number; strength?: number }
-  | { type: 'clearPins' };
+  | { type: 'clearPins' }
+  | { type: 'setFan'; originX: number; originY: number; dirX: number; dirY: number; length: number; width: number; strength: number; falloffExponent: number }
+  | { type: 'clearFan' };
 
 /** 求解器的手感參數。全部有預設值，建構時可只帶想改的欄位。 */
 export interface SimParams {
@@ -101,6 +110,23 @@ export interface SurfacePoint {
 export interface PinInfo {
   id: PointerId;
   point: Point;
+}
+
+/**
+ * 場上目前的電風扇（issue #66 / V2 T3-2；ADR-0010）：矩形涵蓋範圍一端（`originX`,
+ * `originY`）是風扇面，推力沿 `dirX`/`dirY`（正規化單位向量）往外吹，矩形沿吹風
+ * 方向長 `length`、垂直吹風方向寬 `width`。`SimCore.fanState()` 的回傳型別，
+ * 也是 `setFan` 事件的欄位形狀（v1 場上同時只有一個，無 `id`）。
+ */
+export interface FanState {
+  originX: number;
+  originY: number;
+  dirX: number;
+  dirY: number;
+  length: number;
+  width: number;
+  strength: number;
+  falloffExponent: number;
 }
 
 /** 軸對齊包圍盒（世界座標）。 */

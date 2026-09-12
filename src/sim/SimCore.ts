@@ -9,18 +9,25 @@
  *
  * `tap` 是一次性向內脈衝（不進 substep 迴圈，直接改速度）。每個 substep（藍本：
  * `prototypes/shape-matching-feel.prototype.html` 的 `<script id="jelly-core">`）：
- *   1. 預測：symplectic Euler、無重力、無外力（所有 Particle 一視同仁）。
- *   2. shape-matching 脊椎：重疊方格 lattice 的每個 Region 做 2×2 polar
+ *   1. 電風扇（`this.fan`，issue #66；ADR-0010，沒有時 no-op）：矩形涵蓋範圍內的
+ *      Particle 沿吹風方向把加速度烤進 `vel`，隨縱向距離衰減、矩形外無感（見
+ *      `applyFan`）。**必須排在預測之前**——`vel` 在步驟 7 會整個依位置差重算，
+ *      排在預測之後改的話，這股力那個 substep 不會移動任何位置，馬上就被蓋掉。
+ *   2. 預測：symplectic Euler、無重力（所有 Particle 一視同仁；已烤進步驟 1 的
+ *      電風扇加速度會在這裡被積分進位置）。
+ *   3. shape-matching 脊椎：重疊方格 lattice 的每個 Region 做 2×2 polar
  *      decomposition 取旋轉 → goal → `x += α_sm·(g − x)`。
- *   3. XPBD 細節層（`params.xpbd`，可關）：每條邊一條 distance 約束、每個三角形
+ *   4. XPBD 細節層（`params.xpbd`，可關）：每條邊一條 distance 約束、每個三角形
  *      一條 signed-area 約束（`C = 有號面積 − 靜止有號面積`，翻面時號變、梯度
  *      翻正——不取絕對值）。compliant projection、1 iteration、`α̃ = compliance/h²`。
- *   4. Grab / Pin 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心
+ *   5. Grab / Pin 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心
  *      權重分回三個 Particle（ADR-0003）。Pin = 目標點凍結、β 恆 1 的 Grab
  *      （ADR-0004）。多條依序解、每 substep 一次；孤立 Pin 逐幀看幾乎不動，
  *      共用 Particle 的密集 Pin 群仍會被下一 substep 的 shape matching 微擾。
- *   5. Boundary（`setBoundary`，可換）：clamp 進 Walled AABB／Infinite no-op。
- *   6. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
+ *      風扇對已 Pin 住的 Particle 一樣會把加速度烤進 `vel`、預測也照常積分，但
+ *      這一步會把位置拉回鎖定點——附著點因此仍不動，力學上不需要另外特例判斷。
+ *   6. Boundary（`setBoundary`，可換）：clamp 進 Walled AABB／Infinite no-op。
+ *   7. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
  *
  * picking（世界座標 → 三角形 + 重心座標）暫時放在這裡（藍本 jelly-core 也是），
  * 未來 Input layer（issue #11）接手後改由它命中、只餵求解器 `{三角形, 重心座標,
@@ -33,6 +40,7 @@ import {
   DEFAULT_SIM_PARAMS,
   type AreaStats,
   type Bbox,
+  type FanState,
   type InputEvent,
   type PinInfo,
   type Point,
@@ -107,6 +115,8 @@ export class SimCore {
 
   /** 作用中的 Grab / Pin，鍵為輸入 `id`（Grab 與 Pin 共用命名空間）。 */
   private readonly constraints = new Map<PointerId, Constraint>();
+  /** 場上目前的電風扇（issue #66；ADR-0010：v1 單一實例，`null` = 沒有）。 */
+  private fan: FanState | null = null;
   private regions: Region[] = [];
   /** 可替換的碰撞環境。預設無牆；`setBoundary` 可執行期替換，不需重建求解器。 */
   private boundary: Boundary = new InfiniteBoundary();
@@ -249,8 +259,8 @@ export class SimCore {
 
   /**
    * 唯一的輸入介面（ADR-0005）。支援 `grab` / `moveGrab` / `release`（T4）、
-   * `pin` / `unpin` / `movePin`（T5）、`tap`（T7）、`clearPins`（issue #51）。
-   * 詳細語意見 `InputEvent`。
+   * `pin` / `unpin` / `movePin`（T5）、`tap`（T7）、`clearPins`（issue #51）、
+   * `setFan` / `clearFan`（issue #66）。詳細語意見 `InputEvent`。
    */
   applyInput(event: InputEvent): void {
     switch (event.type) {
@@ -304,6 +314,21 @@ export class SimCore {
       case 'clearPins':
         this.clearPins();
         break;
+      case 'setFan':
+        this.fan = {
+          originX: event.originX,
+          originY: event.originY,
+          dirX: event.dirX,
+          dirY: event.dirY,
+          length: event.length,
+          width: event.width,
+          strength: event.strength,
+          falloffExponent: event.falloffExponent,
+        };
+        break;
+      case 'clearFan':
+        this.fan = null;
+        break;
     }
   }
 
@@ -335,14 +360,16 @@ export class SimCore {
 
   /**
    * 把 Jelly 重設回靜置狀態：位置回到 rest（初始網格）座標、速度歸零、清掉所有
-   * Grab／Pin。控制面板「停止／重設」用。拓撲／Region 不受影響（只跟 rest 座標
-   * 與 `params.cellFrac` 有關，兩者都沒變）。
+   * Grab／Pin，以及場上的電風扇（issue #66；不清的話重設後下一幀又會被同一個
+   * 風扇立刻吹動，不是真正的靜置）。控制面板「停止／重設」用。拓撲／Region
+   * 不受影響（只跟 rest 座標與 `params.cellFrac` 有關，兩者都沒變）。
    */
   reset(): void {
     this.pos.set(this.rest);
     this.prev.set(this.rest);
     this.vel.fill(0);
     this.constraints.clear();
+    this.fan = null;
   }
 
   /**
@@ -378,6 +405,14 @@ export class SimCore {
       if (c.pinned) pins.push({ id, point: this.weightedPoint(c) });
     }
     return pins;
+  }
+
+  /**
+   * 場上目前的電風扇（issue #66；ADR-0010），沒有時回傳 `null`。輸入層／算繪端
+   * 讀它畫矩形視覺提示（比照 `listPins()` 給 `PinMarkers` 用的模式）。
+   */
+  fanState(): FanState | null {
+    return this.fan;
   }
 
   /** Grab／Pin 框外退路的吸附半徑：呼叫端指定值，否則靜止 bbox 對角線 × 0.1。 */
@@ -483,6 +518,36 @@ export class SimCore {
     }
   }
 
+  /**
+   * 電風扇持續力場（issue #66；ADR-0010）：矩形涵蓋範圍——沿吹風方向（`dirX`,
+   * `dirY`，單位向量）從風扇面 `(originX, originY)` 量起、縱向 `[0, length]`，
+   * 垂直方向（`perpX`, `perpY` = 吹風方向轉 90°）`[-width/2, width/2]`——內每個
+   * Particle 依 `力 = strength × (1 − 縱向距離/length)^falloffExponent` 沿吹風
+   * 方向持續加速度（`v += dir · 力 · h`）。縱向距離越大力越小、在 `length` 處
+   * 平滑趨近 0（沿用 `doTap` 的正規化距離冪次衰減慣例）；矩形外（縱向 < 0 或 >
+   * length，或橫向超出半寬）完全無感。`length <= 0`（尚未真的拖出方向）整段
+   * no-op，避免除以 0。
+   */
+  private applyFan(fan: FanState, h: number): void {
+    if (!(fan.length > 0)) return;
+    const { originX, originY, dirX, dirY, length, width, strength, falloffExponent } = fan;
+    const perpX = -dirY;
+    const perpY = dirX;
+    const halfWidth = width / 2;
+    for (let i = 0; i < this.n; i++) {
+      const dx = this.pos[2 * i]! - originX;
+      const dy = this.pos[2 * i + 1]! - originY;
+      const along = dx * dirX + dy * dirY;
+      if (along < 0 || along > length) continue;
+      const across = dx * perpX + dy * perpY;
+      if (Math.abs(across) > halfWidth) continue;
+      const falloff = Math.pow(1 - along / length, falloffExponent);
+      const a = strength * falloff * h;
+      this.vel[2 * i] = this.vel[2 * i]! + dirX * a;
+      this.vel[2 * i + 1] = this.vel[2 * i + 1]! + dirY * a;
+    }
+  }
+
   // ---- step ----------------------------------------------------------------
 
   /**
@@ -497,22 +562,28 @@ export class SimCore {
     const keep = 1 - this.params.damping;
 
     for (let s = 0; s < subs; s++) {
-      // 1. 預測（無重力、無外力）——被抓 Particle 也照常積分。
+      // 1. 電風扇（沒有時 no-op）：對目前位置落在矩形內的 Particle 把它的加速度
+      //    烤進 vel。**必須在預測之前**——vel 在這個 substep 尾端（步驟 7）會整個
+      //    依位置差重算，這裡若排在預測之後才改 vel，這股力這一 substep 完全不會
+      //    移動任何位置、下一行就被蓋掉，等於沒發生過。
+      if (this.fan) this.applyFan(this.fan, h);
+      // 2. 預測（無重力）：symplectic Euler，把（可能已含電風扇）的 vel 積分進
+      //    pos——被抓 Particle 也照常積分。
       for (let i = 0; i < this.n; i++) {
         this.prev[2 * i] = this.pos[2 * i]!;
         this.prev[2 * i + 1] = this.pos[2 * i + 1]!;
         this.pos[2 * i] = this.pos[2 * i]! + this.vel[2 * i]! * h;
         this.pos[2 * i + 1] = this.pos[2 * i + 1]! + this.vel[2 * i + 1]! * h;
       }
-      // 2. shape-matching 脊椎。
+      // 3. shape-matching 脊椎。
       this.solveShapeMatching(alphaSm);
-      // 3. XPBD 細節層（疊加；補局部拉伸擠壓的彈性 + 第二道防翻面）。
+      // 4. XPBD 細節層（疊加；補局部拉伸擠壓的彈性 + 第二道防翻面）。
       if (this.params.xpbd) this.solveXpbd(h);
-      // 4. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
+      // 5. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
       this.solveConstraints();
-      // 5. Boundary：clamp 進邊界、調 prev 讓回推速度不指向界外（Infinite 為 no-op）。
+      // 6. Boundary：clamp 進邊界、調 prev 讓回推速度不指向界外（Infinite 為 no-op）。
       this.boundary.resolveBoundary(this.pos, this.prev, this.n, h);
-      // 6. 回推速度 + 全域阻尼。
+      // 7. 回推速度 + 全域阻尼。
       for (let i = 0; i < this.n; i++) {
         this.vel[2 * i] = ((this.pos[2 * i]! - this.prev[2 * i]!) / h) * keep;
         this.vel[2 * i + 1] = ((this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h) * keep;

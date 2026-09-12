@@ -465,3 +465,36 @@ body {
     box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.25);
   }
 }
+
+/**
+ * 電風扇矩形外框（issue #66 / V2 T3-2）：同 `.jelly-pin-markers` 的疊層模式，
+ * 差別是內容用一個鋪滿的 SVG 畫矩形線框（純美術佔位，見 `FanOverlay`）。
+ */
+.jelly-fan-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.jelly-fan-overlay.is-hidden {
+  display: none;
+}
+
+.jelly-fan-overlay-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.jelly-fan-overlay-rect {
+  fill: rgba(90, 200, 255, 0.12);
+  stroke: rgba(90, 200, 255, 0.9);
+  stroke-width: 2;
+  display: none;
+}
+
+/** 場上有風扇時才畫出矩形（`update(null)` 沒加這個 class）。 */
+.jelly-fan-overlay.is-present .jelly-fan-overlay-rect {
+  display: block;
+}

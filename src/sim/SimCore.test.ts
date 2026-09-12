@@ -733,6 +733,214 @@ describe('SimCore — Tap', () => {
   });
 });
 
+describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
+  it('矩形完全沒涵蓋到任何 Particle → 狀態完全不變', () => {
+    const sim = new SimCore(MESH());
+    const before = Array.from(sim.positions);
+    sim.applyInput({
+      type: 'setFan',
+      originX: 1000,
+      originY: 1000,
+      dirX: 1,
+      dirY: 0,
+      length: 50,
+      width: 50,
+      strength: 5000,
+      falloffExponent: 1,
+    });
+    run(sim, 30);
+    expect(Array.from(sim.positions)).toEqual(before);
+  });
+
+  it('矩形內獲得沿吹風方向的位移，矩形外（橫向超出半寬）幾乎無感', () => {
+    const sim = new SimCore(MESH());
+    // 涵蓋 y ∈ [38, 58] 的窄帶（半寬 10，中心 y=48），沿 +x 吹到底。單一極小步
+    // （比照 falloffExponent 測試）：讓比較聚焦在「這一 substep 電風扇本身加了
+    // 多少速度」，不被後續多步的 shape-matching 彈性耦合（regions 重疊、會把
+    // 擾動傳給鄰近但沒被風扇直接吹到的 Particle）淹沒。
+    sim.applyInput({
+      type: 'setFan',
+      originX: 0,
+      originY: 48,
+      dirX: 1,
+      dirY: 0,
+      length: 96,
+      width: 20,
+      strength: 6000,
+      falloffExponent: 1,
+    });
+    sim.step(1 / 6000);
+
+    // (0, 48)：窄帶正中央，緊貼風扇面 → 應該明顯往 +x 位移。
+    const insideIdx = 6 * 13 + 0; // i=0(x=0), j=6(y=48)
+    const outsideIdx = 12 * 13 + 0; // i=0(x=0), j=12(y=96)：離窄帶 48 單位，遠超半寬
+    const insideDx = sim.positions[2 * insideIdx]! - 0;
+    const outsideDx = sim.positions[2 * outsideIdx]! - 0;
+
+    expect(insideDx).toBeGreaterThan(1e-6);
+    expect(Math.abs(outsideDx)).toBeLessThan(insideDx * 0.05);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('同縱向距離、不同橫向位置 → 位移一致（力只跟縱向距離有關）', () => {
+    const sim = new SimCore(MESH());
+    // 寬度覆蓋整個 mesh（半寬 100 ≥ 96），沿 +x 吹，兩個 y 不同、x 相同的點應等量位移。
+    sim.applyInput({
+      type: 'setFan',
+      originX: 0,
+      originY: 48,
+      dirX: 1,
+      dirY: 0,
+      length: 96,
+      width: 200,
+      strength: 6000,
+      falloffExponent: 1,
+    });
+    sim.step(1 / 6000); // 單一極小步，理由同上
+
+    const a = 3 * 13 + 0; // i=0(x=0), j=3(y=24)
+    const b = 9 * 13 + 0; // i=0(x=0), j=9(y=72)
+    const dxA = sim.positions[2 * a]! - 0;
+    const dxB = sim.positions[2 * b]! - 0;
+    expect(dxA).toBeGreaterThan(1e-6);
+    expect(dxA).toBeCloseTo(dxB, 6);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('縱向越遠力越小：緊貼風扇面的點比矩形遠端的點位移更多', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({
+      type: 'setFan',
+      originX: 0,
+      originY: 48,
+      dirX: 1,
+      dirY: 0,
+      length: 96,
+      width: 200,
+      strength: 6000,
+      falloffExponent: 1,
+    });
+    sim.step(1 / 6000); // 單一極小步，理由同上
+
+    const near = 6 * 13 + 0; // i=0(x=0)：緊貼風扇面，falloff 最大
+    const far = 6 * 13 + 12; // i=12(x=96)：矩形遠端（縱向距離 = length），falloff → 0
+    const dxNear = sim.positions[2 * near]! - 0;
+    const dxFar = sim.positions[2 * far]! - 96;
+    expect(dxNear).toBeGreaterThan(1e-6);
+    expect(dxFar).toBeGreaterThan(0); // 仍會被吹到一點（靠鄰近 Particle 的彈性耦合），但遠小於 near
+    expect(dxFar).toBeLessThan(dxNear * 0.5);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('falloffExponent 加大 → 同一個縱向位置的力衰減更快（同 strength 比較）', () => {
+    const HALF_LENGTH_IDX = 6 * 13 + 6; // i=6(x=48)，縱向距離 = length/2 = 48 → (1 − 0.5)^exponent
+
+    function halfwayDx(falloffExponent: number): number {
+      const sim = new SimCore(MESH());
+      sim.applyInput({
+        type: 'setFan',
+        originX: 0,
+        originY: 48,
+        dirX: 1,
+        dirY: 0,
+        length: 96,
+        width: 200,
+        strength: 6000,
+        falloffExponent,
+      });
+      sim.step(1 / 6000); // 單一極小步，讓彈性回拉可忽略，貼近純速度注入的比較
+      return sim.positions[2 * HALF_LENGTH_IDX]! - 48;
+    }
+
+    const dxExp1 = halfwayDx(1); // falloff = 0.5
+    const dxExp4 = halfwayDx(4); // falloff = 0.5^4 = 0.0625，衰減明顯更快
+    expect(dxExp1).toBeGreaterThan(0);
+    expect(dxExp4).toBeGreaterThan(0);
+    expect(dxExp4).toBeLessThan(dxExp1 * 0.5);
+  });
+
+  it('已 Pin 的點在風扇作用下附著點仍不動', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'pin', id: 'p', x: 48, y: 48 });
+    const before = sim.attachPoint('p')!;
+
+    sim.applyInput({
+      type: 'setFan',
+      originX: 0,
+      originY: 0,
+      dirX: 1,
+      dirY: 0,
+      length: 96,
+      width: 200,
+      strength: 8000,
+      falloffExponent: 1,
+    });
+    run(sim, 120);
+
+    const after = sim.attachPoint('p')!;
+    expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeLessThan(1e-3);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('clearFan 後力立即消失：後續動能不再被推高，改為衰減', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({
+      type: 'setFan',
+      originX: 0,
+      originY: 0,
+      dirX: 1,
+      dirY: 0,
+      length: 96,
+      width: 200,
+      strength: 6000,
+      falloffExponent: 1,
+    });
+    run(sim, 60);
+    const keWithFan = sim.kineticEnergy();
+    expect(keWithFan).toBeGreaterThan(0);
+
+    sim.applyInput({ type: 'clearFan' });
+    run(sim, 60);
+    const keAfterClear = sim.kineticEnergy();
+    expect(keAfterClear).toBeLessThan(keWithFan);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('決定性：相同 setFan/clearFan 事件流兩次跑結果完全相等', () => {
+    const play = (): number[] => {
+      const sim = new SimCore(MESH());
+      sim.applyInput({
+        type: 'setFan',
+        originX: 0,
+        originY: 0,
+        dirX: 1,
+        dirY: 0,
+        length: 96,
+        width: 200,
+        strength: 6000,
+        falloffExponent: 1,
+      });
+      run(sim, 20);
+      sim.applyInput({
+        type: 'setFan',
+        originX: 96,
+        originY: 96,
+        dirX: -1,
+        dirY: 0,
+        length: 60,
+        width: 40,
+        strength: 9000,
+        falloffExponent: 2,
+      });
+      run(sim, 20);
+      sim.applyInput({ type: 'clearFan' });
+      run(sim, 20);
+      return Array.from(sim.positions);
+    };
+    expect(play()).toEqual(play());
+  });
+});
+
 describe('SimCore — Boundary', () => {
   /** 抓右緣一點把整塊 Jelly 甩向 −X（`reach` = 每幀左移量），然後放開。 */
   function flingLeft(sim: SimCore, reach = 90): void {
@@ -857,5 +1065,30 @@ describe('SimCore — reset', () => {
     expect(sim.pinCount).toBe(1);
     expect(sim.kineticEnergy()).toBeLessThan(1e-6);
     expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('reset 也會清掉場上的電風扇（issue #66）：不然重設後下一步又會被同一個風扇立刻吹動', () => {
+    const sim = new SimCore(MESH());
+    const rest = Float64Array.from(sim.positions);
+    sim.applyInput({
+      type: 'setFan',
+      originX: 0,
+      originY: 0,
+      dirX: 1,
+      dirY: 0,
+      length: 96,
+      width: 200,
+      strength: 6000,
+      falloffExponent: 1,
+    });
+    run(sim, 10);
+    expect(sim.fanState()).not.toBeNull();
+
+    sim.reset();
+
+    expect(sim.fanState()).toBeNull();
+    run(sim, 30);
+    expect(sim.kineticEnergy()).toBe(0); // 沒有風扇、沒有殘留速度 → 靜置
+    expect(Array.from(sim.positions)).toEqual(Array.from(rest));
   });
 });

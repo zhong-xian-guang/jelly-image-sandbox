@@ -16,4 +16,5 @@ export type {
   Point,
   SurfacePoint,
   PinInfo,
+  FanState,
 } from './types';
