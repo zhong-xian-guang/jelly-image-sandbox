@@ -156,7 +156,7 @@ import {
   stepToSeconds,
 } from './demos';
 import { DropImportInput } from './DropImportInput';
-import { FanOverlay } from './FanOverlay';
+import { clampFanIconRadiusPx, FanOverlay } from './FanOverlay';
 import { FileImportInput } from './FileImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { PerfMonitor } from './PerfMonitor';
@@ -190,13 +190,17 @@ const TAP_STRENGTH_RANGE = { min: 1000, max: 11000, step: 100 };
 /** Softness 滑桿初始位置（0–1 中點 = `DEFAULT_SIM_PARAMS`，見 `../sim/softness`）。 */
 const DEFAULT_SOFTNESS = 0.5;
 /**
- * 電風扇三個滑桿的範圍（issue #67）——中點分別對應 `ToolRouter` 的
- * `DEFAULT_FAN_WIDTH`／`DEFAULT_FAN_STRENGTH`／`DEFAULT_FAN_FALLOFF_EXPONENT`，
- * 同 `TAP_STRENGTH_RANGE` 的理由。衰減程度下限 0.2（避免趨近 0 次方讓衰減幾乎
+ * 電風扇三個滑桿的範圍（issue #67；強度上限依使用者檢視回饋調高——原上限
+ * 7500 吹不動整個果凍，換算穩態風速 `v_ss ≈ strength × h/damping`（`h` = 每
+ * substep 秒數、`damping` = `DEFAULT_SIM_PARAMS.damping` 0.02，見
+ * `SimCore.step`）只有預設果凍對角線的 3 倍/秒；改成 75000 後 `v_ss` 約 30 倍
+ * 對角線/秒，足以在無限模式下把果凍整個吹飛出畫面）。寬度／衰減程度中點對應
+ * `ToolRouter` 的 `DEFAULT_FAN_WIDTH`／`DEFAULT_FAN_FALLOFF_EXPONENT`，同
+ * `TAP_STRENGTH_RANGE` 的理由。衰減程度下限 0.2（避免趨近 0 次方讓衰減幾乎
  * 消失、矩形內外力道落差過於突兀）、上限 5（明顯集中在風扇正前方）。
  */
 const FAN_WIDTH_RANGE = { min: 20, max: 280, step: 5 };
-const FAN_STRENGTH_RANGE = { min: 500, max: 7500, step: 100 };
+const FAN_STRENGTH_RANGE = { min: 500, max: 75000, step: 500 };
 const FAN_FALLOFF_RANGE = { min: 0.2, max: 5, step: 0.1 };
 /**
  * Pin 模式下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
@@ -1377,6 +1381,7 @@ export class JellySandbox {
     const input = new PointerInput(canvas, {
       screenToWorld: project,
       hitTest,
+      getFan: () => this.sim.fanState(),
       applyInput: (event) => {
         const routed = routeForPinMode(event, this.pinModeEnabled, this.pinModeContext());
         if (routed) {
@@ -1524,6 +1529,9 @@ export class JellySandbox {
             icon: {
               ...worldToScreen(this.cameraState.transform, canvasSize, fan.originX, fan.originY),
               angleRad: Math.atan2(fan.dirY, fan.dirX),
+              // 護罩半徑＝世界寬度的一半換算成目前縮放下的螢幕像素，夾在圖示可視範圍內
+              // （見 `FanOverlay.clampFanIconRadiusPx`），讓圖示大小如實反映 width 滑桿。
+              radiusPx: clampFanIconRadiusPx((fan.width / 2) * this.cameraState.transform.scale),
             },
           },
         );

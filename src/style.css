@@ -500,41 +500,41 @@ body {
 }
 
 /**
- * 側視圖圖示（issue #67 / V2 T3-3）：`FanOverlay` 的 `<g>` 靠 JS 算好的
- * `transform="translate(...) rotate(...)"` 定位／轉向，這裡只管形狀的填色／
- * 線條——本地座標系刻意設得很小（單位跟世界座標無關），靠 `scale` 放大到看得見。
+ * 電風扇圖示（issue #67 / V2 T3-3；事後檢視改成正面圓形護罩＋扇葉造型）：
+ * `FanOverlay` 的 `<g>` 靠 JS 算好的 `transform="translate(...) rotate(...)"`
+ * 定位／轉向，護罩／扇葉／風線的座標（含護罩 `r`）也由 JS 依 `width` 動態改寫
+ * （見 `FanOverlay.update`）——這裡只管形狀的填色／線條粗細。
  */
 .jelly-fan-overlay-icon {
   display: none;
-  transform-box: fill-box;
 }
 
 .jelly-fan-overlay.is-present .jelly-fan-overlay-icon {
   display: block;
 }
 
-.jelly-fan-overlay-icon-stand,
 .jelly-fan-overlay-icon-motor {
-  fill: rgba(90, 200, 255, 0.85);
+  fill: rgba(60, 70, 80, 0.9);
   stroke: none;
 }
 
 .jelly-fan-overlay-icon-guard {
-  fill: rgba(90, 200, 255, 0.35);
-  stroke: rgba(90, 200, 255, 0.9);
-  stroke-width: 0.6;
+  fill: rgba(90, 200, 255, 0.25);
+  stroke: rgba(90, 200, 255, 0.95);
+  stroke-width: 2.5;
 }
 
 .jelly-fan-overlay-icon-blades {
   fill: none;
-  stroke: rgba(20, 40, 50, 0.7);
-  stroke-width: 0.6;
+  stroke: rgba(20, 40, 50, 0.8);
+  stroke-width: 2.5;
+  stroke-linecap: round;
 }
 
 .jelly-fan-overlay-icon-wind {
   fill: none;
-  stroke: rgba(90, 200, 255, 0.9);
-  stroke-width: 0.8;
+  stroke: rgba(90, 200, 255, 0.95);
+  stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }

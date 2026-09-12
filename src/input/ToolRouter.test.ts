@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { InputEvent, Point } from '../sim';
+import type { FanState, InputEvent, Point } from '../sim';
 import {
   DEFAULT_FAN_FALLOFF_EXPONENT,
   DEFAULT_FAN_STRENGTH,
@@ -11,10 +11,10 @@ import {
 } from './ToolRouter';
 
 /** 同 `GestureTracker.test.ts` 的黑盒手法：`screenToWorld` 把螢幕座標 +1000 好分辨已換算。 */
-function makeRouter(config?: ToolRouterOptions['config']) {
+function makeRouter(config?: ToolRouterOptions['config'], getFan?: () => FanState | null) {
   const events: InputEvent[] = [];
   const screenToWorld = vi.fn((x: number, y: number): Point => ({ x: x + 1000, y: y + 1000 }));
-  const router = new ToolRouter({ screenToWorld, emit: (e) => events.push(e), config });
+  const router = new ToolRouter({ screenToWorld, emit: (e) => events.push(e), config, getFan });
   return { router, events, screenToWorld };
 }
 
@@ -277,5 +277,132 @@ describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
       strength: 9000,
       falloffExponent: 0.5,
     });
+  });
+});
+
+describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => {
+  /** 世界座標 (1000,1000)、朝 +x 吹、長 100、寬 40 的既有風扇。 */
+  const existingFan: FanState = {
+    originX: 1000,
+    originY: 1000,
+    dirX: 1,
+    dirY: 0,
+    length: 100,
+    width: 40,
+    strength: 999,
+    falloffExponent: 3,
+  };
+
+  it('down 落在既有風扇矩形內 → 立刻送一次 setFan，原點換成按下點、其餘沿用原風扇', () => {
+    const { router, events } = makeRouter(undefined, () => existingFan);
+    router.setActiveTool('fan');
+    router.down(1, 50, 0, 0); // 世界座標 (1050, 1000)：along=50 in [0,100]、across=0 in [-20,20]
+
+    expect(events).toEqual([
+      {
+        type: 'setFan',
+        originX: 1050,
+        originY: 1000,
+        dirX: 1,
+        dirY: 0,
+        length: 100,
+        width: 40,
+        strength: 999,
+        falloffExponent: 3,
+      },
+    ]);
+  });
+
+  it('move 期間每次都即時送一次 setFan（比照 movePin/moveGrab，直接設到目前指標位置）', () => {
+    const { router, events } = makeRouter(undefined, () => existingFan);
+    router.setActiveTool('fan');
+    router.down(1, 50, 0, 0);
+    router.move(1, 60, 10); // 世界座標 (1060, 1010)
+
+    expect(events).toHaveLength(2);
+    expect(events[1]).toEqual({
+      type: 'setFan',
+      originX: 1060,
+      originY: 1010,
+      dirX: 1,
+      dirY: 0,
+      length: 100,
+      width: 40,
+      strength: 999,
+      falloffExponent: 3,
+    });
+  });
+
+  it('up 在放開點送最後一次收尾', () => {
+    const { router, events } = makeRouter(undefined, () => existingFan);
+    router.setActiveTool('fan');
+    router.down(1, 50, 0, 0);
+    router.move(1, 60, 10);
+    router.up(1, 70, 20, 50);
+
+    expect(events).toHaveLength(3);
+    expect(events[2]).toEqual({
+      type: 'setFan',
+      originX: 1070,
+      originY: 1020,
+      dirX: 1,
+      dirY: 0,
+      length: 100,
+      width: 40,
+      strength: 999,
+      falloffExponent: 3,
+    });
+  });
+
+  it('cancel 中途放棄 → 不再繼續跟隨指標，但不回捲已經 emit 過的移動（比照 Grab 的 cancel）', () => {
+    const { router, events } = makeRouter(undefined, () => existingFan);
+    router.setActiveTool('fan');
+    router.down(1, 50, 0, 0);
+    router.move(1, 60, 10);
+    router.cancel(1);
+
+    expect(events).toHaveLength(2); // down + 一次 move 各 emit 一次，cancel 不再多 emit、也不補一個「復原」事件
+  });
+
+  it('down 落在既有風扇矩形外 → 退回「放置新風扇」，不受既有風扇影響', () => {
+    const { router, events } = makeRouter(undefined, () => existingFan);
+    router.setActiveTool('fan');
+    router.down(1, 1000, 1000, 0); // 世界座標 (2000, 2000)，遠在矩形之外
+    router.up(1, 1040, 1000, 50); // 位移 (40, 0)
+
+    expect(events).toEqual([
+      {
+        type: 'setFan',
+        originX: 2000,
+        originY: 2000,
+        dirX: 1,
+        dirY: 0,
+        length: 40,
+        width: DEFAULT_FAN_WIDTH,
+        strength: DEFAULT_FAN_STRENGTH,
+        falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+      },
+    ]);
+  });
+
+  it('沒有 getFan（未接、或場上沒有風扇）→ 一律當放置新風扇，行為不變', () => {
+    const { router, events } = makeRouter(undefined, () => null);
+    router.setActiveTool('fan');
+    router.down(1, 50, 0, 0);
+    router.up(1, 90, 0, 50);
+
+    expect(events).toEqual([
+      {
+        type: 'setFan',
+        originX: 1050,
+        originY: 1000,
+        dirX: 1,
+        dirY: 0,
+        length: 40,
+        width: DEFAULT_FAN_WIDTH,
+        strength: DEFAULT_FAN_STRENGTH,
+        falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+      },
+    ]);
   });
 });

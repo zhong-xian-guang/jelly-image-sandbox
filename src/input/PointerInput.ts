@@ -26,7 +26,7 @@
  * `CameraInput` 對應的判斷）。
  */
 
-import type { InputEvent, Point } from '../sim';
+import type { FanState, InputEvent, Point } from '../sim';
 import type { GestureConfig } from './GestureTracker';
 import { type FanParams, type ToolId, ToolRouter } from './ToolRouter';
 
@@ -35,6 +35,8 @@ export interface PointerInputOptions {
   applyInput: (event: InputEvent) => void;
   /** 世界座標是否落在 Jelly 上；沒命中的 `pointerdown` 不當 Grab（交給相機層）。 */
   hitTest?: (world: Point) => boolean;
+  /** 轉發給 `ToolRouter`（issue #67）——場上目前的電風扇幾何，供拖曳既有風扇的判定用。 */
+  getFan?: () => FanState | null;
   config?: Partial<GestureConfig>;
   /** 時鐘來源（測試可注入）。預設 `performance.now`。 */
   now?: () => number;
@@ -55,6 +57,7 @@ export class PointerInput {
       screenToWorld: opts.screenToWorld,
       emit: opts.applyInput,
       hitTest: opts.hitTest,
+      getFan: opts.getFan,
       config: opts.config,
     });
 

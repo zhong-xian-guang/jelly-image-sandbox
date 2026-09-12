@@ -129,6 +129,23 @@ export interface FanState {
   falloffExponent: number;
 }
 
+/**
+ * 世界座標 `point` 是否落在 `fan` 的矩形涵蓋範圍內——`ToolRouter` 用它判斷
+ * `down` 是否落在既有風扇矩形內，藉此決定這次手勢是「拖曳既有風扇」（只改
+ * `originX/originY`）還是「放置新風扇」（重新定義方向／長度）。跟
+ * `SimCore.applyFan` 每個 Particle 的沿／橫向投影是同一種矩形幾何，但那裡是
+ * 熱迴圈（每 substep × 每 Particle），為了同時要拿 `along` 算衰減、避免多一次
+ * 物件配置與重算，刻意保留內聯版本，不共用這個函式。純函式，不碰求解器狀態。
+ */
+export function isPointInFanRect(fan: FanState, point: Point): boolean {
+  const dx = point.x - fan.originX;
+  const dy = point.y - fan.originY;
+  const along = dx * fan.dirX + dy * fan.dirY;
+  if (along < 0 || along > fan.length) return false;
+  const across = dx * -fan.dirY + dy * fan.dirX;
+  return Math.abs(across) <= fan.width / 2;
+}
+
 /** 軸對齊包圍盒（世界座標）。 */
 export interface Bbox {
   minX: number;
