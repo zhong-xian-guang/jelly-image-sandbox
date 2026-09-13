@@ -1,9 +1,9 @@
 /**
- * `FanOverlay`（issue #66 / V2 T3-2；issue #67 / V2 T3-3 加旋轉圖示；歷經兩輪
- * 事後檢視回饋調整外觀——見下方「圖示外觀的取捨」）——電風扇的視覺提示，比照
- * `PinMarkers` 的純 DOM overlay 模式：不知道 `SimCore`／相機的存在，呼叫端
- * （`JellySandbox`）每幀把投影好的螢幕座標、圖示的錨點／角度／護罩半徑餵
- * 進來（`update`）。
+ * `FanOverlay`（issue #66 / V2 T3-2；issue #67 / V2 T3-3 加旋轉圖示；歷經三輪
+ * 事後檢視回饋調整外觀，第三輪起使用者提供參考圖定案——見下方「圖示外觀」）
+ * ——電風扇的視覺提示，比照 `PinMarkers` 的純 DOM overlay 模式：不知道
+ * `SimCore`／相機的存在，呼叫端（`JellySandbox`）每幀把投影好的螢幕座標、
+ * 圖示的錨點／角度／護罩半徑餵進來（`update`）。
  *
  * `pointer-events: none`——不擋手勢。矩形範圍仍用 SVG `<polygon>` 畫外框（純線框、
  * 無填色，issue #66 沿用），疊在上面的是依 `dirX`/`dirY` 旋轉的圖示——一個
@@ -16,21 +16,16 @@
  * `camera/project.ts`），所以角度可以直接沿用 `Math.atan2(dirY, dirX)`、不需要
  * 另外經相機轉換。沒有風扇時整層藏起來（`update(null)`）。
  *
- * **圖示外觀的取捨**：第一輪回饋要求「側視圖」，護罩畫成側視會扁掉的細長
- * 橢圓——結果第二輪回饋是「不像風扇、看不出寬度」，改成正面圓形護罩＋放射
- * 扇葉後才解決；但第三輪回饋又要「側視圖、更真實、要有腳座」。這兩個方向直接
- * 衝突：嚴格側視的圓形護罩必然扁成一條線，沒辦法同時「一眼看出是風扇」又
- * 「看得出寬度」。這裡採取的折衷：護罩維持正面圓（辨識度／寬度都靠它），
- * 但補上只有側視角度才會出現的元素——馬達殼、頸關節、支柱、腳座——讓整體
- * 讀起來像「一台放在桌上、側面看過去的立扇」，而不是單純的抽象符號。這是
- * 刻意的風格化选择（跟很多俯視遊戲畫地面道具用側視／45° 圖示同一個做法），
- * 不是「真的」側視圖；若這個折衷仍不符合預期，需要換成真正的美術資產而非
- * 向量佔位圖（issue #64 Out of Scope 的範圍）。
- *
- * 支架（馬達殼＋頸關節＋支柱＋腳座）整組固定畫在護罩正下方偏後（本地座標
- * −x／+y 象限），隨圖示整體一起依 `dirX/dirY` 旋轉——這款遊戲是無重力俯視視角，
- * 「下方」本來就沒有真正的物理意義，支架跟著風向轉動、不會永遠垂直於畫面，
- * 是同一種風格化簡化，不是 bug。
+ * **圖示外觀**：前兩輪回饋在「側視圖」（護罩扁成一條線，看不出寬度）跟「正面圓
+ * 護罩＋放射扇葉」（看得出寬度但不像側視圖）之間反覆橫跳。第三輪使用者直接
+ * 提供一張參考圖定案，照它重畫：護罩是一顆立起來的橢圓（不是扁平線條，也不是
+ * 正圓）——內部畫幾道垂直「籠子」桿線＋一條橫線做出立體感，寬度滑桿控制的是
+ * 橢圓的縱向半徑（`ry`），不是圓的半徑；馬達殼在護罩後方（−x），旁邊一顆小
+ * 旋鈕；馬達下方一顆頸關節，用一條弧線往下、往後掃到一個矮胖的底座；風線
+ * 換成護罩前方（+x）的波浪線（不是人字形箭頭）。整組支架（馬達／旋鈕／頸關節
+ * ／弧線／底座）固定畫在護罩後方偏下（本地座標 −x／+y 象限），隨圖示整體
+ * 依 `dirX/dirY` 旋轉——這款遊戲是無重力俯視視角，「下方」沒有真正的物理
+ * 意義，支架跟著風向轉動、不會永遠垂直於畫面，是刻意的風格化簡化，不是 bug。
  *
  * 矩形範圍／圖示各自有獨立的顯示開關（`setShowRange`／`setShowIcon`，issue #67
  * 事後檢視追加）——面板原本只有一顆「顯示風扇提示」同時管兩者，使用者可能
@@ -41,12 +36,11 @@
  */
 
 /**
- * 護罩半徑（螢幕像素）的可視下限／上限——只防兩個極端：寬度滑桿拉到最小、或
- * 縮到很小的相機縮放時圖示整個消失（下限），或不合理的輸入（如手動改 clip
- * JSON 塞進超大 width）讓圖示大到蓋掉整個畫面（上限，遠高於面板 `FAN_WIDTH_RANGE`
- * 目前的上限 280，正常操作不會碰到）。介於中間的正常範圍完全不夾，圖示大小
- * 如實跟著 `width` 走——先前夾在 70px 曾經誤把整個上半段滑桿夾成同一個視覺
- * 大小，看起來像「寬度沒有反映在圖示上」，見事後檢視回饋。
+ * 護罩半徑（螢幕像素，＝橢圓縱向半徑 `ry`）的可視下限／上限——只防兩個極端：
+ * 寬度滑桿拉到最小、或縮到很小的相機縮放時圖示整個消失（下限），或不合理的
+ * 輸入（如手動改 clip JSON 塞進超大 width）讓圖示大到蓋掉整個畫面（上限，
+ * 遠高於面板 `FAN_WIDTH_RANGE` 目前的上限 280，正常操作不會碰到）。介於中間
+ * 的正常範圍完全不夾，圖示大小如實跟著 `width` 走。
  */
 const MIN_RADIUS_PX = 6;
 const MAX_RADIUS_PX = 400;
@@ -64,7 +58,7 @@ export interface FanOverlayIcon {
   y: number;
   /** 吹風方向角度，弧度，`Math.atan2(dirY, dirX)`；0 = 面向 +x（螢幕水平向右）。 */
   angleRad: number;
-  /** 護罩半徑，畫布像素——反映 `fan.width`，呼叫端已 clamp 過（見類別頂端說明）。 */
+  /** 護罩縱向半徑，畫布像素——反映 `fan.width`，呼叫端已 clamp 過（見類別頂端說明）。 */
   radiusPx: number;
 }
 
@@ -78,13 +72,15 @@ export class FanOverlay {
   readonly element: HTMLDivElement;
   private readonly polygon: SVGPolygonElement;
   private readonly iconGroup: SVGGElement;
-  private readonly grille: SVGCircleElement;
-  private readonly blades: SVGPathElement;
-  private readonly wind: SVGPathElement;
+  private readonly guard: SVGEllipseElement;
+  private readonly bars: SVGPathElement;
+  private readonly centerline: SVGLineElement;
   private readonly motor: SVGRectElement;
-  private readonly neck: SVGCircleElement;
-  private readonly pole: SVGRectElement;
-  private readonly base: SVGEllipseElement;
+  private readonly knob: SVGCircleElement;
+  private readonly tilt: SVGCircleElement;
+  private readonly curve: SVGPathElement;
+  private readonly base: SVGRectElement;
+  private readonly wind: SVGPathElement;
   /** 上一次畫的護罩半徑——值沒變就不重算各部件的座標／path 字串。 */
   private lastRadiusPx: number | null = null;
 
@@ -101,11 +97,13 @@ export class FanOverlay {
     const icon = buildFanIcon();
     this.iconGroup = icon.g;
     this.base = icon.base;
-    this.pole = icon.pole;
-    this.neck = icon.neck;
+    this.curve = icon.curve;
+    this.tilt = icon.tilt;
+    this.knob = icon.knob;
     this.motor = icon.motor;
-    this.grille = icon.grille;
-    this.blades = icon.blades;
+    this.guard = icon.guard;
+    this.bars = icon.bars;
+    this.centerline = icon.centerline;
     this.wind = icon.wind;
     svg.appendChild(this.iconGroup);
     this.element.appendChild(svg);
@@ -130,46 +128,66 @@ export class FanOverlay {
 
     if (radiusPx !== this.lastRadiusPx) {
       this.lastRadiusPx = radiusPx;
-      this.grille.setAttribute('r', String(radiusPx));
-      this.blades.setAttribute('d', bladePath(radiusPx));
-      this.wind.setAttribute('d', windPath(radiusPx));
-      this.applyStandGeometry(radiusPx);
+      this.applyGeometry(radiusPx);
     }
   }
 
   /**
-   * 支架（馬達殼＋頸關節＋支柱＋腳座）的座標，隨護罩半徑 `R` 等比縮放——見
-   * 類別頂端「圖示外觀的取捨」。馬達殼緊貼護罩背後（`motorX`，稍微重疊邊緣
-   * 顯得相連而非兩個分開的圖形），頸關節在馬達殼下緣，支柱從頸關節往下（本地
-   * +y）接到腳座；各部件都有 `Math.max` 下限，避免護罩半徑夾到最小值
-   * （`MIN_RADIUS_PX`）時支架細到消失或出現負值尺寸。
+   * 依護罩半徑 `R` 重新計算圖示每個部件的座標／path（issue #67 第三輪回饋，
+   * 照使用者提供的參考圖比例）。護罩是橢圓（`rx = R×0.35`、`ry = R`，維持
+   * 「立起來的橢圓」而非扁平線條或正圓）；馬達／旋鈕／頸關節／底座的尺寸與
+   * 相對位置都取自參考圖估算的比例常數。各部件都有 `Math.max` 下限，避免
+   * 護罩半徑夾到最小值時支架細到消失或出現負值尺寸。
    */
-  private applyStandGeometry(radiusPx: number): void {
-    const motorW = Math.max(4, radiusPx * 0.7);
-    const motorH = Math.max(6, radiusPx * 0.9);
-    const motorX = -(radiusPx + motorW * 0.55);
-    this.motor.setAttribute('x', String(motorX - motorW / 2));
+  private applyGeometry(radiusPx: number): void {
+    const R = radiusPx;
+    const guardRx = Math.max(2, R * 0.35);
+    const guardRy = R;
+    this.guard.setAttribute('rx', String(guardRx));
+    this.guard.setAttribute('ry', String(guardRy));
+    this.bars.setAttribute('d', cageBarsPath(guardRx, guardRy));
+    this.centerline.setAttribute('x1', String(-guardRx));
+    this.centerline.setAttribute('x2', String(guardRx));
+
+    const motorW = Math.max(4, R * 0.55);
+    const motorH = Math.max(6, R * 0.45);
+    const motorGap = R * 0.05;
+    const motorCx = -(guardRx + motorGap + motorW / 2);
+    this.motor.setAttribute('x', String(motorCx - motorW / 2));
     this.motor.setAttribute('y', String(-motorH / 2));
     this.motor.setAttribute('width', String(motorW));
     this.motor.setAttribute('height', String(motorH));
-    this.motor.setAttribute('rx', String(Math.min(motorW, motorH) * 0.3));
+    this.motor.setAttribute('rx', String(Math.min(motorW, motorH) * 0.25));
 
-    const neckY = motorH * 0.5;
-    this.neck.setAttribute('cx', String(motorX));
-    this.neck.setAttribute('cy', String(neckY));
-    this.neck.setAttribute('r', String(Math.max(2, radiusPx * 0.12)));
+    const knobR = Math.max(2, R * 0.11);
+    this.knob.setAttribute('cx', String(motorCx - motorW / 2 - knobR * 0.8));
+    this.knob.setAttribute('cy', '0');
+    this.knob.setAttribute('r', String(knobR));
 
-    const poleW = Math.max(2, radiusPx * 0.12);
-    const poleLen = Math.max(8, radiusPx * 0.9);
-    this.pole.setAttribute('x', String(motorX - poleW / 2));
-    this.pole.setAttribute('y', String(neckY));
-    this.pole.setAttribute('width', String(poleW));
-    this.pole.setAttribute('height', String(poleLen));
+    const tiltX = motorCx * 0.75;
+    const tiltY = R * 0.55;
+    const tiltR = Math.max(2, R * 0.11);
+    this.tilt.setAttribute('cx', String(tiltX));
+    this.tilt.setAttribute('cy', String(tiltY));
+    this.tilt.setAttribute('r', String(tiltR));
 
-    this.base.setAttribute('cx', String(motorX));
-    this.base.setAttribute('cy', String(neckY + poleLen));
-    this.base.setAttribute('rx', String(Math.max(6, radiusPx * 0.55)));
-    this.base.setAttribute('ry', String(Math.max(2, radiusPx * 0.16)));
+    const baseW = Math.max(8, R * 1.1);
+    const baseH = Math.max(3, R * 0.28);
+    const baseCx = motorCx * 0.55;
+    const baseY = R * 1.25;
+    this.base.setAttribute('x', String(baseCx - baseW / 2));
+    this.base.setAttribute('y', String(baseY - baseH / 2));
+    this.base.setAttribute('width', String(baseW));
+    this.base.setAttribute('height', String(baseH));
+    this.base.setAttribute('rx', String(baseH * 0.4));
+
+    // 頸關節往下、往後（−x）掃一條弧線到底座頂緣，比照參考圖的「弓形支架」。
+    this.curve.setAttribute(
+      'd',
+      `M ${tiltX} ${tiltY} Q ${tiltX - R * 0.35} ${baseY - baseH * 0.2} ${baseCx} ${baseY - baseH / 2}`,
+    );
+
+    this.wind.setAttribute('d', windPath(guardRx, guardRy));
   }
 
   /**
@@ -193,92 +211,109 @@ export class FanOverlay {
 }
 
 /**
- * 三道扇葉：從圓心往外放射到 `0.85× 半徑`，120° 一道，畫成經典「風扇葉片」
- * 放射狀圖案——本地座標系「面向 +x 吹風」，扇葉本身旋轉對稱、不靠它表示方向
- * （方向由馬達在後、風線在前這兩個不對稱元素表示，見類別頂端說明）。
+ * 護罩內的「籠子」桿線（issue #67 第三輪回饋，照參考圖）：5 道等距垂直線，
+ * 每道的長度依橢圓方程式算到護罩邊緣（`y = ±ry·√(1 − (x/rx)²)`），不是簡單
+ * 切齊矩形，桿線末端才會貼著橢圓輪廓、看起來像真的籠子而不是一堆穿出邊界
+ * 的直線。
  */
-function bladePath(radiusPx: number): string {
-  const r = radiusPx * 0.85;
-  const angles = [90, 210, 330]; // 度，繞圓心均分三道
-  return angles
-    .map((deg) => {
-      const rad = (deg * Math.PI) / 180;
-      const x = (r * Math.cos(rad)).toFixed(1);
-      const y = (r * Math.sin(rad)).toFixed(1);
-      return `M 0 0 L ${x} ${y}`;
+function cageBarsPath(rx: number, ry: number): string {
+  const fractions = [-0.7, -0.35, 0, 0.35, 0.7];
+  return fractions
+    .map((f) => {
+      const x = rx * f;
+      const halfY = ry * Math.sqrt(Math.max(0, 1 - f * f));
+      return `M ${x.toFixed(1)} ${(-halfY).toFixed(1)} L ${x.toFixed(1)} ${halfY.toFixed(1)}`;
     })
     .join(' ');
 }
 
-/** 護罩前方（+x）三道由近到遠的風線（「>>>」造型），起點貼著護罩邊緣。 */
-function windPath(radiusPx: number): string {
-  const gap = 4;
-  const step = 6;
-  const half = 3;
-  let d = '';
-  for (let i = 0; i < 3; i++) {
-    const x0 = radiusPx + gap + i * step;
-    const x1 = x0 + step * 0.7;
-    d += `M ${x0} ${-half} L ${x1} 0 L ${x0} ${half} `;
-  }
-  return d.trim();
+/**
+ * 護罩前方（+x）四道由上到下的波浪風線（issue #67 第三輪回饋，照參考圖換成
+ * 波浪造型，不再是人字形箭頭）：每道用兩段二次貝茲畫一個完整正弦波（先上凸
+ * 再下凹），四道均勻分布在護罩的縱向範圍內。
+ */
+function windPath(guardRx: number, guardRy: number): string {
+  const gap = guardRx * 0.6;
+  const waveLen = guardRy * 0.9;
+  const amp = guardRy * 0.12;
+  const x0 = guardRx + gap;
+  const rows = [-0.75, -0.25, 0.25, 0.75];
+  return rows
+    .map((f) => {
+      const y = guardRy * f;
+      const half = waveLen / 2;
+      return `M ${x0} ${y} q ${half * 0.5} ${-amp} ${half} 0 q ${half * 0.5} ${amp} ${half} 0`;
+    })
+    .join(' ');
 }
 
 /**
- * 圖示的固定結構（issue #67 事後檢視追加＋再追加支架）：本地座標系以圖示
- * 中心（＝風扇原點）為圓心、面向 +x 吹風。由後到前疊放：腳座→支柱→頸關節
- * →馬達殼（都在 −x／+y 象限，見類別頂端「圖示外觀的取捨」）→護罩（圓，
- * 半徑動態反映 `width`，置中在圖示錨點上——這正是矩形近端邊的中心，圓的
- * 視覺涵蓋範圍因此跟矩形近端邊實際寬度同步變化）→扇葉（護罩內放射狀排列）
- * →風線（護罩前方 +x）。純向量圖佔位，非正式美術資產。回傳各動態部件的
- * 節點參照，讓 `update()`／`applyStandGeometry()` 能在半徑變動時改寫它們的
- * 屬性，不用整個圖示重建。
+ * 圖示的固定結構（issue #67 第三輪回饋，照使用者提供的參考圖重畫）：本地
+ * 座標系以圖示中心（＝風扇原點）為圓心、面向 +x 吹風。由後到前疊放：底座→
+ * 弧線支架→頸關節→旋鈕→馬達殼（都在 −x／+y 象限）→護罩（立起來的橢圓，
+ * 縱向半徑動態反映 `width`，置中在圖示錨點上——這正是矩形近端邊的中心，
+ * 橢圓的視覺涵蓋範圍因此跟矩形近端邊實際寬度同步變化）→護罩內的籠子桿線＋
+ * 橫線→風線（護罩前方 +x，波浪造型）。純向量圖佔位，非正式美術資產。回傳
+ * 各動態部件的節點參照，讓 `update()`／`applyGeometry()` 能在半徑變動時
+ * 改寫它們的屬性，不用整個圖示重建。
  */
 function buildFanIcon(): {
   g: SVGGElement;
-  base: SVGEllipseElement;
-  pole: SVGRectElement;
-  neck: SVGCircleElement;
+  base: SVGRectElement;
+  curve: SVGPathElement;
+  tilt: SVGCircleElement;
+  knob: SVGCircleElement;
   motor: SVGRectElement;
-  grille: SVGCircleElement;
-  blades: SVGPathElement;
+  guard: SVGEllipseElement;
+  bars: SVGPathElement;
+  centerline: SVGLineElement;
   wind: SVGPathElement;
 } {
   const ns = 'http://www.w3.org/2000/svg';
   const g = document.createElementNS(ns, 'g');
   g.setAttribute('class', 'jelly-fan-overlay-icon');
 
-  const base = document.createElementNS(ns, 'ellipse');
+  const base = document.createElementNS(ns, 'rect');
   base.setAttribute('class', 'jelly-fan-overlay-icon-base');
   g.appendChild(base);
 
-  const pole = document.createElementNS(ns, 'rect');
-  pole.setAttribute('class', 'jelly-fan-overlay-icon-pole');
-  g.appendChild(pole);
+  const curve = document.createElementNS(ns, 'path');
+  curve.setAttribute('class', 'jelly-fan-overlay-icon-curve');
+  g.appendChild(curve);
 
-  const neck = document.createElementNS(ns, 'circle');
-  neck.setAttribute('class', 'jelly-fan-overlay-icon-neck');
-  g.appendChild(neck);
+  const tilt = document.createElementNS(ns, 'circle');
+  tilt.setAttribute('class', 'jelly-fan-overlay-icon-tilt');
+  g.appendChild(tilt);
+
+  const knob = document.createElementNS(ns, 'circle');
+  knob.setAttribute('class', 'jelly-fan-overlay-icon-knob');
+  g.appendChild(knob);
 
   const motor = document.createElementNS(ns, 'rect');
   motor.setAttribute('class', 'jelly-fan-overlay-icon-motor');
   g.appendChild(motor);
 
-  const grille = document.createElementNS(ns, 'circle');
-  grille.setAttribute('class', 'jelly-fan-overlay-icon-guard');
-  grille.setAttribute('cx', '0');
-  grille.setAttribute('cy', '0');
-  g.appendChild(grille);
+  const guard = document.createElementNS(ns, 'ellipse');
+  guard.setAttribute('class', 'jelly-fan-overlay-icon-guard');
+  guard.setAttribute('cx', '0');
+  guard.setAttribute('cy', '0');
+  g.appendChild(guard);
 
-  const blades = document.createElementNS(ns, 'path');
-  blades.setAttribute('class', 'jelly-fan-overlay-icon-blades');
-  g.appendChild(blades);
+  const bars = document.createElementNS(ns, 'path');
+  bars.setAttribute('class', 'jelly-fan-overlay-icon-bars');
+  g.appendChild(bars);
+
+  const centerline = document.createElementNS(ns, 'line');
+  centerline.setAttribute('class', 'jelly-fan-overlay-icon-centerline');
+  centerline.setAttribute('y1', '0');
+  centerline.setAttribute('y2', '0');
+  g.appendChild(centerline);
 
   const wind = document.createElementNS(ns, 'path');
   wind.setAttribute('class', 'jelly-fan-overlay-icon-wind');
   g.appendChild(wind);
 
-  return { g, base, pole, neck, motor, grille, blades, wind };
+  return { g, base, curve, tilt, knob, motor, guard, bars, centerline, wind };
 }
 
 /** 世界座標 `width` 換算成螢幕像素半徑後，夾到圖示可視範圍——`JellySandbox.frame` 用。 */

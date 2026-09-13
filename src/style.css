@@ -556,10 +556,11 @@ body {
 }
 
 /**
- * 電風扇圖示（issue #67 / V2 T3-3；事後檢視改成正面圓形護罩＋扇葉造型）：
+ * 電風扇圖示（issue #67 / V2 T3-3；第三輪事後檢視照使用者提供的參考圖重畫
+ * 成「立起來的橢圓護罩＋籠子桿線＋馬達旋鈕＋弧形支架＋矮底座」）：
  * `FanOverlay` 的 `<g>` 靠 JS 算好的 `transform="translate(...) rotate(...)"`
- * 定位／轉向，護罩／扇葉／風線的座標（含護罩 `r`）也由 JS 依 `width` 動態改寫
- * （見 `FanOverlay.update`）——這裡只管形狀的填色／線條粗細。
+ * 定位／轉向，各部件座標（含護罩 `rx`/`ry`）也由 JS 依 `width` 動態改寫
+ * （見 `FanOverlay.applyGeometry`）——這裡只管形狀的填色／線條粗細。
  */
 .jelly-fan-overlay-icon {
   display: none;
@@ -569,30 +570,39 @@ body {
   display: block;
 }
 
-/** 腳座／支柱／頸關節（issue #67 事後檢視追加，見 `FanOverlay`「圖示外觀的取捨」）——比馬達殼更暗一階，暗示是「桌面下方的結構」。 */
+/** 底座／弧形支架／頸關節——比馬達殼更暗一階，暗示是「桌面下方的結構」。 */
 .jelly-fan-overlay-icon-base,
-.jelly-fan-overlay-icon-pole,
-.jelly-fan-overlay-icon-neck {
+.jelly-fan-overlay-icon-tilt {
   fill: rgba(45, 52, 60, 0.9);
   stroke: none;
 }
 
-.jelly-fan-overlay-icon-motor {
+.jelly-fan-overlay-icon-curve {
+  fill: none;
+  stroke: rgba(45, 52, 60, 0.9);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.jelly-fan-overlay-icon-motor,
+.jelly-fan-overlay-icon-knob {
   fill: rgba(60, 70, 80, 0.9);
   stroke: none;
 }
 
+/** 護罩——立起來的橢圓（不是扁平線條也不是正圓），縱向半徑反映 width。 */
 .jelly-fan-overlay-icon-guard {
-  fill: rgba(90, 200, 255, 0.25);
+  fill: rgba(90, 200, 255, 0.2);
   stroke: rgba(90, 200, 255, 0.95);
   stroke-width: 2.5;
 }
 
-.jelly-fan-overlay-icon-blades {
+/** 護罩內的籠子桿線＋橫線——同一個視覺語彙，都是「籠子的結構線」。 */
+.jelly-fan-overlay-icon-bars,
+.jelly-fan-overlay-icon-centerline {
   fill: none;
-  stroke: rgba(20, 40, 50, 0.8);
-  stroke-width: 2.5;
-  stroke-linecap: round;
+  stroke: rgba(90, 200, 255, 0.7);
+  stroke-width: 1.5;
 }
 
 .jelly-fan-overlay-icon-wind {
