@@ -104,7 +104,16 @@ import {
   updateCamera,
   worldToScreen,
 } from '../camera';
-import { type ToolId, PointerInput, routeForPinMode } from '../input';
+import {
+  type FanParams,
+  type ToolId,
+  DEFAULT_FAN_FALLOFF_EXPONENT,
+  DEFAULT_FAN_FREQUENCY,
+  DEFAULT_FAN_STRENGTH,
+  DEFAULT_FAN_WIDTH,
+  PointerInput,
+  routeForPinMode,
+} from '../input';
 import {
   buildSimMesh,
   DEFAULT_PARAMS,
@@ -148,7 +157,7 @@ import {
   stepToSeconds,
 } from './demos';
 import { DropImportInput } from './DropImportInput';
-import { FanOverlay } from './FanOverlay';
+import { clampFanIconRadiusPx, FanOverlay } from './FanOverlay';
 import { FileImportInput } from './FileImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { PerfMonitor } from './PerfMonitor';
@@ -181,6 +190,20 @@ const NOTICE_DURATION_MS = 4000;
 const TAP_STRENGTH_RANGE = { min: 1000, max: 11000, step: 100 };
 /** Softness 滑桿初始位置（0–1 中點 = `DEFAULT_SIM_PARAMS`，見 `../sim/softness`）。 */
 const DEFAULT_SOFTNESS = 0.5;
+/**
+ * 電風扇四個滑桿的範圍（issue #67；事後檢視把推力模型從連續力場改成陣風——
+ * 見 `SimCore.applyFan`：`strength` 從「每秒加速度」變成「單次陣風的瞬間
+ * 速度衝量」，範圍跟著重新校準，不再沿用連續模型時代的量級。`frequency`
+ * 是新增的第四個滑桿，平均每秒陣風次數；下限 0.2（約 5 秒一陣，稀疏陣風）、
+ * 上限 10（幾乎連續的密集陣風，配合高 `strength` 就是颶風）。寬度／衰減程度
+ * 中點對應 `ToolRouter` 的 `DEFAULT_FAN_WIDTH`／`DEFAULT_FAN_FALLOFF_EXPONENT`，
+ * 同 `TAP_STRENGTH_RANGE` 的理由。衰減程度下限 0.2（避免趨近 0 次方讓衰減
+ * 幾乎消失、矩形內外力道落差過於突兀）、上限 5（明顯集中在風扇正前方）。
+ */
+const FAN_WIDTH_RANGE = { min: 20, max: 280, step: 5 };
+const FAN_STRENGTH_RANGE = { min: 200, max: 60000, step: 200 };
+const FAN_FALLOFF_RANGE = { min: 0.2, max: 5, step: 0.1 };
+const FAN_FREQUENCY_RANGE = { min: 0.2, max: 10, step: 0.1 };
 /**
  * Pin 模式下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
  * CSS 直徑（16px）同數量級，換算回世界座標時要除以目前相機縮放（見
@@ -281,8 +304,24 @@ export class JellySandbox {
   private activeTool: ToolId = 'general';
   /** 「顯示 Pin」開關——關閉時 `pinMarkers` 整層藏起來、跳過每幀的投影計算。 */
   private pinsVisible = true;
-  /** 「顯示風扇提示」開關（issue #66）——關閉時 `fanOverlay` 整層藏起來、跳過每幀的投影計算。 */
-  private fanHintVisible = true;
+  /**
+   * 「顯示風扇範圍」／「顯示風扇圖示」兩個開關（issue #66；issue #67 事後檢視
+   * 拆成兩顆，見 `ControlPanel` 的說明）——任一為 true 才需要每幀投影、餵給
+   * `fanOverlay.update`；個別的顯示／隱藏交給 `FanOverlay.setShowRange`／
+   * `setShowIcon`。
+   */
+  private fanRangeVisible = true;
+  private fanIconVisible = true;
+  /**
+   * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿目前值（issue #67）
+   * ——`PointerInput` 沒有 getter，這裡另存一份供：(a) 面板初始值、
+   * (b) `updateLiveFan` 組出更新場上目前風扇要用的完整 `setFan` 事件（該事件
+   * 是整包覆蓋，缺任何一個欄位都不行）。
+   */
+  private fanWidth = DEFAULT_FAN_WIDTH;
+  private fanStrength = DEFAULT_FAN_STRENGTH;
+  private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
+  private fanFrequency = DEFAULT_FAN_FREQUENCY;
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
   private wireframeVisible = false;
   /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
@@ -401,16 +440,30 @@ export class JellySandbox {
         followLocked: !this.cameraState.followEnabled,
         showWireframe: this.wireframeVisible,
         recordTarget: this.recordTarget,
-        showFanHint: this.fanHintVisible,
+        showFanRange: this.fanRangeVisible,
+        showFanIcon: this.fanIconVisible,
+        fanWidth: this.fanWidth,
+        fanStrength: this.fanStrength,
+        fanFalloffExponent: this.fanFalloffExponent,
+        fanFrequency: this.fanFrequency,
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
+      fanWidthRange: FAN_WIDTH_RANGE,
+      fanStrengthRange: FAN_STRENGTH_RANGE,
+      fanFalloffRange: FAN_FALLOFF_RANGE,
+      fanFrequencyRange: FAN_FREQUENCY_RANGE,
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
       onImportImage: () => this.fileImportInput.open(),
       onSaveClip: () => this.saveClip(),
       onLoadClip: () => this.clipFileInput.open(),
       onToolChange: (tool) => this.setActiveTool(tool),
       onRemoveFan: () => this.removeFan(),
-      onShowFanHintChange: (visible) => this.setFanHintVisible(visible),
+      onShowFanRangeChange: (visible) => this.setFanRangeVisible(visible),
+      onShowFanIconChange: (visible) => this.setFanIconVisible(visible),
+      onFanWidthChange: (width) => this.setFanWidth(width),
+      onFanStrengthChange: (strength) => this.setFanStrength(strength),
+      onFanFalloffChange: (falloffExponent) => this.setFanFalloffExponent(falloffExponent),
+      onFanFrequencyChange: (frequency) => this.setFanFrequency(frequency),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -1013,6 +1066,67 @@ export class JellySandbox {
     this.trackRecorder.record(event);
   }
 
+  /** 「風扇寬度」滑桿（issue #67）。 */
+  private setFanWidth(width: number): void {
+    this.fanWidth = width;
+    this.applyFanParamChange({ width });
+  }
+
+  /** 「風扇強度」滑桿（issue #67）。 */
+  private setFanStrength(strength: number): void {
+    this.fanStrength = strength;
+    this.applyFanParamChange({ strength });
+  }
+
+  /** 「風扇衰減程度」滑桿（issue #67）。 */
+  private setFanFalloffExponent(falloffExponent: number): void {
+    this.fanFalloffExponent = falloffExponent;
+    this.applyFanParamChange({ falloffExponent });
+  }
+
+  /** 「風扇頻率」滑桿（issue #67 事後檢視追加——平均每秒陣風次數，見 `SimCore.applyFan`）。 */
+  private setFanFrequency(frequency: number): void {
+    this.fanFrequency = frequency;
+    this.applyFanParamChange({ frequency });
+  }
+
+  /**
+   * 四個風扇滑桿共用的收尾（issue #67）——`patch` 只帶剛被改的那個欄位，先轉發給
+   * `ToolRouter`（下一次放置要用，見 `setFanParams`），再呼叫 `updateLiveFan`
+   * 把「目前場上的風扇（若有）」也一併更新。
+   */
+  private applyFanParamChange(patch: Partial<FanParams>): void {
+    this.input.setFanParams(patch);
+    this.updateLiveFan();
+  }
+
+  /**
+   * 「即時反映到目前場上的風扇（若有）」（issue #67）：場上沒有風扇就什麼都不做；
+   * 有的話拿它目前的原點／方向／長度，換上最新的寬度／強度／衰減程度／頻率，
+   * 整包重送一次 `setFan`（ADR-0010：`setFan` 本來就是整包覆蓋，不用先 `clearFan`）。
+   * 比照 `clearPins`／`removeFan`：任何直接呼叫 `sim.applyInput` 的分支都同時餵
+   * 給 `trackRecorder`（no-op 除非正在錄製）——錄製中途調整滑桿，重播時風扇的
+   * 手感才跟錄製當下看到的一致，不會停留在放置那一刻的舊參數。
+   */
+  private updateLiveFan(): void {
+    const fan = this.sim.fanState();
+    if (!fan) return;
+    const event: InputEvent = {
+      type: 'setFan',
+      originX: fan.originX,
+      originY: fan.originY,
+      dirX: fan.dirX,
+      dirY: fan.dirY,
+      length: fan.length,
+      width: this.fanWidth,
+      strength: this.fanStrength,
+      falloffExponent: this.fanFalloffExponent,
+      frequency: this.fanFrequency,
+    };
+    this.sim.applyInput(event);
+    this.trackRecorder.record(event);
+  }
+
   /**
    * 「顯示 Pin」開關——只管標記的顯示／隱藏。`ControlPanel` 那邊已經在使用者
    * 關掉顯示時順便把「Pin 模式」的勾選框也一起強制關掉（所見即所得），這裡
@@ -1023,10 +1137,16 @@ export class JellySandbox {
     this.pinMarkers.setVisible(visible);
   }
 
-  /** 「顯示風扇提示」開關（issue #66）——同 `setPinsVisible` 的理由。 */
-  private setFanHintVisible(visible: boolean): void {
-    this.fanHintVisible = visible;
-    this.fanOverlay.setVisible(visible);
+  /** 「顯示風扇範圍」開關（issue #66；issue #67 事後檢視拆成兩顆）——同 `setPinsVisible` 的理由。 */
+  private setFanRangeVisible(visible: boolean): void {
+    this.fanRangeVisible = visible;
+    this.fanOverlay.setShowRange(visible);
+  }
+
+  /** 「顯示風扇圖示」開關（issue #67 事後檢視追加）——同 `setPinsVisible` 的理由。 */
+  private setFanIconVisible(visible: boolean): void {
+    this.fanIconVisible = visible;
+    this.fanOverlay.setShowIcon(visible);
   }
 
   /** 「顯示網格」開關（issue #14 追加，debug 用）——記在 `wireframeVisible`，`replaceJelly` 換新 `JellyRenderer` 時要重套。 */
@@ -1289,6 +1409,7 @@ export class JellySandbox {
     const input = new PointerInput(canvas, {
       screenToWorld: project,
       hitTest,
+      getFan: () => this.sim.fanState(),
       applyInput: (event) => {
         const routed = routeForPinMode(event, this.pinModeEnabled, this.pinModeContext());
         if (routed) {
@@ -1410,7 +1531,7 @@ export class JellySandbox {
     this.renderer.setCamera(this.cameraState.transform);
     this.renderer.render();
 
-    if (this.pinsVisible || this.fanHintVisible) {
+    if (this.pinsVisible || this.fanRangeVisible || this.fanIconVisible) {
       const canvasSize = this.canvasSize();
       if (this.pinsVisible) {
         this.pinMarkers.update(
@@ -1425,13 +1546,22 @@ export class JellySandbox {
           }),
         );
       }
-      if (this.fanHintVisible) {
+      if (this.fanRangeVisible || this.fanIconVisible) {
         const fan = this.sim.fanState();
         this.fanOverlay.update(
-          fan &&
-            fanRectCorners(fan).map((c) =>
+          fan && {
+            corners: fanRectCorners(fan).map((c) =>
               worldToScreen(this.cameraState.transform, canvasSize, c.x, c.y),
             ),
+            // 世界／螢幕座標同向、等比縮放，角度不用另外經相機轉換（見 `FanOverlay` 說明）。
+            icon: {
+              ...worldToScreen(this.cameraState.transform, canvasSize, fan.originX, fan.originY),
+              angleRad: Math.atan2(fan.dirY, fan.dirX),
+              // 護罩半徑＝世界寬度的一半換算成目前縮放下的螢幕像素，夾在圖示可視範圍內
+              // （見 `FanOverlay.clampFanIconRadiusPx`），讓圖示大小如實反映 width 滑桿。
+              radiusPx: clampFanIconRadiusPx((fan.width / 2) * this.cameraState.transform.scale),
+            },
+          },
         );
       }
     }

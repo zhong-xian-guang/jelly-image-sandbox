@@ -36,12 +36,16 @@ export type PointerId = number | string;
  *   Grab 不受影響。無 `id`——不是針對單一約束。控制面板「清除所有 Pin」按鈕走
  *   這條窄介面，讓 `TrackRecorder` 錄得到（issue #51 / ADR-0007 追記）。不夾帶
  *   「清掉了哪些」的快照：決定性重播，到那個 step 畫面上有什麼 Pin 就清什麼。
- * - `setFan`（issue #66 / V2 T3-2；ADR-0010）：放置／取代電風扇——場上同時只有
- *   一個（無 `id`，見 `FanState`）。`originX/originY` 是風扇面原點、`dirX/dirY`
- *   是正規化後的吹風方向單位向量、`length` 是矩形沿吹風方向的長度、`width` 是
- *   垂直吹風方向的矩形寬度、`strength`／`falloffExponent` 決定推力大小與隨縱向
- *   距離衰減的冪次（沿用 Tap 的正規化距離冪次慣例）。取代即整包覆蓋，不用先送
- *   `clearFan`。
+ * - `setFan`（issue #66 / V2 T3-2；ADR-0010；issue #67 事後檢視改成陣風）：
+ *   放置／取代電風扇——場上同時只有一個（無 `id`，見 `FanState`）。
+ *   `originX/originY` 是風扇面原點、`dirX/dirY` 是正規化後的吹風方向單位向量、
+ *   `length` 是矩形沿吹風方向的長度、`width` 是垂直吹風方向的矩形寬度。推力不是
+ *   連續力場，而是離散陣風：`frequency`（Hz，平均每秒幾次陣風，種子隨機決定
+ *   實際觸發時機）決定多常吹一次，觸發時矩形內所有 Particle 一起沿吹風方向
+ *   吃一次瞬間速度衝量（比照 Tap 的一次性慣例，不是逐 substep 累加加速度），
+ *   `strength`／`falloffExponent` 決定那次衝量的大小與隨縱向距離衰減的冪次
+ *   （沿用 Tap 的正規化距離冪次慣例）；中間完全無風。見 `SimCore.applyFan`。
+ *   取代即整包覆蓋，不用先送 `clearFan`。
  * - `clearFan`：移除場上的電風扇（若有）。無 `id`。
  */
 export type InputEvent =
@@ -53,7 +57,18 @@ export type InputEvent =
   | { type: 'movePin'; id: PointerId; x: number; y: number }
   | { type: 'tap'; x: number; y: number; strength?: number }
   | { type: 'clearPins' }
-  | { type: 'setFan'; originX: number; originY: number; dirX: number; dirY: number; length: number; width: number; strength: number; falloffExponent: number }
+  | {
+      type: 'setFan';
+      originX: number;
+      originY: number;
+      dirX: number;
+      dirY: number;
+      length: number;
+      width: number;
+      strength: number;
+      falloffExponent: number;
+      frequency: number;
+    }
   | { type: 'clearFan' };
 
 /** 求解器的手感參數。全部有預設值，建構時可只帶想改的欄位。 */
@@ -113,10 +128,13 @@ export interface PinInfo {
 }
 
 /**
- * 場上目前的電風扇（issue #66 / V2 T3-2；ADR-0010）：矩形涵蓋範圍一端（`originX`,
- * `originY`）是風扇面，推力沿 `dirX`/`dirY`（正規化單位向量）往外吹，矩形沿吹風
- * 方向長 `length`、垂直吹風方向寬 `width`。`SimCore.fanState()` 的回傳型別，
- * 也是 `setFan` 事件的欄位形狀（v1 場上同時只有一個，無 `id`）。
+ * 場上目前的電風扇（issue #66 / V2 T3-2；ADR-0010；issue #67 事後檢視改成
+ * 陣風）：矩形涵蓋範圍一端（`originX`, `originY`）是風扇面，推力沿 `dirX`/
+ * `dirY`（正規化單位向量）往外吹，矩形沿吹風方向長 `length`、垂直吹風方向寬
+ * `width`。`frequency` 是平均每秒陣風次數，`strength`／`falloffExponent` 是
+ * 每次陣風衝量的大小與衰減冪次（見 `InputEvent` 的 `setFan` 說明、
+ * `SimCore.applyFan`）。`SimCore.fanState()` 的回傳型別，也是 `setFan` 事件的
+ * 欄位形狀（v1 場上同時只有一個，無 `id`）。
  */
 export interface FanState {
   originX: number;
@@ -127,6 +145,24 @@ export interface FanState {
   width: number;
   strength: number;
   falloffExponent: number;
+  frequency: number;
+}
+
+/**
+ * 世界座標 `point` 是否落在 `fan` 的矩形涵蓋範圍內——`ToolRouter` 用它判斷
+ * `down` 是否落在既有風扇矩形內，藉此決定這次手勢是「拖曳既有風扇」（只改
+ * `originX/originY`）還是「放置新風扇」（重新定義方向／長度）。跟
+ * `SimCore.applyFan` 每個 Particle 的沿／橫向投影是同一種矩形幾何，但那裡是
+ * 熱迴圈（每 substep × 每 Particle），為了同時要拿 `along` 算衰減、避免多一次
+ * 物件配置與重算，刻意保留內聯版本，不共用這個函式。純函式，不碰求解器狀態。
+ */
+export function isPointInFanRect(fan: FanState, point: Point): boolean {
+  const dx = point.x - fan.originX;
+  const dy = point.y - fan.originY;
+  const along = dx * fan.dirX + dy * fan.dirY;
+  if (along < 0 || along > fan.length) return false;
+  const across = dx * -fan.dirY + dy * fan.dirX;
+  return Math.abs(across) <= fan.width / 2;
 }
 
 /** 軸對齊包圍盒（世界座標）。 */

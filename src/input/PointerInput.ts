@@ -26,15 +26,17 @@
  * `CameraInput` 對應的判斷）。
  */
 
-import type { InputEvent, Point } from '../sim';
+import type { FanState, InputEvent, Point } from '../sim';
 import type { GestureConfig } from './GestureTracker';
-import { type ToolId, ToolRouter } from './ToolRouter';
+import { type FanParams, type ToolId, ToolRouter } from './ToolRouter';
 
 export interface PointerInputOptions {
   screenToWorld: (screenX: number, screenY: number) => Point;
   applyInput: (event: InputEvent) => void;
   /** 世界座標是否落在 Jelly 上；沒命中的 `pointerdown` 不當 Grab（交給相機層）。 */
   hitTest?: (world: Point) => boolean;
+  /** 轉發給 `ToolRouter`（issue #67）——場上目前的電風扇幾何，供拖曳既有風扇的判定用。 */
+  getFan?: () => FanState | null;
   config?: Partial<GestureConfig>;
   /** 時鐘來源（測試可注入）。預設 `performance.now`。 */
   now?: () => number;
@@ -55,6 +57,7 @@ export class PointerInput {
       screenToWorld: opts.screenToWorld,
       emit: opts.applyInput,
       hitTest: opts.hitTest,
+      getFan: opts.getFan,
       config: opts.config,
     });
 
@@ -78,6 +81,11 @@ export class PointerInput {
   /** 轉發給 `ToolRouter`（issue #65）——`ControlPanel` 的「目前工具」選擇器變更時呼叫。 */
   setActiveTool(tool: ToolId): void {
     this.tracker.setActiveTool(tool);
+  }
+
+  /** 轉發給 `ToolRouter.setFanParams`（issue #67）——面板電風扇滑桿變更時呼叫。 */
+  setFanParams(params: Partial<FanParams>): void {
+    this.tracker.setFanParams(params);
   }
 
   private localXY(ev: PointerEvent): [number, number] {

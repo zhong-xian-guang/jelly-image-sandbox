@@ -8,8 +8,9 @@ export {
   DEFAULT_FAN_WIDTH,
   DEFAULT_FAN_STRENGTH,
   DEFAULT_FAN_FALLOFF_EXPONENT,
+  DEFAULT_FAN_FREQUENCY,
 } from './ToolRouter';
-export type { ToolId, ToolRouterOptions } from './ToolRouter';
+export type { ToolId, ToolRouterOptions, FanParams } from './ToolRouter';
 export { PointerInput } from './PointerInput';
 export type { PointerInputOptions } from './PointerInput';
 export { routeForPinMode } from './pinModeRouting';

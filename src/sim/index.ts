@@ -5,7 +5,7 @@ export { InfiniteBoundary, WalledBoundary } from './boundary';
 export type { Boundary, BoundaryMode, WalledBoundaryOptions } from './boundary';
 export { softnessToParams } from './softness';
 export type { SoftnessParams } from './softness';
-export { DEFAULT_SIM_PARAMS } from './types';
+export { DEFAULT_SIM_PARAMS, isPointInFanRect } from './types';
 export type {
   SimParams,
   InputEvent,

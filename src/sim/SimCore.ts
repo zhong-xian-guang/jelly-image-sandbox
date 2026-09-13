@@ -5,14 +5,21 @@
  * （`positions`、`centroid()`、`bbox()`、`stretchStats()`、`kineticEnergy()`）。
  * 無 DOM、與算繪無關、決定性（不碰 `Math.random` 或 wall-clock，見 ADR-0005）。
  * 固定時間步：accumulator 累積與 clamp 由呼叫端負責，`step(dt)` 只把 `dt` 切成
- * `substeps` 個 substep 往前推。
+ * `substeps` 個 substep 往前推。**風扇陣風的觸發時機是唯一的例外**——它需要
+ * 隨機性，但走的是 `mulberry32`（issue #67 事後檢視追加）這個有種子的決定性
+ * PRNG，不是 `Math.random`：`this.rng` 在建構子與 `reset()` 都重新以固定種子
+ * `rngSeed` 播種，同一段 `applyInput`／`step` 呼叫序列（含 Track 重播）永遠
+ * 得到同一串陣風時機，不破壞決定性（見 `applyFan`）。
  *
  * `tap` 是一次性向內脈衝（不進 substep 迴圈，直接改速度）。每個 substep（藍本：
  * `prototypes/shape-matching-feel.prototype.html` 的 `<script id="jelly-core">`）：
- *   1. 電風扇（`this.fan`，issue #66；ADR-0010，沒有時 no-op）：矩形涵蓋範圍內的
- *      Particle 沿吹風方向把加速度烤進 `vel`，隨縱向距離衰減、矩形外無感（見
- *      `applyFan`）。**必須排在預測之前**——`vel` 在步驟 7 會整個依位置差重算，
- *      排在預測之後改的話，這股力那個 substep 不會移動任何位置，馬上就被蓋掉。
+ *   1. 電風扇（`this.fan`，issue #66；ADR-0010，沒有時 no-op；issue #67 事後
+ *      檢視改成陣風）：以 `fan.frequency` 決定的機率擲骰，沒抽中就整段無風；
+ *      抽中的話矩形涵蓋範圍內的 Particle 沿吹風方向一起吃一次瞬間速度衝量
+ *      （比照 Tap 的一次性慣例，不是逐 substep 累加加速度），隨縱向距離衰減、
+ *      矩形外無感（見 `applyFan`）。**必須排在預測之前**——`vel` 在步驟 7 會
+ *      整個依位置差重算，排在預測之後改的話，這股力那個 substep 不會移動任何
+ *      位置，馬上就被蓋掉。
  *   2. 預測：symplectic Euler、無重力（所有 Particle 一視同仁；已烤進步驟 1 的
  *      電風扇加速度會在這裡被積分進位置）。
  *   3. shape-matching 脊椎：重疊方格 lattice 的每個 Region 做 2×2 polar
@@ -24,7 +31,7 @@
  *      權重分回三個 Particle（ADR-0003）。Pin = 目標點凍結、β 恆 1 的 Grab
  *      （ADR-0004）。多條依序解、每 substep 一次；孤立 Pin 逐幀看幾乎不動，
  *      共用 Particle 的密集 Pin 群仍會被下一 substep 的 shape matching 微擾。
- *      風扇對已 Pin 住的 Particle 一樣會把加速度烤進 `vel`、預測也照常積分，但
+ *      陣風觸發時對已 Pin 住的 Particle 一樣會把衝量烤進 `vel`、預測也照常積分，但
  *      這一步會把位置拉回鎖定點——附著點因此仍不動，力學上不需要另外特例判斷。
  *   6. Boundary（`setBoundary`，可換）：clamp 進 Walled AABB／Infinite no-op。
  *   7. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
@@ -34,7 +41,7 @@
  * 目標點}`——見 `docs/design/simulation-and-mesh.md` 模組邊界。
  */
 
-import type { SimMesh } from '../mesh';
+import { mulberry32, type SimMesh } from '../mesh';
 import { type Boundary, InfiniteBoundary } from './boundary';
 import {
   DEFAULT_SIM_PARAMS,
@@ -94,6 +101,12 @@ export class SimCore {
   private static readonly MIN_REST_AREA = 1;
   /** Tap 影響半徑 = 目前 bbox 對角線 × 此係數（設計文件參數表，待實測）。 */
   private static readonly TAP_RADIUS_FRAC = 0.2;
+  /**
+   * 電風扇陣風觸發時機的預設 PRNG 種子（issue #67 事後檢視追加）——固定常數，
+   * 不是隨機挑的，這樣不特別指定 `rngSeed` 建構的 `SimCore` 也是決定性的
+   * （同一段事件流永遠得到同一串陣風時機）。任意選的常數，沒有特殊意義。
+   */
+  private static readonly DEFAULT_RNG_SEED = 0x9e3779b9;
 
   /**
    * 手感參數。可直接改欄位；改 `cellFrac` 後須呼叫 `rebuildRegions()`，
@@ -120,13 +133,30 @@ export class SimCore {
   private regions: Region[] = [];
   /** 可替換的碰撞環境。預設無牆；`setBoundary` 可執行期替換，不需重建求解器。 */
   private boundary: Boundary = new InfiniteBoundary();
+  /**
+   * 電風扇陣風觸發時機的決定性 PRNG（issue #67 事後檢視追加）——`reset()` 也會
+   * 重新以 `rngSeed` 播種，讓 `sim.reset()` 之後的 Track 重播（`playAll`）跟
+   * 錄製當下用同一串陣風時機，見類別頂端說明。`applyFan` 是唯一的讀取點。
+   */
+  private rng: () => number;
 
   // shape-matching goal 累加器（每 substep 重用，免得每步配置）。
   private readonly goalX: Float64Array;
   private readonly goalY: Float64Array;
   private readonly goalCount: Float64Array;
 
-  constructor(mesh: SimMesh, params: Partial<SimParams> = {}) {
+  /**
+   * `rngSeed`（issue #67 事後檢視追加）——電風扇陣風觸發時機的 PRNG 種子，預設
+   * `DEFAULT_RNG_SEED`。目前沒有呼叫端會帶自訂種子，留這個參數主要是給測試
+   * 用（用不同種子驗證陣風時機真的是「這個種子決定的」而非硬寫死一組固定
+   * 結果），也讓「種子從哪裡來」保持跟 mesh pipeline 一樣可推導、非隱藏狀態
+   * 的慣例（ADR-0005）。
+   */
+  constructor(
+    mesh: SimMesh,
+    params: Partial<SimParams> = {},
+    private readonly rngSeed: number = SimCore.DEFAULT_RNG_SEED,
+  ) {
     this.params = { ...DEFAULT_SIM_PARAMS, ...params };
     this.n = mesh.positions.length / 2;
     this.rest = Float64Array.from(mesh.positions);
@@ -140,6 +170,7 @@ export class SimCore {
     this.goalY = new Float64Array(this.n);
     this.goalCount = new Float64Array(this.n);
     this.restDiag = this.diag(this.bounds(this.rest));
+    this.rng = mulberry32(this.rngSeed);
     this.rebuildRegions();
   }
 
@@ -324,6 +355,7 @@ export class SimCore {
           width: event.width,
           strength: event.strength,
           falloffExponent: event.falloffExponent,
+          frequency: event.frequency,
         };
         break;
       case 'clearFan':
@@ -361,8 +393,11 @@ export class SimCore {
   /**
    * 把 Jelly 重設回靜置狀態：位置回到 rest（初始網格）座標、速度歸零、清掉所有
    * Grab／Pin，以及場上的電風扇（issue #66；不清的話重設後下一幀又會被同一個
-   * 風扇立刻吹動，不是真正的靜置）。控制面板「停止／重設」用。拓撲／Region
-   * 不受影響（只跟 rest 座標與 `params.cellFrac` 有關，兩者都沒變）。
+   * 風扇立刻吹動，不是真正的靜置）。順便把陣風 PRNG 重新播種（issue #67 事後
+   * 檢視追加）——`playAll` 在 `demoRunner.start` 之前呼叫這個方法，重播才會
+   * 跟錄製當下用同一串陣風時機，見類別頂端說明。控制面板「停止／重設」用。
+   * 拓撲／Region 不受影響（只跟 rest 座標與 `params.cellFrac` 有關，兩者都
+   * 沒變）。
    */
   reset(): void {
     this.pos.set(this.rest);
@@ -370,6 +405,7 @@ export class SimCore {
     this.vel.fill(0);
     this.constraints.clear();
     this.fan = null;
+    this.rng = mulberry32(this.rngSeed);
   }
 
   /**
@@ -519,17 +555,28 @@ export class SimCore {
   }
 
   /**
-   * 電風扇持續力場（issue #66；ADR-0010）：矩形涵蓋範圍——沿吹風方向（`dirX`,
-   * `dirY`，單位向量）從風扇面 `(originX, originY)` 量起、縱向 `[0, length]`，
-   * 垂直方向（`perpX`, `perpY` = 吹風方向轉 90°）`[-width/2, width/2]`——內每個
-   * Particle 依 `力 = strength × (1 − 縱向距離/length)^falloffExponent` 沿吹風
-   * 方向持續加速度（`v += dir · 力 · h`）。縱向距離越大力越小、在 `length` 處
+   * 電風扇陣風（issue #66；ADR-0010；issue #67 事後檢視從連續力場改成離散
+   * 陣風——使用者回饋覺得穩定持續的風「不像電風扇」，改成擺頭掃過來一陣陣吹
+   * 的手感）：這個 substep 是否吹一次陣風，由 `this.rng()`（決定性種子 PRNG，
+   * 見類別頂端說明）擲一次骰決定——`rng() < frequency * h` 觸發，`frequency`
+   * 是平均每秒陣風次數、`h` 是這個 substep 的秒數，即離散化的泊松過程（機率
+   * 抓小成立時，每秒的期望觸發次數 ≈ `frequency`，不受 `substeps` 高低影響）。
+   * 沒抽中就整個 substep 無風、`vel` 不動。
+   *
+   * 抽中的話：矩形涵蓋範圍——沿吹風方向（`dirX`, `dirY`，單位向量）從風扇面
+   * `(originX, originY)` 量起、縱向 `[0, length]`，垂直方向（`perpX`, `perpY`
+   * = 吹風方向轉 90°）`[-width/2, width/2]`——內每個 Particle 依
+   * `衝量 = strength × (1 − 縱向距離/length)^falloffExponent` 沿吹風方向吃一次
+   * 瞬間速度衝量（`v += dir · 衝量`，不再乘 `h`——比照 `doTap` 的一次性慣例，
+   * 這是單一事件的衝量而非持續施力）。縱向距離越大衝量越小、在 `length` 處
    * 平滑趨近 0（沿用 `doTap` 的正規化距離冪次衰減慣例）；矩形外（縱向 < 0 或 >
    * length，或橫向超出半寬）完全無感。`length <= 0`（尚未真的拖出方向）整段
-   * no-op，避免除以 0。
+   * no-op，避免除以 0（且不消耗這個 substep 的 RNG 抽樣，沒有風扇矩形時陣風
+   * 時機不該被無意義地推進）。
    */
   private applyFan(fan: FanState, h: number): void {
     if (!(fan.length > 0)) return;
+    if (this.rng() >= fan.frequency * h) return;
     const { originX, originY, dirX, dirY, length, width, strength, falloffExponent } = fan;
     const perpX = -dirY;
     const perpY = dirX;
@@ -542,9 +589,9 @@ export class SimCore {
       const across = dx * perpX + dy * perpY;
       if (Math.abs(across) > halfWidth) continue;
       const falloff = Math.pow(1 - along / length, falloffExponent);
-      const a = strength * falloff * h;
-      this.vel[2 * i] = this.vel[2 * i]! + dirX * a;
-      this.vel[2 * i + 1] = this.vel[2 * i + 1]! + dirY * a;
+      const impulse = strength * falloff;
+      this.vel[2 * i] = this.vel[2 * i]! + dirX * impulse;
+      this.vel[2 * i + 1] = this.vel[2 * i + 1]! + dirY * impulse;
     }
   }
 
