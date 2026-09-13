@@ -14,8 +14,9 @@
  * 重新用滑鼠定義方向／距離才能微調位置），落在外面（或本來就沒有風扇）＝
  * 「放置新風扇」（`FanPlaceSession`，原 issue #66 行為：`move` 不 emit，只
  * 更新內部預覽終點，`up` 用原點→放開點的位移算 `dirX`/`dirY`（正規化單位
- * 向量）與 `length`，連同目前的 `width`／`strength`／`falloffExponent`——
- * `setFanParams`，issue #67：面板三個滑桿即時寫入——送一次 `setFan`，取代
+ * 向量）與 `length`，連同目前的 `width`／`strength`／`falloffExponent`／
+ * `frequency`——`setFanParams`，issue #67：面板四個滑桿即時寫入——送一次
+ * `setFan`，取代
  * 場上既有的風扇，ADR-0010：整包覆蓋，不用先送 `clearFan`）。位移為 0（點一
  * 下沒拖曳）時退回 `(1, 0)` 當方向，避免除以 0；風扇這時 `length` 也是 0，
  * `SimCore.applyFan` 對 `length <= 0` 直接 no-op，等於沒有實際效果。
@@ -53,12 +54,15 @@ export const DEFAULT_FAN_WIDTH = 150;
 export const DEFAULT_FAN_STRENGTH = 4000;
 /** 沿用 `SimCore.doTap` 既有的正規化距離冪次衰減慣例（`(1 − d/R)²`）。 */
 export const DEFAULT_FAN_FALLOFF_EXPONENT = 2;
+/** 平均每秒陣風次數（issue #67 事後檢視追加，見 `SimCore.applyFan`）。 */
+export const DEFAULT_FAN_FREQUENCY = 2;
 
-/** `setFanParams` 接受的部分更新——三個欄位皆可選，只覆寫有帶到的欄位。 */
+/** `setFanParams` 接受的部分更新——四個欄位皆可選，只覆寫有帶到的欄位。 */
 export interface FanParams {
   width: number;
   strength: number;
   falloffExponent: number;
+  frequency: number;
 }
 
 export interface ToolRouterOptions extends GestureTrackerOptions {
@@ -94,6 +98,7 @@ interface FanMoveSession {
   width: number;
   strength: number;
   falloffExponent: number;
+  frequency: number;
 }
 
 type FanSession = FanPlaceSession | FanMoveSession;
@@ -113,6 +118,7 @@ export class ToolRouter {
   private fanWidth = DEFAULT_FAN_WIDTH;
   private fanStrength = DEFAULT_FAN_STRENGTH;
   private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
+  private fanFrequency = DEFAULT_FAN_FREQUENCY;
 
   constructor(opts: ToolRouterOptions) {
     this.gestureTracker = new GestureTracker(opts);
@@ -135,6 +141,7 @@ export class ToolRouter {
     if (params.width !== undefined) this.fanWidth = params.width;
     if (params.strength !== undefined) this.fanStrength = params.strength;
     if (params.falloffExponent !== undefined) this.fanFalloffExponent = params.falloffExponent;
+    if (params.frequency !== undefined) this.fanFrequency = params.frequency;
   }
 
   get currentTool(): ToolId {
@@ -160,6 +167,7 @@ export class ToolRouter {
           width: fan.width,
           strength: fan.strength,
           falloffExponent: fan.falloffExponent,
+          frequency: fan.frequency,
         };
         this.fanSessions.set(id, session);
         this.emitFanMove(world, session);
@@ -234,6 +242,7 @@ export class ToolRouter {
       width: this.fanWidth,
       strength: this.fanStrength,
       falloffExponent: this.fanFalloffExponent,
+      frequency: this.fanFrequency,
     });
   }
 
@@ -253,6 +262,7 @@ export class ToolRouter {
       width: session.width,
       strength: session.strength,
       falloffExponent: session.falloffExponent,
+      frequency: session.frequency,
     });
   }
 }

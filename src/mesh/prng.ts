@@ -1,7 +1,9 @@
 /**
  * 有種子的決定性 PRNG 與位元組雜湊。整條 mesh 管線的隨機性（只有 Steiner 點抖動）
  * 都經由這裡，絕不碰 `Math.random` 或 wall-clock，讓 `(imageBytes, params)` → `SimMesh`
- * 可重現（ADR-0005）。
+ * 可重現（ADR-0005）。`mulberry32` 另外經 `mesh/index.ts` barrel 匯出給
+ * `SimCore`（電風扇陣風的觸發時機，issue #67 事後檢視追加）重用——同一份「絕不
+ * 碰 Math.random」的決定性隨機數來源，不要兩處各自刻一份 PRNG 演算法。
  */
 
 import type { BuildSimMeshParams } from './types';

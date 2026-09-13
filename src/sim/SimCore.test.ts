@@ -733,7 +733,16 @@ describe('SimCore — Tap', () => {
   });
 });
 
-describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
+describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010；issue #67 事後檢視改成陣風）', () => {
+  /**
+   * `frequency * h ≥ 1` 時 `rng() < frequency * h` 恆真（`rng()` 落在
+   * `[0, 1)`）——保證每個 substep 都觸發陣風，等同還原成舊版連續力場，方便
+   * 沿用既有的空間形狀測試（矩形涵蓋、falloff、Pin 免疫……）而不必為了單純
+   * 驗證「形狀」還要顧慮陣風有沒有抽中。真正驗證「陣風真的是離散、機率性」
+   * 的測試在檔案最後，見「頻率」小節。
+   */
+  const FORCE_EVERY_SUBSTEP = 1e9;
+
   it('矩形完全沒涵蓋到任何 Particle → 狀態完全不變', () => {
     const sim = new SimCore(MESH());
     const before = Array.from(sim.positions);
@@ -747,6 +756,7 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
       width: 50,
       strength: 5000,
       falloffExponent: 1,
+      frequency: FORCE_EVERY_SUBSTEP,
     });
     run(sim, 30);
     expect(Array.from(sim.positions)).toEqual(before);
@@ -755,9 +765,10 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
   it('矩形內獲得沿吹風方向的位移，矩形外（橫向超出半寬）幾乎無感', () => {
     const sim = new SimCore(MESH());
     // 涵蓋 y ∈ [38, 58] 的窄帶（半寬 10，中心 y=48），沿 +x 吹到底。單一極小步
-    // （比照 falloffExponent 測試）：讓比較聚焦在「這一 substep 電風扇本身加了
-    // 多少速度」，不被後續多步的 shape-matching 彈性耦合（regions 重疊、會把
-    // 擾動傳給鄰近但沒被風扇直接吹到的 Particle）淹沒。
+    // （比照 falloffExponent 測試）＋強制每個 substep 都吹：讓比較聚焦在「這
+    // 一步電風扇本身加了多少速度」，不被後續多步的 shape-matching 彈性耦合
+    // （regions 重疊、會把擾動傳給鄰近但沒被風扇直接吹到的 Particle）淹沒、
+    // 也不受陣風有沒有抽中影響。
     sim.applyInput({
       type: 'setFan',
       originX: 0,
@@ -768,6 +779,7 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
       width: 20,
       strength: 6000,
       falloffExponent: 1,
+      frequency: FORCE_EVERY_SUBSTEP,
     });
     sim.step(1 / 6000);
 
@@ -795,6 +807,7 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
       width: 200,
       strength: 6000,
       falloffExponent: 1,
+      frequency: FORCE_EVERY_SUBSTEP,
     });
     sim.step(1 / 6000); // 單一極小步，理由同上
 
@@ -819,6 +832,7 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
       width: 200,
       strength: 6000,
       falloffExponent: 1,
+      frequency: FORCE_EVERY_SUBSTEP,
     });
     sim.step(1 / 6000); // 單一極小步，理由同上
 
@@ -847,6 +861,7 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
         width: 200,
         strength: 6000,
         falloffExponent,
+        frequency: FORCE_EVERY_SUBSTEP,
       });
       sim.step(1 / 6000); // 單一極小步，讓彈性回拉可忽略，貼近純速度注入的比較
       return sim.positions[2 * HALF_LENGTH_IDX]! - 48;
@@ -874,6 +889,7 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
       width: 200,
       strength: 8000,
       falloffExponent: 1,
+      frequency: FORCE_EVERY_SUBSTEP,
     });
     run(sim, 120);
 
@@ -894,6 +910,7 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
       width: 200,
       strength: 6000,
       falloffExponent: 1,
+      frequency: FORCE_EVERY_SUBSTEP,
     });
     run(sim, 60);
     const keWithFan = sim.kineticEnergy();
@@ -906,7 +923,7 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
     expect(allFinite(sim.positions)).toBe(true);
   });
 
-  it('決定性：相同 setFan/clearFan 事件流兩次跑結果完全相等', () => {
+  it('決定性：相同 setFan/clearFan 事件流兩次跑結果完全相等（含陣風時機——同一顆種子重新播種，見 SimCore 建構子）', () => {
     const play = (): number[] => {
       const sim = new SimCore(MESH());
       sim.applyInput({
@@ -919,6 +936,7 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
         width: 200,
         strength: 6000,
         falloffExponent: 1,
+        frequency: 3,
       });
       run(sim, 20);
       sim.applyInput({
@@ -931,6 +949,7 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
         width: 40,
         strength: 9000,
         falloffExponent: 2,
+        frequency: 6,
       });
       run(sim, 20);
       sim.applyInput({ type: 'clearFan' });
@@ -938,6 +957,56 @@ describe('SimCore — Fan（issue #66 / V2 T3-2；ADR-0010）', () => {
       return Array.from(sim.positions);
     };
     expect(play()).toEqual(play());
+  });
+
+  describe('頻率（issue #67 事後檢視追加：推力從連續力場改成離散陣風）', () => {
+    it('frequency = 0 → 陣風永遠不觸發，矩形內外都無感（機率恆為 0，非統計性、不會偶發失敗）', () => {
+      const sim = new SimCore(MESH());
+      const before = Array.from(sim.positions);
+      sim.applyInput({
+        type: 'setFan',
+        originX: 0,
+        originY: 48,
+        dirX: 1,
+        dirY: 0,
+        length: 96,
+        width: 200,
+        strength: 6000,
+        falloffExponent: 1,
+        frequency: 0,
+      });
+      run(sim, 60);
+      expect(Array.from(sim.positions)).toEqual(before);
+    });
+
+    it('頻率愈高，同樣（短）時間內累積的動能愈高（陣風次數變多、不是固定力道）', () => {
+      // 刻意用短視窗（5 幀）比較，不是像上面「強制每個 substep 都吹」跑一長段：
+      // 拉到極端頻率長跑，Particle 很快就被吹出矩形（沿吹風方向超出 length）
+      // 不再受力，加上後續振盪／阻尼的交互作用，長時間下來的動能末值不見得隨
+      // 頻率單調——這裡只要證明「頻率確實調控陣風次數」，短視窗、力道還沒讓
+      // Particle 飛出矩形之前比較最乾淨。
+      function kineticEnergyAfter(frequency: number): number {
+        const sim = new SimCore(MESH());
+        sim.applyInput({
+          type: 'setFan',
+          originX: 0,
+          originY: 0,
+          dirX: 1,
+          dirY: 0,
+          length: 96,
+          width: 200,
+          strength: 6000,
+          falloffExponent: 1,
+          frequency,
+        });
+        run(sim, 5);
+        return sim.kineticEnergy();
+      }
+
+      const keSparse = kineticEnergyAfter(0.5); // 5 幀 ≈ 0.083 秒，期望陣風次數 ≈ 0.04，幾乎抽不中
+      const keFrequent = kineticEnergyAfter(50); // 同樣 5 幀，期望陣風次數 ≈ 4.2，多次抽中
+      expect(keFrequent).toBeGreaterThan(keSparse);
+    });
   });
 });
 
@@ -1080,6 +1149,7 @@ describe('SimCore — reset', () => {
       width: 200,
       strength: 6000,
       falloffExponent: 1,
+      frequency: 5,
     });
     run(sim, 10);
     expect(sim.fanState()).not.toBeNull();
@@ -1090,5 +1160,38 @@ describe('SimCore — reset', () => {
     run(sim, 30);
     expect(sim.kineticEnergy()).toBe(0); // 沒有風扇、沒有殘留速度 → 靜置
     expect(Array.from(sim.positions)).toEqual(Array.from(rest));
+  });
+
+  it('reset 會把陣風 PRNG 重新播種——重播同一段風扇事件流跟全新 SimCore 結果相同（issue #67 事後檢視追加，Track 重播靠這個決定性）', () => {
+    const fanEvent: InputEvent = {
+      type: 'setFan',
+      originX: 0,
+      originY: 0,
+      dirX: 1,
+      dirY: 0,
+      length: 96,
+      width: 200,
+      strength: 6000,
+      falloffExponent: 1,
+      frequency: 3,
+    };
+
+    const fresh = new SimCore(MESH());
+    fresh.applyInput(fanEvent);
+    run(fresh, 30);
+    const freshResult = Array.from(fresh.positions);
+
+    // 同一個 SimCore 先跑一段完全不相干的操作（推進 RNG 狀態、留下殘留位移），
+    // reset() 後重播同一段風扇事件流——如果 RNG 沒有跟著重新播種，這裡的陣風
+    // 時機會接在「跑過一段」之後的 RNG 狀態，跟 fresh 的結果對不上。
+    const reused = new SimCore(MESH());
+    reused.applyInput({ ...fanEvent, frequency: 8, strength: 3000 });
+    run(reused, 17); // 任意一段跟後面重播無關的操作，純粹推進 RNG／時間狀態
+    reused.reset();
+    reused.applyInput(fanEvent);
+    run(reused, 30);
+    const reusedResult = Array.from(reused.positions);
+
+    expect(reusedResult).toEqual(freshResult);
   });
 });

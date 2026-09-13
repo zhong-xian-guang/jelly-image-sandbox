@@ -8,5 +8,6 @@ export {
   imageFormatToMime,
 } from './decodeImage';
 export { DEFAULT_PARAMS } from './types';
+export { mulberry32 } from './prng';
 export type { BuildSimMeshParams, SimMesh, Mask, Point } from './types';
 export type { DecodedAlpha, ImageFormat } from './decodeImage';

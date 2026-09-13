@@ -108,6 +108,7 @@ import {
   type FanParams,
   type ToolId,
   DEFAULT_FAN_FALLOFF_EXPONENT,
+  DEFAULT_FAN_FREQUENCY,
   DEFAULT_FAN_STRENGTH,
   DEFAULT_FAN_WIDTH,
   PointerInput,
@@ -190,18 +191,19 @@ const TAP_STRENGTH_RANGE = { min: 1000, max: 11000, step: 100 };
 /** Softness 滑桿初始位置（0–1 中點 = `DEFAULT_SIM_PARAMS`，見 `../sim/softness`）。 */
 const DEFAULT_SOFTNESS = 0.5;
 /**
- * 電風扇三個滑桿的範圍（issue #67；強度上限依使用者檢視回饋調高——原上限
- * 7500 吹不動整個果凍，換算穩態風速 `v_ss ≈ strength × h/damping`（`h` = 每
- * substep 秒數、`damping` = `DEFAULT_SIM_PARAMS.damping` 0.02，見
- * `SimCore.step`）只有預設果凍對角線的 3 倍/秒；改成 75000 後 `v_ss` 約 30 倍
- * 對角線/秒，足以在無限模式下把果凍整個吹飛出畫面）。寬度／衰減程度中點對應
- * `ToolRouter` 的 `DEFAULT_FAN_WIDTH`／`DEFAULT_FAN_FALLOFF_EXPONENT`，同
- * `TAP_STRENGTH_RANGE` 的理由。衰減程度下限 0.2（避免趨近 0 次方讓衰減幾乎
- * 消失、矩形內外力道落差過於突兀）、上限 5（明顯集中在風扇正前方）。
+ * 電風扇四個滑桿的範圍（issue #67；事後檢視把推力模型從連續力場改成陣風——
+ * 見 `SimCore.applyFan`：`strength` 從「每秒加速度」變成「單次陣風的瞬間
+ * 速度衝量」，範圍跟著重新校準，不再沿用連續模型時代的量級。`frequency`
+ * 是新增的第四個滑桿，平均每秒陣風次數；下限 0.2（約 5 秒一陣，稀疏陣風）、
+ * 上限 10（幾乎連續的密集陣風，配合高 `strength` 就是颶風）。寬度／衰減程度
+ * 中點對應 `ToolRouter` 的 `DEFAULT_FAN_WIDTH`／`DEFAULT_FAN_FALLOFF_EXPONENT`，
+ * 同 `TAP_STRENGTH_RANGE` 的理由。衰減程度下限 0.2（避免趨近 0 次方讓衰減
+ * 幾乎消失、矩形內外力道落差過於突兀）、上限 5（明顯集中在風扇正前方）。
  */
 const FAN_WIDTH_RANGE = { min: 20, max: 280, step: 5 };
-const FAN_STRENGTH_RANGE = { min: 500, max: 75000, step: 500 };
+const FAN_STRENGTH_RANGE = { min: 200, max: 60000, step: 200 };
 const FAN_FALLOFF_RANGE = { min: 0.2, max: 5, step: 0.1 };
+const FAN_FREQUENCY_RANGE = { min: 0.2, max: 10, step: 0.1 };
 /**
  * Pin 模式下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
  * CSS 直徑（16px）同數量級，換算回世界座標時要除以目前相機縮放（見
@@ -311,13 +313,15 @@ export class JellySandbox {
   private fanRangeVisible = true;
   private fanIconVisible = true;
   /**
-   * 電風扇「寬度」／「強度」／「衰減程度」滑桿目前值（issue #67）——`PointerInput`
-   * 沒有 getter，這裡另存一份供：(a) 面板初始值、(b) `updateLiveFan` 組出更新
-   * 場上目前風扇要用的完整 `setFan` 事件（該事件是整包覆蓋，缺任何一個欄位都不行）。
+   * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿目前值（issue #67）
+   * ——`PointerInput` 沒有 getter，這裡另存一份供：(a) 面板初始值、
+   * (b) `updateLiveFan` 組出更新場上目前風扇要用的完整 `setFan` 事件（該事件
+   * 是整包覆蓋，缺任何一個欄位都不行）。
    */
   private fanWidth = DEFAULT_FAN_WIDTH;
   private fanStrength = DEFAULT_FAN_STRENGTH;
   private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
+  private fanFrequency = DEFAULT_FAN_FREQUENCY;
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
   private wireframeVisible = false;
   /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
@@ -441,11 +445,13 @@ export class JellySandbox {
         fanWidth: this.fanWidth,
         fanStrength: this.fanStrength,
         fanFalloffExponent: this.fanFalloffExponent,
+        fanFrequency: this.fanFrequency,
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
       fanWidthRange: FAN_WIDTH_RANGE,
       fanStrengthRange: FAN_STRENGTH_RANGE,
       fanFalloffRange: FAN_FALLOFF_RANGE,
+      fanFrequencyRange: FAN_FREQUENCY_RANGE,
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
       onImportImage: () => this.fileImportInput.open(),
       onSaveClip: () => this.saveClip(),
@@ -457,6 +463,7 @@ export class JellySandbox {
       onFanWidthChange: (width) => this.setFanWidth(width),
       onFanStrengthChange: (strength) => this.setFanStrength(strength),
       onFanFalloffChange: (falloffExponent) => this.setFanFalloffExponent(falloffExponent),
+      onFanFrequencyChange: (frequency) => this.setFanFrequency(frequency),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -1077,8 +1084,14 @@ export class JellySandbox {
     this.applyFanParamChange({ falloffExponent });
   }
 
+  /** 「風扇頻率」滑桿（issue #67 事後檢視追加——平均每秒陣風次數，見 `SimCore.applyFan`）。 */
+  private setFanFrequency(frequency: number): void {
+    this.fanFrequency = frequency;
+    this.applyFanParamChange({ frequency });
+  }
+
   /**
-   * 三個風扇滑桿共用的收尾（issue #67）——`patch` 只帶剛被改的那個欄位，先轉發給
+   * 四個風扇滑桿共用的收尾（issue #67）——`patch` 只帶剛被改的那個欄位，先轉發給
    * `ToolRouter`（下一次放置要用，見 `setFanParams`），再呼叫 `updateLiveFan`
    * 把「目前場上的風扇（若有）」也一併更新。
    */
@@ -1089,8 +1102,8 @@ export class JellySandbox {
 
   /**
    * 「即時反映到目前場上的風扇（若有）」（issue #67）：場上沒有風扇就什麼都不做；
-   * 有的話拿它目前的原點／方向／長度，換上最新的寬度／強度／衰減程度，整包重送
-   * 一次 `setFan`（ADR-0010：`setFan` 本來就是整包覆蓋，不用先 `clearFan`）。
+   * 有的話拿它目前的原點／方向／長度，換上最新的寬度／強度／衰減程度／頻率，
+   * 整包重送一次 `setFan`（ADR-0010：`setFan` 本來就是整包覆蓋，不用先 `clearFan`）。
    * 比照 `clearPins`／`removeFan`：任何直接呼叫 `sim.applyInput` 的分支都同時餵
    * 給 `trackRecorder`（no-op 除非正在錄製）——錄製中途調整滑桿，重播時風扇的
    * 手感才跟錄製當下看到的一致，不會停留在放置那一刻的舊參數。
@@ -1108,6 +1121,7 @@ export class JellySandbox {
       width: this.fanWidth,
       strength: this.fanStrength,
       falloffExponent: this.fanFalloffExponent,
+      frequency: this.fanFrequency,
     };
     this.sim.applyInput(event);
     this.trackRecorder.record(event);

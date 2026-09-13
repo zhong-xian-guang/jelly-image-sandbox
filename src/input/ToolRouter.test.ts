@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FanState, InputEvent, Point } from '../sim';
 import {
   DEFAULT_FAN_FALLOFF_EXPONENT,
+  DEFAULT_FAN_FREQUENCY,
   DEFAULT_FAN_STRENGTH,
   DEFAULT_FAN_WIDTH,
   DEFAULT_TOOL,
@@ -140,6 +141,7 @@ describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
         width: DEFAULT_FAN_WIDTH,
         strength: DEFAULT_FAN_STRENGTH,
         falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+        frequency: DEFAULT_FAN_FREQUENCY,
       },
     ]);
   });
@@ -187,6 +189,7 @@ describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
         width: DEFAULT_FAN_WIDTH,
         strength: DEFAULT_FAN_STRENGTH,
         falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+        frequency: DEFAULT_FAN_FREQUENCY,
       },
     ]);
   });
@@ -220,6 +223,7 @@ describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
         width: DEFAULT_FAN_WIDTH,
         strength: DEFAULT_FAN_STRENGTH,
         falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+        frequency: DEFAULT_FAN_FREQUENCY,
       },
     ]);
   });
@@ -259,6 +263,7 @@ describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
         width: 300,
         strength: DEFAULT_FAN_STRENGTH,
         falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+        frequency: DEFAULT_FAN_FREQUENCY,
       },
     ]);
 
@@ -276,6 +281,24 @@ describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
       width: 300, // 上一次設定的值持續生效，不用每次都重帶
       strength: 9000,
       falloffExponent: 0.5,
+      frequency: DEFAULT_FAN_FREQUENCY, // 沒被設過，維持預設值
+    });
+
+    router.setFanParams({ frequency: 5 });
+    router.down(1, 0, 0, 0);
+    router.up(1, 40, 0, 150);
+
+    expect(events[2]).toEqual({
+      type: 'setFan',
+      originX: 1000,
+      originY: 1000,
+      dirX: 1,
+      dirY: 0,
+      length: 40,
+      width: 300,
+      strength: 9000,
+      falloffExponent: 0.5,
+      frequency: 5,
     });
   });
 });
@@ -291,6 +314,7 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
     width: 40,
     strength: 999,
     falloffExponent: 3,
+    frequency: 4,
   };
 
   it('down 落在既有風扇矩形內、但不是正好按在原點上 → 立刻送一次 setFan，原點維持不變（不瞬移到按下點）', () => {
@@ -309,6 +333,7 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
         width: 40,
         strength: 999,
         falloffExponent: 3,
+        frequency: 4,
       },
     ]);
   });
@@ -330,6 +355,7 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
       width: 40,
       strength: 999,
       falloffExponent: 3,
+      frequency: 4,
     });
   });
 
@@ -351,6 +377,7 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
       width: 40,
       strength: 999,
       falloffExponent: 3,
+      frequency: 4,
     });
   });
 
@@ -370,6 +397,7 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
       width: 40,
       strength: 999,
       falloffExponent: 3,
+      frequency: 4,
     });
   });
 
@@ -400,6 +428,7 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
         width: DEFAULT_FAN_WIDTH,
         strength: DEFAULT_FAN_STRENGTH,
         falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+        frequency: DEFAULT_FAN_FREQUENCY,
       },
     ]);
   });
@@ -421,6 +450,7 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
         width: DEFAULT_FAN_WIDTH,
         strength: DEFAULT_FAN_STRENGTH,
         falloffExponent: DEFAULT_FAN_FALLOFF_EXPONENT,
+        frequency: DEFAULT_FAN_FREQUENCY,
       },
     ]);
   });

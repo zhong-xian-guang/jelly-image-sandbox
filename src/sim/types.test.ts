@@ -13,6 +13,7 @@ function makeFan(overrides: Partial<FanState> = {}): FanState {
     width: 40,
     strength: 1000,
     falloffExponent: 2,
+    frequency: 2,
     ...overrides,
   };
 }

@@ -36,11 +36,13 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       fanWidth: 150,
       fanStrength: 4000,
       fanFalloffExponent: 2,
+      fanFrequency: 2,
     },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     fanWidthRange: { min: 20, max: 400, step: 5 },
     fanStrengthRange: { min: 500, max: 12000, step: 100 },
     fanFalloffRange: { min: 0.2, max: 5, step: 0.1 },
+    fanFrequencyRange: { min: 0.2, max: 10, step: 0.1 },
     demos: [],
     onImportImage: vi.fn(),
     onSaveClip: vi.fn(),
@@ -52,6 +54,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onFanWidthChange: vi.fn(),
     onFanStrengthChange: vi.fn(),
     onFanFalloffChange: vi.fn(),
+    onFanFrequencyChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -713,5 +716,16 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     input.value = '0.5';
     input.dispatchEvent(new Event('input'));
     expect(opts.onFanFalloffChange).toHaveBeenCalledWith(0.5);
+  });
+
+  it('「風扇頻率」滑桿初始值來自 initial.fanFrequency，拖動觸發 onFanFrequencyChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '風扇頻率');
+
+    expect(Number(input.value)).toBe(opts.initial.fanFrequency);
+    input.value = '5';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onFanFrequencyChange).toHaveBeenCalledWith(5);
   });
 });

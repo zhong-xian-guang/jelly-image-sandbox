@@ -130,10 +130,11 @@ export interface ControlPanelInitial {
    */
   showFanRange: boolean;
   showFanIcon: boolean;
-  /** 電風扇三個滑桿的初始值（issue #67）——見 `../input` 的 `DEFAULT_FAN_*`。 */
+  /** 電風扇四個滑桿的初始值（issue #67）——見 `../input` 的 `DEFAULT_FAN_*`。 */
   fanWidth: number;
   fanStrength: number;
   fanFalloffExponent: number;
+  fanFrequency: number;
 }
 
 /** 一個數值滑桿的範圍（issue #67 抽出——`tapStrengthRange` 與三個電風扇範圍共用同一形狀）。 */
@@ -146,10 +147,11 @@ export interface RangeSpec {
 export interface ControlPanelOptions {
   initial: ControlPanelInitial;
   tapStrengthRange: RangeSpec;
-  /** 電風扇「寬度」／「強度」／「衰減程度」三個滑桿各自的範圍（issue #67）。 */
+  /** 電風扇「寬度」／「強度」／「衰減程度」／「頻率」四個滑桿各自的範圍（issue #67）。 */
   fanWidthRange: RangeSpec;
   fanStrengthRange: RangeSpec;
   fanFalloffRange: RangeSpec;
+  fanFrequencyRange: RangeSpec;
   /** 「Demo」按鈕列表（issue #15），依序顯示；點下呼叫 `onRunDemo(id)`。 */
   demos: readonly DemoMenuItem[];
   /**
@@ -190,13 +192,14 @@ export interface ControlPanelOptions {
   onShowFanRangeChange: (visible: boolean) => void;
   onShowFanIconChange: (visible: boolean) => void;
   /**
-   * 電風扇「寬度」／「強度」／「衰減程度」滑桿變更（issue #67）——即時反映到
-   * 場上目前的風扇（若有）與下一次放置，兩件事都交給 `JellySandbox` 處理：
-   * `ControlPanel` 只負責把滑桿的新數值原封不動送出去。
+   * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿變更（issue #67）——
+   * 即時反映到場上目前的風扇（若有）與下一次放置，兩件事都交給 `JellySandbox`
+   * 處理：`ControlPanel` 只負責把滑桿的新數值原封不動送出去。
    */
   onFanWidthChange: (width: number) => void;
   onFanStrengthChange: (strength: number) => void;
   onFanFalloffChange: (falloffExponent: number) => void;
+  onFanFrequencyChange: (frequency: number) => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -405,6 +408,14 @@ export class ControlPanel {
       opts.initial.fanFalloffExponent,
       opts.onFanFalloffChange,
     );
+    const fanFrequency = this.rangeRow(
+      '風扇頻率',
+      opts.fanFrequencyRange.min,
+      opts.fanFrequencyRange.max,
+      opts.fanFrequencyRange.step,
+      opts.initial.fanFrequency,
+      opts.onFanFrequencyChange,
+    );
 
     // 電風扇專屬參數（issue #67 事後檢視拆成兩顆顯示開關；「顯示風扇提示」→
     // 「顯示風扇範圍」／「顯示風扇圖示」，見 `ControlPanelInitial.showFanRange`
@@ -419,6 +430,7 @@ export class ControlPanel {
       fanWidth.row,
       fanStrength.row,
       fanFalloff.row,
+      fanFrequency.row,
       this.buttonRow('移除風扇', opts.onRemoveFan),
     );
 
