@@ -137,6 +137,9 @@ export interface ControlPanelInitial {
   fanFrequency: number;
   /** 編隊抓取形狀標記顯示開關的初始值（issue #68）。 */
   showFormationHint: boolean;
+  /** 撒 Pin 兩個滑桿的初始值（issue #69）——見 `../input` 的 `DEFAULT_SPRAY_*`。 */
+  sprayRadius: number;
+  spraySpacing: number;
 }
 
 /** 一個數值滑桿的範圍（issue #67 抽出——`tapStrengthRange` 與三個電風扇範圍共用同一形狀）。 */
@@ -154,6 +157,9 @@ export interface ControlPanelOptions {
   fanStrengthRange: RangeSpec;
   fanFalloffRange: RangeSpec;
   fanFrequencyRange: RangeSpec;
+  /** 撒 Pin「範圍半徑」／「最小間距」兩個滑桿各自的範圍（issue #69）。 */
+  sprayRadiusRange: RangeSpec;
+  spraySpacingRange: RangeSpec;
   /** 「Demo」按鈕列表（issue #15），依序顯示；點下呼叫 `onRunDemo(id)`。 */
   demos: readonly DemoMenuItem[];
   /**
@@ -212,6 +218,13 @@ export interface ControlPanelOptions {
   onFormationDefineEnd: () => void;
   /** 「顯示編隊抓取提示」開關（issue #68）——同 `onShowFanRangeChange` 的理由，純視覺。 */
   onShowFormationHintChange: (visible: boolean) => void;
+  /**
+   * 撒 Pin「範圍半徑」／「最小間距」滑桿變更（issue #69）——比照四個電風扇滑桿，
+   * `ControlPanel` 只負責把新數值原封不動送出去，影響下一次撒點（已經撒出去的
+   * Pin 是既成事實，不會回頭重排）。
+   */
+  onSprayRadiusChange: (radius: number) => void;
+  onSpraySpacingChange: (spacing: number) => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -455,9 +468,31 @@ export class ControlPanel {
       this.formationDefineRow(opts.onFormationDefineStart, opts.onFormationDefineEnd),
     ]);
 
+    // 撒 Pin 專屬參數（issue #69）：範圍半徑 + 最小間距兩個滑桿，比照 `fanParams`
+    // 的收合模式。半徑同時決定畫布上那圈筆刷游標的大小（見 `BrushCursor`），
+    // 所以「調半徑」這件事在畫面上是所見即所得，不需要另外的預覽開關。
+    const sprayParams = this.toolParams('撒 Pin', [
+      this.rangeRow(
+        '撒 Pin 範圍半徑',
+        opts.sprayRadiusRange.min,
+        opts.sprayRadiusRange.max,
+        opts.sprayRadiusRange.step,
+        opts.initial.sprayRadius,
+        opts.onSprayRadiusChange,
+      ).row,
+      this.rangeRow(
+        '撒 Pin 間距（越小越密）',
+        opts.spraySpacingRange.min,
+        opts.spraySpacingRange.max,
+        opts.spraySpacingRange.step,
+        opts.initial.spraySpacing,
+        opts.onSpraySpacingChange,
+      ).row,
+    ]);
+
     const toolSection = this.toolSection(
       opts.initial.activeTool,
-      { fan: fanParams, formation: formationParams },
+      { fan: fanParams, formation: formationParams, spray: sprayParams },
       (t) => {
         opts.onToolChange(t);
         pins.setToolLocked(t !== 'general');
@@ -730,7 +765,8 @@ export class ControlPanel {
    * 「目前工具」下拉（issue #65 / V2 T3-1；ADR-0011）——只涵蓋新增的沙盒工具。
    * 「一般操作」＝維持既有 Grab/Pin/Tap 純手勢，選中它時 `ToolRouter` 原封不動
    * 委派給既有 `GestureTracker`；「電風扇」（issue #66）之後在畫布上按下拖曳放開
-   * 即放置一個風扇。後續編隊抓取／撒 Pin／移除 Pin 上線時在這裡加選項。
+   * 即放置一個風扇；「編隊抓取」（issue #68）、「撒 Pin」（issue #69）同理各自
+   * 接管畫布手勢。後續「移除 Pin」上線時在這裡加選項。
    */
   private toolRow(
     initial: ToolId,
@@ -744,6 +780,7 @@ export class ControlPanel {
       ['general', '一般操作'],
       ['fan', '電風扇'],
       ['formation', '編隊抓取'],
+      ['spray', '撒 Pin'],
     ] as const) {
       const option = document.createElement('option');
       option.value = value;

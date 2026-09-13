@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { mulberry32 } from '../mesh';
 import type { FanState, InputEvent, Point } from '../sim';
 import {
   DEFAULT_FAN_FALLOFF_EXPONENT,
@@ -12,10 +13,20 @@ import {
 } from './ToolRouter';
 
 /** 同 `GestureTracker.test.ts` 的黑盒手法：`screenToWorld` 把螢幕座標 +1000 好分辨已換算。 */
-function makeRouter(config?: ToolRouterOptions['config'], getFan?: () => FanState | null) {
+function makeRouter(
+  config?: ToolRouterOptions['config'],
+  getFan?: () => FanState | null,
+  extra?: Partial<ToolRouterOptions>,
+) {
   const events: InputEvent[] = [];
   const screenToWorld = vi.fn((x: number, y: number): Point => ({ x: x + 1000, y: y + 1000 }));
-  const router = new ToolRouter({ screenToWorld, emit: (e) => events.push(e), config, getFan });
+  const router = new ToolRouter({
+    screenToWorld,
+    emit: (e) => events.push(e),
+    config,
+    getFan,
+    ...extra,
+  });
   return { router, events, screenToWorld };
 }
 
@@ -613,6 +624,159 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
       { type: 'release', id: 2 },
       { type: 'grab', id: 'formation:1:0', x: 1050, y: 1050 },
       { type: 'release', id: 'formation:1:0' },
+    ]);
+  });
+});
+
+describe('ToolRouter — 撒 Pin（issue #69 / V2 T3-5）', () => {
+  /** 撒點用的隨機數注入固定種子，測試才逐次一致（預設是 `Math.random`）。 */
+  const seeded = () => mulberry32(0x5eed);
+
+  /** 這批 `pin` 事件的座標（撒 Pin 只會送 `pin`，這裡順便當成型別收窄）。 */
+  function pinPoints(events: readonly InputEvent[]): Point[] {
+    return events.flatMap((e) =>
+      e.type === 'pin' && e.x !== undefined && e.y !== undefined ? [{ x: e.x, y: e.y }] : [],
+    );
+  }
+
+  /** 點集合裡任兩點的最小距離（少於兩點時回 `Infinity`）。 */
+  function minPairDistance(points: readonly Point[]): number {
+    let min = Infinity;
+    for (let i = 0; i < points.length; i++) {
+      for (let j = i + 1; j < points.length; j++) {
+        min = Math.min(min, Math.hypot(points[i]!.x - points[j]!.x, points[i]!.y - points[j]!.y));
+      }
+    }
+    return min;
+  }
+
+  it('點一下 → 一批 pin 事件，id 各自相異、都帶 spray: 前綴', () => {
+    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
+    router.setActiveTool('spray');
+    router.down(1, 0, 0, 0);
+
+    expect(events.length).toBeGreaterThan(1);
+    expect(events.every((e) => e.type === 'pin')).toBe(true);
+    const ids = events.map((e) => (e.type === 'pin' ? e.id : null));
+    expect(ids.every((id) => typeof id === 'string' && id.startsWith('spray:'))).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('撒出的任兩顆 Pin 距離 ≥ 設定的間距', () => {
+    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
+    router.setActiveTool('spray');
+    router.setSprayParams({ radius: 200, spacing: 40 });
+    router.down(1, 0, 0, 0);
+
+    const points = pinPoints(events);
+    expect(points.length).toBeGreaterThan(1);
+    expect(minPairDistance(points)).toBeGreaterThanOrEqual(40);
+  });
+
+  it('跟注入的既有 Pin（listPins）也保持 ≥ 間距——不會撒在已經有 Pin 的地方', () => {
+    const existing = [
+      { id: 'a', point: { x: 1000, y: 1000 } },
+      { id: 'b', point: { x: 1060, y: 1020 } },
+    ];
+    const { router, events } = makeRouter(undefined, undefined, {
+      random: seeded(),
+      listPins: () => existing,
+    });
+    router.setActiveTool('spray');
+    router.setSprayParams({ radius: 200, spacing: 40 });
+    router.down(1, 0, 0, 0); // 圓心 (1000, 1000)，正好蓋住兩顆既有 Pin
+
+    const points = pinPoints(events);
+    expect(points.length).toBeGreaterThan(0);
+    for (const p of points) {
+      for (const pin of existing) {
+        expect(Math.hypot(p.x - pin.point.x, p.y - pin.point.y)).toBeGreaterThanOrEqual(40);
+      }
+    }
+  });
+
+  it('密度調高（間距調小）→ 同樣半徑撒出的 Pin 數量變多', () => {
+    const sparse = makeRouter(undefined, undefined, { random: seeded() });
+    sparse.router.setActiveTool('spray');
+    sparse.router.setSprayParams({ radius: 200, spacing: 80 });
+    sparse.router.down(1, 0, 0, 0);
+
+    const dense = makeRouter(undefined, undefined, { random: seeded() });
+    dense.router.setActiveTool('spray');
+    dense.router.setSprayParams({ radius: 200, spacing: 25 });
+    dense.router.down(1, 0, 0, 0);
+
+    expect(dense.events.length).toBeGreaterThan(sparse.events.length);
+  });
+
+  it('撒出的 Pin 都落在以點擊處為圓心、設定半徑內', () => {
+    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
+    router.setActiveTool('spray');
+    router.setSprayParams({ radius: 120, spacing: 30 });
+    router.down(1, 50, 70, 0); // 世界座標圓心 (1050, 1070)
+
+    const points = pinPoints(events);
+    expect(points.length).toBeGreaterThan(0);
+    for (const p of points) {
+      expect(Math.hypot(p.x - 1050, p.y - 1070)).toBeLessThanOrEqual(120);
+    }
+  });
+
+  it('候選點落在果凍外（hitTest 回 false）→ 不送出對應的 pin', () => {
+    const { router, events } = makeRouter(undefined, undefined, {
+      random: seeded(),
+      hitTest: (w) => w.x < 1000, // 圓心右半邊一律判定為落在果凍外
+    });
+    router.setActiveTool('spray');
+    router.setSprayParams({ radius: 200, spacing: 30 });
+    router.down(1, 0, 0, 0); // 圓心 (1000, 1000)
+
+    const points = pinPoints(events);
+    expect(points.length).toBeGreaterThan(0);
+    expect(points.every((p) => p.x < 1000)).toBe(true);
+  });
+
+  it('整個範圍都在果凍外 → 一顆都不送', () => {
+    const { router, events } = makeRouter(undefined, undefined, {
+      random: seeded(),
+      hitTest: () => false,
+    });
+    router.setActiveTool('spray');
+    router.down(1, 0, 0, 0);
+    expect(events).toEqual([]);
+  });
+
+  it('點一下就完成的單次動作——後續 move／up／cancel 不再送出任何事件', () => {
+    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
+    router.setActiveTool('spray');
+    router.down(1, 0, 0, 0);
+    const afterDown = events.length;
+
+    router.move(1, 30, 30);
+    router.up(1, 30, 30, 50);
+    router.cancel(1);
+    expect(events).toHaveLength(afterDown);
+  });
+
+  it('連撒兩次 → 第二批的 id 不跟第一批重複（每顆 Pin 之後才能各自獨立操作）', () => {
+    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
+    router.setActiveTool('spray');
+    router.down(1, 0, 0, 0);
+    router.down(2, 400, 400, 0);
+
+    const ids = events.map((e) => (e.type === 'pin' ? e.id : null));
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('撒 Pin 不影響一般操作——切回去仍是既有的 Grab 手勢', () => {
+    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
+    router.setActiveTool('spray');
+    router.setActiveTool('general');
+    router.down(1, 0, 0, 0);
+    router.up(1, 0, 0, 500);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1000, y: 1000 },
+      { type: 'release', id: 1 },
     ]);
   });
 });

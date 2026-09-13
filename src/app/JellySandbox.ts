@@ -111,6 +111,8 @@ import {
   DEFAULT_FAN_FREQUENCY,
   DEFAULT_FAN_STRENGTH,
   DEFAULT_FAN_WIDTH,
+  DEFAULT_SPRAY_RADIUS,
+  DEFAULT_SPRAY_SPACING,
   PointerInput,
   routeForPinMode,
 } from '../input';
@@ -144,6 +146,7 @@ import {
   type ClipState,
   type ClipTrack,
 } from './clipFile';
+import { BrushCursor } from './BrushCursor';
 import { ControlPanel } from './ControlPanel';
 import { canvasToPng, createDefaultJelly } from './defaultJelly';
 import {
@@ -205,6 +208,16 @@ const FAN_WIDTH_RANGE = { min: 20, max: 280, step: 5 };
 const FAN_STRENGTH_RANGE = { min: 200, max: 60000, step: 200 };
 const FAN_FALLOFF_RANGE = { min: 0.2, max: 5, step: 0.1 };
 const FAN_FREQUENCY_RANGE = { min: 0.2, max: 10, step: 0.1 };
+/**
+ * 撒 Pin 兩個滑桿的範圍（issue #69），世界座標單位——中點沒有特別對齊預設值
+ * （`DEFAULT_SPRAY_RADIUS`／`DEFAULT_SPRAY_SPACING` 落在範圍內即可，這兩個值
+ * 本來就沒有「不動它就等於某個物理預設」的意義，跟 `TAP_STRENGTH_RANGE` 不同）。
+ * 半徑上限 400 ≈ 一般匯入果凍的尺度，一下蓋住整隻；間距下限 12 是「撒得很密」
+ * 的實用下限——再小只是讓 Pin 疊在同一批 Particle 上，手感沒有變化、求解器卻
+ * 要多扛幾十個硬約束。
+ */
+const SPRAY_RADIUS_RANGE = { min: 20, max: 400, step: 10 };
+const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
 /**
  * Pin 模式下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
  * CSS 直徑（16px）同數量級，換算回世界座標時要除以目前相機縮放（見
@@ -277,6 +290,12 @@ export class JellySandbox {
   private readonly fanOverlay: FanOverlay;
   /** 編隊抓取形狀標記提示（issue #68）——同 `fanOverlay` 的模式。 */
   private readonly formationOverlay: FormationOverlay;
+  /**
+   * 撒 Pin 的筆刷圓圈游標（issue #69）——同樣是純 DOM overlay，但指標位置由它
+   * 自己監聽（見 `BrushCursor` 說明）；這裡只負責「目前工具是不是撒 Pin」與
+   * 「半徑換算成幾個螢幕像素」。
+   */
+  private readonly brushCursor: BrushCursor;
   private readonly demoRunner = new DemoRunner();
   private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
@@ -327,6 +346,13 @@ export class JellySandbox {
   private fanStrength = DEFAULT_FAN_STRENGTH;
   private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
   private fanFrequency = DEFAULT_FAN_FREQUENCY;
+  /**
+   * 撒 Pin「範圍半徑」／「最小間距」滑桿目前值（issue #69）——`PointerInput`
+   * 沒有 getter，這裡另存一份供：(a) 面板初始值、(b) `frame()` 每幀把半徑換算
+   * 成螢幕像素餵給筆刷圓圈游標（`BrushCursor`）。
+   */
+  private sprayRadius = DEFAULT_SPRAY_RADIUS;
+  private spraySpacing = DEFAULT_SPRAY_SPACING;
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
   private wireframeVisible = false;
   /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
@@ -452,12 +478,16 @@ export class JellySandbox {
         fanFalloffExponent: this.fanFalloffExponent,
         fanFrequency: this.fanFrequency,
         showFormationHint: this.formationHintVisible,
+        sprayRadius: this.sprayRadius,
+        spraySpacing: this.spraySpacing,
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
       fanWidthRange: FAN_WIDTH_RANGE,
       fanStrengthRange: FAN_STRENGTH_RANGE,
       fanFalloffRange: FAN_FALLOFF_RANGE,
       fanFrequencyRange: FAN_FREQUENCY_RANGE,
+      sprayRadiusRange: SPRAY_RADIUS_RANGE,
+      spraySpacingRange: SPRAY_SPACING_RANGE,
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
       onImportImage: () => this.fileImportInput.open(),
       onSaveClip: () => this.saveClip(),
@@ -473,6 +503,8 @@ export class JellySandbox {
       onFormationDefineStart: () => this.input.beginFormationDefine(),
       onFormationDefineEnd: () => this.input.endFormationDefine(),
       onShowFormationHintChange: (visible) => this.setFormationHintVisible(visible),
+      onSprayRadiusChange: (radius) => this.setSprayRadius(radius),
+      onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -512,6 +544,8 @@ export class JellySandbox {
     root.appendChild(this.fanOverlay.element);
     this.formationOverlay = new FormationOverlay();
     root.appendChild(this.formationOverlay.element);
+    this.brushCursor = new BrushCursor(root);
+    root.appendChild(this.brushCursor.element);
     this.applyPinModeVisuals();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
@@ -568,6 +602,7 @@ export class JellySandbox {
     this.notice.remove();
     this.controlPanel.destroy();
     this.pinMarkers.destroy();
+    this.brushCursor.destroy(); // 它在 root 上掛了指標監聽（issue #69），一定要解掉
     this.input.destroy();
     this.cameraInput.destroy();
     this.renderer.destroy();
@@ -1067,6 +1102,21 @@ export class JellySandbox {
     this.activeTool = tool;
     this.input.setActiveTool(tool);
     this.applyPinModeVisuals();
+    // 筆刷圓圈游標只屬於撒 Pin 工具（issue #69）——不需要另外的顯示開關，選到
+    // 這個工具就看得到，切走就收起來。
+    this.brushCursor.setActive(tool === 'spray');
+  }
+
+  /** 「撒 Pin 範圍半徑」滑桿（issue #69）——下一次撒點用，同時是筆刷圓圈的大小。 */
+  private setSprayRadius(radius: number): void {
+    this.sprayRadius = radius;
+    this.input.setSprayParams({ radius });
+  }
+
+  /** 「撒 Pin 間距」滑桿（issue #69）——越小越密，見 `ToolRouter.sprayOnce`。 */
+  private setSpraySpacing(spacing: number): void {
+    this.spraySpacing = spacing;
+    this.input.setSprayParams({ spacing });
   }
 
   /**
@@ -1427,6 +1477,8 @@ export class JellySandbox {
     this.renderer.setCamera(this.cameraState.transform);
     this.applyPinModeVisuals(); // 新 canvas 是全新元素，游標樣式要重套
     this.input.setActiveTool(this.activeTool); // 新 PointerInput 預設回一般操作，要重套
+    // 新 ToolRouter 的撒 Pin 參數也回到預設值，一併重套（issue #69）——比照上一行。
+    this.input.setSprayParams({ radius: this.sprayRadius, spacing: this.spraySpacing });
     this.renderer.setWireframeVisible(this.wireframeVisible); // 新 JellyRenderer 預設隱藏，要重套
     this.renderer.setWallBounds(this.wallBox); // 新 JellyRenderer 預設沒有牆框，要重套
   }
@@ -1444,6 +1496,9 @@ export class JellySandbox {
       screenToWorld: project,
       hitTest,
       getFan: () => this.sim.fanState(),
+      // 撒 Pin 的間距判定要跟場上既有的 Pin 也比一次（issue #69），不然在撒過的
+      // 地方再撒一次會疊成一坨。
+      listPins: () => this.sim.listPins(),
       applyInput: (event) => {
         const routed = routeForPinMode(event, this.pinModeActive, this.pinModeContext());
         if (routed) {
@@ -1611,6 +1666,13 @@ export class JellySandbox {
           : this.input.formationActiveGroups.map((g) => ({ points: g.points.map(project) }));
         this.formationOverlay.update(groups);
       }
+    }
+
+    // 筆刷圓圈游標（issue #69）：半徑是世界座標，每幀換算成目前縮放下的螢幕
+    // 像素——縮放改變時圓圈大小才跟著對。只在撒 Pin 工具下需要算（其餘時候
+    // 這層是隱藏的，`setRadiusPx` 值沒變本來也不寫 DOM）。
+    if (this.activeTool === 'spray') {
+      this.brushCursor.setRadiusPx(this.sprayRadius * this.cameraState.transform.scale);
     }
 
     this.rafId = requestAnimationFrame(this.frame);

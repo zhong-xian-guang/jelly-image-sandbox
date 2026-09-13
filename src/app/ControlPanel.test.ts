@@ -38,12 +38,16 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       fanFalloffExponent: 2,
       fanFrequency: 2,
       showFormationHint: true,
+      sprayRadius: 140,
+      spraySpacing: 36,
     },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     fanWidthRange: { min: 20, max: 400, step: 5 },
     fanStrengthRange: { min: 500, max: 12000, step: 100 },
     fanFalloffRange: { min: 0.2, max: 5, step: 0.1 },
     fanFrequencyRange: { min: 0.2, max: 10, step: 0.1 },
+    sprayRadiusRange: { min: 20, max: 400, step: 10 },
+    spraySpacingRange: { min: 12, max: 120, step: 2 },
     demos: [],
     onImportImage: vi.fn(),
     onSaveClip: vi.fn(),
@@ -59,6 +63,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onFormationDefineStart: vi.fn(),
     onFormationDefineEnd: vi.fn(),
     onShowFormationHintChange: vi.fn(),
+    onSprayRadiusChange: vi.fn(),
+    onSpraySpacingChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -485,13 +491,18 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
     return select!;
   }
 
-  it('預設選中「一般操作」，選項含「一般操作」與「電風扇」', () => {
+  it('預設選中「一般操作」，選項含目前上線的每個沙盒工具', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
 
     const select = findToolSelect(panel);
     expect(select.value).toBe('general');
-    expect([...select.options].map((o) => o.value)).toEqual(['general', 'fan', 'formation']);
+    expect([...select.options].map((o) => o.value)).toEqual([
+      'general',
+      'fan',
+      'formation',
+      'spray',
+    ]);
   });
 
   it('切換選項 → onToolChange 收到新值', () => {
@@ -679,14 +690,18 @@ describe('ControlPanel — 沙盒工具收合區塊（issue #67 事後檢視追�
     const blocks = () => [...panel.element.querySelectorAll('.jelly-tool-params')] as HTMLElement[];
     const visibleCount = () => blocks().filter((el) => !el.hidden).length;
 
-    expect(blocks()).toHaveLength(2); // 電風扇 + 編隊抓取
-    expect(visibleCount()).toBe(0); // 一般操作：兩組都收起來
+    expect(blocks()).toHaveLength(3); // 電風扇 + 編隊抓取 + 撒 Pin
+    expect(visibleCount()).toBe(0); // 一般操作：三組都收起來
 
     select.value = 'fan';
     select.dispatchEvent(new Event('change'));
     expect(visibleCount()).toBe(1);
 
     select.value = 'formation';
+    select.dispatchEvent(new Event('change'));
+    expect(visibleCount()).toBe(1);
+
+    select.value = 'spray';
     select.dispatchEvent(new Event('change'));
     expect(visibleCount()).toBe(1);
   });
@@ -696,7 +711,7 @@ describe('ControlPanel — 沙盒工具收合區塊（issue #67 事後檢視追�
     const titles = [...panel.element.querySelectorAll('.jelly-tool-params-title')].map(
       (el) => el.textContent,
     );
-    expect(titles).toEqual(['電風扇', '編隊抓取']);
+    expect(titles).toEqual(['電風扇', '編隊抓取', '撒 Pin']);
   });
 });
 
@@ -864,5 +879,73 @@ describe('ControlPanel — 編隊抓取控制項（issue #68 / V2 T3-4）', () =
     button.click();
     expect(opts.onFormationDefineStart).toHaveBeenCalledTimes(2);
     expect(button.textContent).toBe('完成設定');
+  });
+});
+
+describe('ControlPanel — 撒 Pin 控制項（issue #69 / V2 T3-5）', () => {
+  function findToolSelect(panel: ControlPanel): HTMLSelectElement {
+    return [...panel.element.querySelectorAll('select')].find((s) =>
+      s.querySelector('option[value="spray"]'),
+    ) as HTMLSelectElement;
+  }
+
+  function sprayParams(panel: ControlPanel): HTMLElement {
+    return [...panel.element.querySelectorAll('.jelly-tool-params')].find((el) =>
+      el.textContent?.includes('撒 Pin 範圍半徑'),
+    ) as HTMLElement;
+  }
+
+  it('切到「撒 Pin」→ onToolChange 收到 "spray"，專屬參數區塊顯示', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const select = findToolSelect(panel);
+
+    expect(sprayParams(panel).hidden).toBe(true);
+    select.value = 'spray';
+    select.dispatchEvent(new Event('change'));
+
+    expect(opts.onToolChange).toHaveBeenCalledWith('spray');
+    expect(sprayParams(panel).hidden).toBe(false);
+  });
+
+  it('初始工具就是「撒 Pin」→ 專屬參數區塊一開始就顯示', () => {
+    const panel = new ControlPanel(
+      makeOptions({ initial: { ...makeOptions().initial, activeTool: 'spray' } }),
+    );
+    expect(sprayParams(panel).hidden).toBe(false);
+  });
+
+  it('「撒 Pin 範圍半徑」滑桿初始值來自 initial.sprayRadius，拖動觸發 onSprayRadiusChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '撒 Pin 範圍半徑');
+
+    expect(Number(input.value)).toBe(opts.initial.sprayRadius);
+    input.value = '300';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onSprayRadiusChange).toHaveBeenCalledWith(300);
+  });
+
+  it('「撒 Pin 間距」滑桿初始值來自 initial.spraySpacing，拖動觸發 onSpraySpacingChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '撒 Pin 間距');
+
+    expect(Number(input.value)).toBe(opts.initial.spraySpacing);
+    input.value = '20';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onSpraySpacingChange).toHaveBeenCalledWith(20);
+  });
+
+  it('切到「撒 Pin」→ Pin 控制項一併鎖住（畫布手勢已被這個工具接管）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const select = findToolSelect(panel);
+    select.value = 'spray';
+    select.dispatchEvent(new Event('change'));
+
+    const pinCheckbox = [...panel.element.querySelectorAll('label')]
+      .find((l) => l.textContent?.includes('Pin 模式'))
+      ?.querySelector('input[type=checkbox]') as HTMLInputElement;
+    expect(pinCheckbox.disabled).toBe(true);
   });
 });

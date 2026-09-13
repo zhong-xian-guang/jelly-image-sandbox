@@ -9,8 +9,10 @@ export {
   DEFAULT_FAN_STRENGTH,
   DEFAULT_FAN_FALLOFF_EXPONENT,
   DEFAULT_FAN_FREQUENCY,
+  DEFAULT_SPRAY_RADIUS,
+  DEFAULT_SPRAY_SPACING,
 } from './ToolRouter';
-export type { ToolId, ToolRouterOptions, FanParams } from './ToolRouter';
+export type { ToolId, ToolRouterOptions, FanParams, SprayParams } from './ToolRouter';
 export { PointerInput } from './PointerInput';
 export type { PointerInputOptions } from './PointerInput';
 export { routeForPinMode } from './pinModeRouting';

@@ -26,9 +26,9 @@
  * `CameraInput` 對應的判斷）。
  */
 
-import type { FanState, InputEvent, Point } from '../sim';
+import type { FanState, InputEvent, PinInfo, Point } from '../sim';
 import type { GestureConfig } from './GestureTracker';
-import { type FanParams, type ToolId, ToolRouter } from './ToolRouter';
+import { type FanParams, type SprayParams, type ToolId, ToolRouter } from './ToolRouter';
 
 export interface PointerInputOptions {
   screenToWorld: (screenX: number, screenY: number) => Point;
@@ -37,6 +37,8 @@ export interface PointerInputOptions {
   hitTest?: (world: Point) => boolean;
   /** 轉發給 `ToolRouter`（issue #67）——場上目前的電風扇幾何，供拖曳既有風扇的判定用。 */
   getFan?: () => FanState | null;
+  /** 轉發給 `ToolRouter`（issue #69）——場上目前的 Pin，供撒 Pin 的間距判定用。 */
+  listPins?: () => readonly PinInfo[];
   config?: Partial<GestureConfig>;
   /** 時鐘來源（測試可注入）。預設 `performance.now`。 */
   now?: () => number;
@@ -58,6 +60,7 @@ export class PointerInput {
       emit: opts.applyInput,
       hitTest: opts.hitTest,
       getFan: opts.getFan,
+      listPins: opts.listPins,
       config: opts.config,
     });
 
@@ -86,6 +89,11 @@ export class PointerInput {
   /** 轉發給 `ToolRouter.setFanParams`（issue #67）——面板電風扇滑桿變更時呼叫。 */
   setFanParams(params: Partial<FanParams>): void {
     this.tracker.setFanParams(params);
+  }
+
+  /** 轉發給 `ToolRouter.setSprayParams`（issue #69）——面板撒 Pin 滑桿變更時呼叫。 */
+  setSprayParams(params: Partial<SprayParams>): void {
+    this.tracker.setSprayParams(params);
   }
 
   /** 轉發給 `ToolRouter`（issue #68）——面板「開始設定形狀」／「完成設定」按鈕呼叫。 */

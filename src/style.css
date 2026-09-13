@@ -673,3 +673,30 @@ body {
   stroke: rgba(0, 0, 0, 0.6);
   stroke-width: 1.5;
 }
+
+/**
+ * 撒 Pin 的筆刷圓圈游標（issue #69 / V2 T3-5，見 `BrushCursor`）——選到撒 Pin
+ * 工具、指標在畫布範圍內時才顯示。外層滿版、不吃指標事件；圓圈本身的直徑由
+ * `BrushCursor.setRadiusPx` 依目前相機縮放逐幀寫入 inline style。
+ */
+.jelly-brush-cursor {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  display: none;
+}
+
+.jelly-brush-cursor.is-active {
+  display: block;
+}
+
+.jelly-brush-cursor-circle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border: 2px dashed rgba(255, 190, 90, 0.9);
+  border-radius: 50%;
+  background: rgba(255, 190, 90, 0.1);
+}
