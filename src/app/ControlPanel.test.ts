@@ -31,7 +31,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       followLocked: false,
       showWireframe: false,
       recordTarget: 'action',
-      showFanHint: true,
+      showFanRange: true,
+      showFanIcon: true,
       fanWidth: 150,
       fanStrength: 4000,
       fanFalloffExponent: 2,
@@ -46,7 +47,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onLoadClip: vi.fn(),
     onToolChange: vi.fn(),
     onRemoveFan: vi.fn(),
-    onShowFanHintChange: vi.fn(),
+    onShowFanRangeChange: vi.fn(),
+    onShowFanIconChange: vi.fn(),
     onFanWidthChange: vi.fn(),
     onFanStrengthChange: vi.fn(),
     onFanFalloffChange: vi.fn(),
@@ -588,6 +590,52 @@ describe('ControlPanel — 切到非一般操作的工具時鎖住 Pin 控制項
   });
 });
 
+describe('ControlPanel — 沙盒工具收合區塊（issue #67 事後檢視追加）', () => {
+  function toolDetails(panel: ControlPanel): HTMLDetailsElement {
+    return panel.element.querySelector('details.jelly-tool-section') as HTMLDetailsElement;
+  }
+
+  function fanParams(panel: ControlPanel): HTMLElement {
+    return panel.element.querySelector('.jelly-tool-params') as HTMLElement;
+  }
+
+  function findToolSelect(panel: ControlPanel): HTMLSelectElement {
+    return [...panel.element.querySelectorAll('select')].find((s) =>
+      s.querySelector('option[value="fan"]'),
+    ) as HTMLSelectElement;
+  }
+
+  it('預設收合——<details> 沒有 open 屬性', () => {
+    const panel = new ControlPanel(makeOptions());
+    expect(toolDetails(panel).open).toBe(false);
+  });
+
+  it('初始為「一般操作」→ 電風扇專屬參數區塊 hidden', () => {
+    const panel = new ControlPanel(makeOptions());
+    expect(fanParams(panel).hidden).toBe(true);
+  });
+
+  it('切到「電風扇」→ 專屬參數區塊顯示；切回「一般操作」→ 再次隱藏', () => {
+    const panel = new ControlPanel(makeOptions());
+    const select = findToolSelect(panel);
+
+    select.value = 'fan';
+    select.dispatchEvent(new Event('change'));
+    expect(fanParams(panel).hidden).toBe(false);
+
+    select.value = 'general';
+    select.dispatchEvent(new Event('change'));
+    expect(fanParams(panel).hidden).toBe(true);
+  });
+
+  it('初始工具就是「電風扇」（例如載入片段後重建面板）→ 專屬參數區塊一開始就顯示', () => {
+    const panel = new ControlPanel(
+      makeOptions({ initial: { ...makeOptions().initial, activeTool: 'fan' } }),
+    );
+    expect(fanParams(panel).hidden).toBe(false);
+  });
+});
+
 describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
   it('面板有一顆「移除風扇」按鈕，點擊呼叫 onRemoveFan', () => {
     const opts = makeOptions();
@@ -602,12 +650,12 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(opts.onRemoveFan).toHaveBeenCalledTimes(1);
   });
 
-  it('「顯示風扇提示」checkbox 初始值來自 initial.showFanHint，切換觸發 onShowFanHintChange', () => {
-    const opts = makeOptions({ initial: { ...makeOptions().initial, showFanHint: false } });
+  it('「顯示風扇範圍」checkbox 初始值來自 initial.showFanRange，切換觸發 onShowFanRangeChange', () => {
+    const opts = makeOptions({ initial: { ...makeOptions().initial, showFanRange: false } });
     const panel = new ControlPanel(opts);
 
     const label = [...panel.element.querySelectorAll('label')].find((l) =>
-      l.textContent?.includes('顯示風扇提示'),
+      l.textContent?.includes('顯示風扇範圍'),
     );
     expect(label).toBeDefined();
     const checkbox = label!.querySelector('input[type="checkbox"]') as HTMLInputElement;
@@ -615,7 +663,23 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
 
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event('change'));
-    expect(opts.onShowFanHintChange).toHaveBeenCalledWith(true);
+    expect(opts.onShowFanRangeChange).toHaveBeenCalledWith(true);
+  });
+
+  it('「顯示風扇圖示」checkbox 初始值來自 initial.showFanIcon，切換觸發 onShowFanIconChange', () => {
+    const opts = makeOptions({ initial: { ...makeOptions().initial, showFanIcon: false } });
+    const panel = new ControlPanel(opts);
+
+    const label = [...panel.element.querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('顯示風扇圖示'),
+    );
+    expect(label).toBeDefined();
+    const checkbox = label!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    expect(opts.onShowFanIconChange).toHaveBeenCalledWith(true);
   });
 
   it('「風扇寬度」滑桿初始值來自 initial.fanWidth，拖動觸發 onFanWidthChange', () => {

@@ -20,11 +20,14 @@
  * 下沒拖曳）時退回 `(1, 0)` 當方向，避免除以 0；風扇這時 `length` 也是 0，
  * `SimCore.applyFan` 對 `length <= 0` 直接 no-op，等於沒有實際效果。
  *
- * 拖曳既有風扇（`FanMoveSession`）則相反：`down` 當下就先照按下點送一次
- * `setFan`（原方向／長度／寬度／強度／衰減不變，只有 `originX/originY` 換成
- * 按下點），`move` 每次都比照 `movePin`/`moveGrab` 的既有慣例即時送一次
- * （直接把 origin 設到目前指標的世界座標，不維持按下當下的相對位移），`up`
- * 在放開點再送最後一次收尾；三者共用 `emitFanMove`。
+ * 拖曳既有風扇（`FanMoveSession`）：`down` 當下拍下按下點與風扇原點的差
+ * （`offsetX/offsetY = fan.origin − downWorld`）——**不**直接把 origin 設到
+ * 指標位置，那樣不管按在矩形內哪裡，風扇中心都會瞬間跳到滑鼠下，手感很怪
+ * （issue #67 事後檢視回饋）。之後 `move`／`up` 都用「目前指標世界座標 +
+ * 這個 offset」算新原點，等於維持按下當下抓住的那一點跟指標的相對位置，
+ * 原點跟著位移量走、不跟著指標「瞬移」；`down` 當下 `emitFanMove` 算出來的
+ * 原點因此精確等於原本的 `fan.originX/Y`，風扇不會因為按下就先跳一下。三者
+ * 共用 `emitFanMove`。
  *
  * `cancel`：放置中（`FanPlaceSession`）視為放棄這次放置，只清掉 `fanSessions`
  * 裡的紀錄，不 emit 任何事件（跟 `general` 底下放開一半的 Grab 不同——那邊
@@ -77,10 +80,14 @@ interface FanPlaceSession {
 
 /**
  * 拖曳既有風扇進行中的狀態：`down` 當下拍下原風扇除了 `originX/originY` 以外
- * 的幾何／參數快照——拖曳全程只有原點跟著指標跑，其餘照舊。
+ * 的幾何／參數快照，以及按下點跟原點的相對位移 `offsetX/offsetY`——拖曳全程
+ * 原點 = 目前指標世界座標 + 這個 offset，維持按下當下抓住的那一點跟著指標
+ * 走，而不是原點瞬間貼到指標上（見類別頂端說明）。
  */
 interface FanMoveSession {
   mode: 'move';
+  offsetX: number;
+  offsetY: number;
   dirX: number;
   dirY: number;
   length: number;
@@ -145,6 +152,8 @@ export class ToolRouter {
       if (fan && isPointInFanRect(fan, world)) {
         const session: FanMoveSession = {
           mode: 'move',
+          offsetX: fan.originX - world.x,
+          offsetY: fan.originY - world.y,
           dirX: fan.dirX,
           dirY: fan.dirY,
           length: fan.length,
@@ -228,12 +237,16 @@ export class ToolRouter {
     });
   }
 
-  /** 拖曳既有風扇：原點換成 `at`，其餘沿用 `down` 當下拍下的快照。 */
-  private emitFanMove(at: Point, session: FanMoveSession): void {
+  /**
+   * 拖曳既有風扇：原點 = 目前指標世界座標 `pointer` + `down` 當下拍下的
+   * `offsetX/offsetY`（維持相對位移，見 `FanMoveSession` 說明），其餘沿用
+   * `down` 當下拍下的快照。
+   */
+  private emitFanMove(pointer: Point, session: FanMoveSession): void {
     this.emit({
       type: 'setFan',
-      originX: at.x,
-      originY: at.y,
+      originX: pointer.x + session.offsetX,
+      originY: pointer.y + session.offsetY,
       dirX: session.dirX,
       dirY: session.dirY,
       length: session.length,

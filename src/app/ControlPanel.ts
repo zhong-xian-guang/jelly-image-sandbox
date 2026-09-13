@@ -123,8 +123,13 @@ export interface ControlPanelInitial {
   showWireframe: boolean;
   /** 「錄製目標」選擇器的初始值（issue #33）。 */
   recordTarget: RecordTarget;
-  /** 電風扇矩形外框提示顯示開關（issue #66）；比照「顯示 Pin」的既有慣例。 */
-  showFanHint: boolean;
+  /**
+   * 電風扇「範圍」／「圖示」顯示開關（issue #66；issue #67 事後檢視拆成兩顆
+   * ——原本一顆「顯示風扇提示」同時管兩者，但矩形範圍（評估推力涵蓋區）跟
+   * 圖示（風扇長相）是兩種不同用途的視覺，使用者可能只想看其中一種）。
+   */
+  showFanRange: boolean;
+  showFanIcon: boolean;
   /** 電風扇三個滑桿的初始值（issue #67）——見 `../input` 的 `DEFAULT_FAN_*`。 */
   fanWidth: number;
   fanStrength: number;
@@ -177,10 +182,13 @@ export interface ControlPanelOptions {
    */
   onRemoveFan: () => void;
   /**
-   * 「顯示風扇提示」開關（issue #66）——只管 `FanOverlay` 矩形外框的顯示／隱藏，
-   * 純視覺；跟「移除風扇」按鈕的可用狀態無關（理由見 `onRemoveFan`）。
+   * 「顯示風扇範圍」／「顯示風扇圖示」兩個開關（issue #66；issue #67 事後檢視
+   * 拆成兩顆，見 `ControlPanelInitial.showFanRange`／`showFanIcon`）——各自只管
+   * `FanOverlay` 矩形外框／圖示其中一半的顯示／隱藏，純視覺；跟「移除風扇」
+   * 按鈕的可用狀態無關（理由見 `onRemoveFan`）。
    */
-  onShowFanHintChange: (visible: boolean) => void;
+  onShowFanRangeChange: (visible: boolean) => void;
+  onShowFanIconChange: (visible: boolean) => void;
   /**
    * 電風扇「寬度」／「強度」／「衰減程度」滑桿變更（issue #67）——即時反映到
    * 場上目前的風扇（若有）與下一次放置，兩件事都交給 `JellySandbox` 處理：
@@ -352,11 +360,6 @@ export class ControlPanel {
     );
     pins.setToolLocked(opts.initial.activeTool !== 'general');
 
-    const tool = this.toolRow(opts.initial.activeTool, (t) => {
-      opts.onToolChange(t);
-      pins.setToolLocked(t !== 'general');
-    });
-
     const boundary = this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange);
     this.boundarySelect = boundary.select;
     const softness = this.rangeRow(
@@ -403,21 +406,33 @@ export class ControlPanel {
       opts.onFanFalloffChange,
     );
 
+    // 電風扇專屬參數（issue #67 事後檢視拆成兩顆顯示開關；「顯示風扇提示」→
+    // 「顯示風扇範圍」／「顯示風扇圖示」，見 `ControlPanelInitial.showFanRange`
+    // ／`showFanIcon` 的說明）。這整包只在「目前工具」是電風扇時才需要看到
+    // （見下方 `toolSection`），先組起來、`hidden` 交給 `toolSection` 依目前
+    // 工具切換。
+    const fanParams = document.createElement('div');
+    fanParams.className = 'jelly-tool-params';
+    fanParams.append(
+      this.checkboxRow('顯示風扇範圍', opts.initial.showFanRange, opts.onShowFanRangeChange),
+      this.checkboxRow('顯示風扇圖示', opts.initial.showFanIcon, opts.onShowFanIconChange),
+      fanWidth.row,
+      fanStrength.row,
+      fanFalloff.row,
+      this.buttonRow('移除風扇', opts.onRemoveFan),
+    );
+
+    const toolSection = this.toolSection(opts.initial.activeTool, fanParams, (t) => {
+      opts.onToolChange(t);
+      pins.setToolLocked(t !== 'general');
+    });
+
     panel.append(
       this.perfStatus,
       this.buttonRow('匯入圖片…', opts.onImportImage),
       this.buttonRow('儲存片段', opts.onSaveClip),
       this.buttonRow('載入片段…', opts.onLoadClip),
-      tool.row,
-      // 兩顆控制項各自獨立（不像 Pin 那組「顯示」與「操作」互相鎖住），見上方
-      // `onRemoveFan`／`onShowFanHintChange` 的說明。三個滑桿（issue #67）緊接在
-      // 電風扇控制項旁邊，跟 Softness／輕拍力道那組滑桿分開，一眼看出是同一個
-      // 工具的參數。
-      this.checkboxRow('顯示風扇提示', opts.initial.showFanHint, opts.onShowFanHintChange),
-      fanWidth.row,
-      fanStrength.row,
-      fanFalloff.row,
-      this.buttonRow('移除風扇', opts.onRemoveFan),
+      toolSection,
       boundary.row,
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
       softness.row,
@@ -702,6 +717,37 @@ export class ControlPanel {
 
     row.append('目前工具', select);
     return { row, select };
+  }
+
+  /**
+   * 「沙盒工具」可折疊區塊（issue #67 事後檢視追加）——「目前工具」選擇器 +
+   * 目前選中工具的專屬參數，包進一個預設收合的 `<details>`。理由：後續會
+   * 陸續加編隊抓取／撒 Pin／移除 Pin 三個工具，每個都有自己的專屬參數列，
+   * 攤在面板最上層只會越疊越長、越來越擠；收合起來預設只看到一行
+   * 「▸ 沙盒工具」，需要用某個工具時才展開。目前只有電風扇一組專屬參數
+   * （`fanParams`），之後每個新工具依樣把自己的參數區塊傳進來、依「目前
+   * 工具」用 `hidden` 切換顯示／隱藏即可（比照這裡 `fanParams` 的做法）。
+   */
+  private toolSection(
+    initialTool: ToolId,
+    fanParams: HTMLElement,
+    onChange: (tool: ToolId) => void,
+  ): HTMLDetailsElement {
+    const details = document.createElement('details');
+    details.className = 'jelly-tool-section';
+
+    const summary = document.createElement('summary');
+    summary.textContent = '沙盒工具';
+    details.appendChild(summary);
+
+    fanParams.hidden = initialTool !== 'fan';
+    const tool = this.toolRow(initialTool, (t) => {
+      onChange(t);
+      fanParams.hidden = t !== 'fan';
+    });
+
+    details.append(tool.row, fanParams);
+    return details;
   }
 
   private boundaryRow(

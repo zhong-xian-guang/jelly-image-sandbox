@@ -293,15 +293,15 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
     falloffExponent: 3,
   };
 
-  it('down 落在既有風扇矩形內 → 立刻送一次 setFan，原點換成按下點、其餘沿用原風扇', () => {
+  it('down 落在既有風扇矩形內、但不是正好按在原點上 → 立刻送一次 setFan，原點維持不變（不瞬移到按下點）', () => {
     const { router, events } = makeRouter(undefined, () => existingFan);
     router.setActiveTool('fan');
-    router.down(1, 50, 0, 0); // 世界座標 (1050, 1000)：along=50 in [0,100]、across=0 in [-20,20]
+    router.down(1, 50, 0, 0); // 世界座標 (1050, 1000)：along=50 in [0,100]、across=0 in [-20,20]，離原點 (1000,1000) 有 50 的距離
 
     expect(events).toEqual([
       {
         type: 'setFan',
-        originX: 1050,
+        originX: 1000, // 按下當下維持原本的原點，不是按下點 (1050, 1000)——見類別頂端說明
         originY: 1000,
         dirX: 1,
         dirY: 0,
@@ -313,17 +313,17 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
     ]);
   });
 
-  it('move 期間每次都即時送一次 setFan（比照 movePin/moveGrab，直接設到目前指標位置）', () => {
+  it('move 期間每次都即時送一次 setFan，原點跟著位移量走、維持按下當下的相對位移', () => {
     const { router, events } = makeRouter(undefined, () => existingFan);
     router.setActiveTool('fan');
-    router.down(1, 50, 0, 0);
-    router.move(1, 60, 10); // 世界座標 (1060, 1010)
+    router.down(1, 50, 0, 0); // 世界座標 (1050, 1000)，offset = (1000-1050, 1000-1000) = (-50, 0)
+    router.move(1, 60, 10); // 世界座標 (1060, 1010)：位移 (+10, +10)
 
     expect(events).toHaveLength(2);
     expect(events[1]).toEqual({
       type: 'setFan',
-      originX: 1060,
-      originY: 1010,
+      originX: 1010, // 1060 + offsetX(-50)
+      originY: 1010, // 1010 + offsetY(0)
       dirX: 1,
       dirY: 0,
       length: 100,
@@ -333,18 +333,37 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
     });
   });
 
-  it('up 在放開點送最後一次收尾', () => {
+  it('up 在放開點（套用同一個 offset）送最後一次收尾', () => {
     const { router, events } = makeRouter(undefined, () => existingFan);
     router.setActiveTool('fan');
-    router.down(1, 50, 0, 0);
+    router.down(1, 50, 0, 0); // offset = (-50, 0)
     router.move(1, 60, 10);
-    router.up(1, 70, 20, 50);
+    router.up(1, 70, 20, 50); // 世界座標 (1070, 1020)
 
     expect(events).toHaveLength(3);
     expect(events[2]).toEqual({
       type: 'setFan',
-      originX: 1070,
+      originX: 1020, // 1070 + offsetX(-50)
       originY: 1020,
+      dirX: 1,
+      dirY: 0,
+      length: 100,
+      width: 40,
+      strength: 999,
+      falloffExponent: 3,
+    });
+  });
+
+  it('down 正好按在原點上（offset 為 0）→ 行為等同直接設到指標位置，向下相容原本的直覺', () => {
+    const { router, events } = makeRouter(undefined, () => existingFan);
+    router.setActiveTool('fan');
+    router.down(1, 0, 0, 0); // 世界座標 (1000, 1000) == fan.origin
+    router.move(1, 10, 10); // 世界座標 (1010, 1010)
+
+    expect(events[1]).toEqual({
+      type: 'setFan',
+      originX: 1010,
+      originY: 1010,
       dirX: 1,
       dirY: 0,
       length: 100,

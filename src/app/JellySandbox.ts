@@ -302,8 +302,14 @@ export class JellySandbox {
   private activeTool: ToolId = 'general';
   /** 「顯示 Pin」開關——關閉時 `pinMarkers` 整層藏起來、跳過每幀的投影計算。 */
   private pinsVisible = true;
-  /** 「顯示風扇提示」開關（issue #66）——關閉時 `fanOverlay` 整層藏起來、跳過每幀的投影計算。 */
-  private fanHintVisible = true;
+  /**
+   * 「顯示風扇範圍」／「顯示風扇圖示」兩個開關（issue #66；issue #67 事後檢視
+   * 拆成兩顆，見 `ControlPanel` 的說明）——任一為 true 才需要每幀投影、餵給
+   * `fanOverlay.update`；個別的顯示／隱藏交給 `FanOverlay.setShowRange`／
+   * `setShowIcon`。
+   */
+  private fanRangeVisible = true;
+  private fanIconVisible = true;
   /**
    * 電風扇「寬度」／「強度」／「衰減程度」滑桿目前值（issue #67）——`PointerInput`
    * 沒有 getter，這裡另存一份供：(a) 面板初始值、(b) `updateLiveFan` 組出更新
@@ -430,7 +436,8 @@ export class JellySandbox {
         followLocked: !this.cameraState.followEnabled,
         showWireframe: this.wireframeVisible,
         recordTarget: this.recordTarget,
-        showFanHint: this.fanHintVisible,
+        showFanRange: this.fanRangeVisible,
+        showFanIcon: this.fanIconVisible,
         fanWidth: this.fanWidth,
         fanStrength: this.fanStrength,
         fanFalloffExponent: this.fanFalloffExponent,
@@ -445,7 +452,8 @@ export class JellySandbox {
       onLoadClip: () => this.clipFileInput.open(),
       onToolChange: (tool) => this.setActiveTool(tool),
       onRemoveFan: () => this.removeFan(),
-      onShowFanHintChange: (visible) => this.setFanHintVisible(visible),
+      onShowFanRangeChange: (visible) => this.setFanRangeVisible(visible),
+      onShowFanIconChange: (visible) => this.setFanIconVisible(visible),
       onFanWidthChange: (width) => this.setFanWidth(width),
       onFanStrengthChange: (strength) => this.setFanStrength(strength),
       onFanFalloffChange: (falloffExponent) => this.setFanFalloffExponent(falloffExponent),
@@ -1115,10 +1123,16 @@ export class JellySandbox {
     this.pinMarkers.setVisible(visible);
   }
 
-  /** 「顯示風扇提示」開關（issue #66）——同 `setPinsVisible` 的理由。 */
-  private setFanHintVisible(visible: boolean): void {
-    this.fanHintVisible = visible;
-    this.fanOverlay.setVisible(visible);
+  /** 「顯示風扇範圍」開關（issue #66；issue #67 事後檢視拆成兩顆）——同 `setPinsVisible` 的理由。 */
+  private setFanRangeVisible(visible: boolean): void {
+    this.fanRangeVisible = visible;
+    this.fanOverlay.setShowRange(visible);
+  }
+
+  /** 「顯示風扇圖示」開關（issue #67 事後檢視追加）——同 `setPinsVisible` 的理由。 */
+  private setFanIconVisible(visible: boolean): void {
+    this.fanIconVisible = visible;
+    this.fanOverlay.setShowIcon(visible);
   }
 
   /** 「顯示網格」開關（issue #14 追加，debug 用）——記在 `wireframeVisible`，`replaceJelly` 換新 `JellyRenderer` 時要重套。 */
@@ -1503,7 +1517,7 @@ export class JellySandbox {
     this.renderer.setCamera(this.cameraState.transform);
     this.renderer.render();
 
-    if (this.pinsVisible || this.fanHintVisible) {
+    if (this.pinsVisible || this.fanRangeVisible || this.fanIconVisible) {
       const canvasSize = this.canvasSize();
       if (this.pinsVisible) {
         this.pinMarkers.update(
@@ -1518,7 +1532,7 @@ export class JellySandbox {
           }),
         );
       }
-      if (this.fanHintVisible) {
+      if (this.fanRangeVisible || this.fanIconVisible) {
         const fan = this.sim.fanState();
         this.fanOverlay.update(
           fan && {

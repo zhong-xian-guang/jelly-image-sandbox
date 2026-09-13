@@ -182,6 +182,45 @@ body {
   margin: -2px 0 2px;
 }
 
+/**
+ * 「沙盒工具」可折疊區塊（issue #67 事後檢視追加，見 `ControlPanel.toolSection`
+ * 說明）——預設收合，展開後裡面是「目前工具」選擇器 + 目前選中工具的專屬
+ * 參數。`summary` 拿掉預設的三角形項目符號，改用文字前綴＋`::marker`／
+ * `[open]` 切換文字提示是否展開，避免瀏覽器預設樣式在深色面板上不易辨識。
+ */
+.jelly-tool-section {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin: 2px 0;
+}
+
+.jelly-tool-section summary {
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+
+.jelly-tool-section summary::before {
+  content: '▸ ';
+}
+
+.jelly-tool-section[open] summary::before {
+  content: '▾ ';
+}
+
+.jelly-tool-section[open] summary {
+  margin-bottom: 4px;
+}
+
+/** 目前選中工具的專屬參數（issue #67 事後檢視追加）——跟 `.jelly-control-row` 一樣一行一項，靠左內縮一點區隔出「屬於某個工具」。 */
+.jelly-tool-params {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 4px;
+}
+
 /** Demo／Track 按鈕列前的小標題（issue #15、issue #29 追加）——跟其他控制項分區，一眼看出這區是自動演出／自己錄的。 */
 .jelly-control-heading {
   margin-top: 4px;
@@ -488,10 +527,6 @@ body {
   pointer-events: none;
 }
 
-.jelly-fan-overlay.is-hidden {
-  display: none;
-}
-
 .jelly-fan-overlay-svg {
   width: 100%;
   height: 100%;
@@ -511,6 +546,16 @@ body {
 }
 
 /**
+ * 矩形範圍／圖示個別的「顯示」開關（issue #67 事後檢視追加，見 `FanOverlay`
+ * 頂端說明）——直接掛在矩形／圖示自己身上（不是外層 `.jelly-fan-overlay`），
+ * `!important` 蓋掉上面 `.is-present` 的 `display: block`，不用依賴規則宣告
+ * 順序。`setShowRange`/`setShowIcon` 各自 toggle 這個共用 class。
+ */
+.jelly-fan-overlay-part-hidden {
+  display: none !important;
+}
+
+/**
  * 電風扇圖示（issue #67 / V2 T3-3；事後檢視改成正面圓形護罩＋扇葉造型）：
  * `FanOverlay` 的 `<g>` 靠 JS 算好的 `transform="translate(...) rotate(...)"`
  * 定位／轉向，護罩／扇葉／風線的座標（含護罩 `r`）也由 JS 依 `width` 動態改寫
@@ -522,6 +567,14 @@ body {
 
 .jelly-fan-overlay.is-present .jelly-fan-overlay-icon {
   display: block;
+}
+
+/** 腳座／支柱／頸關節（issue #67 事後檢視追加，見 `FanOverlay`「圖示外觀的取捨」）——比馬達殼更暗一階，暗示是「桌面下方的結構」。 */
+.jelly-fan-overlay-icon-base,
+.jelly-fan-overlay-icon-pole,
+.jelly-fan-overlay-icon-neck {
+  fill: rgba(45, 52, 60, 0.9);
+  stroke: none;
 }
 
 .jelly-fan-overlay-icon-motor {
