@@ -768,6 +768,24 @@ describe('ToolRouter — 撒 Pin（issue #69 / V2 T3-5）', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  // 間距被調到極小、半徑極大時，dart throwing 的嘗試次數與撒出的顆數都必須有
+  // 上限——否則一下撒進上千顆硬約束，求解器當場被壓垮、這個迴圈本身也會掉幀。
+  it('半徑極大 + 間距極小 → 仍有上限，不會一次撒進無限多顆，也會在有限次嘗試內結束', () => {
+    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
+    router.setActiveTool('spray');
+    router.setSprayParams({ radius: 100000, spacing: 0.0001 });
+    router.down(1, 0, 0, 0);
+    expect(events.length).toBeLessThanOrEqual(200);
+  });
+
+  it('間距為 0（極端輸入）→ 不會無窮迴圈，仍在上限內收斂', () => {
+    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
+    router.setActiveTool('spray');
+    router.setSprayParams({ radius: 200, spacing: 0 });
+    router.down(1, 0, 0, 0);
+    expect(events.length).toBeLessThanOrEqual(200);
+  });
+
   it('撒 Pin 不影響一般操作——切回去仍是既有的 Grab 手勢', () => {
     const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
     router.setActiveTool('spray');

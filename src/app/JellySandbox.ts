@@ -544,7 +544,11 @@ export class JellySandbox {
     root.appendChild(this.fanOverlay.element);
     this.formationOverlay = new FormationOverlay();
     root.appendChild(this.formationOverlay.element);
-    this.brushCursor = new BrushCursor(root);
+    // `isCanvas` 讀當下的 `renderer.canvas`：重新匯入圖片會換掉整個 canvas 元素，
+    // 用回呼而非直接傳元素，換過之後判定自動跟著新的那一個走（issue #69）。
+    this.brushCursor = new BrushCursor(root, {
+      isCanvas: (target) => target === this.renderer.canvas,
+    });
     root.appendChild(this.brushCursor.element);
     this.applyPinModeVisuals();
 

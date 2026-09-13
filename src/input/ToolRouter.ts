@@ -340,10 +340,6 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'spray') {
-      this.sprayOnce(this.screenToWorld(screenX, screenY));
-      return;
-    }
     if (this.activeTool === 'formation') {
       const world = this.screenToWorld(screenX, screenY);
       if (this.formationDefinePoints) {
@@ -361,6 +357,12 @@ export class ToolRouter {
         this.emit({ type: 'grab', id: formationId, x: point.x, y: point.y });
       });
       if (attached.length > 0) this.formationSessions.set(id, { lastWorld: world, attached });
+      return;
+    }
+    if (this.activeTool === 'spray') {
+      // 撒 Pin 只有 `down` 有事做——點一下就完成，`move`/`up`/`cancel` 那三個
+      // 方法因此沒有對應的分支（見類別頂端說明）。
+      this.sprayOnce(this.screenToWorld(screenX, screenY));
     }
   }
 

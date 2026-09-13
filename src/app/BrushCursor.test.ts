@@ -21,12 +21,18 @@ function pointerEvent(type: string, clientX = 0, clientY = 0): Event {
 function makeCursor() {
   const root = document.createElement('div');
   document.body.appendChild(root);
-  const cursor = new BrushCursor(root);
+  // 畫布與控制面板都是 root 的子元素，兩者的指標事件都會冒泡上來——`isCanvas`
+  // 就是用來分辨這兩種來源的（見 `BrushCursor` 說明）。
+  const canvas = document.createElement('canvas');
+  const panel = document.createElement('div');
+  root.append(canvas, panel);
+  const cursor = new BrushCursor(root, { isCanvas: (target) => target === canvas });
   root.appendChild(cursor.element);
   const isVisible = () => cursor.element.classList.contains('is-active');
-  const movePointer = (clientX: number, clientY: number) =>
-    root.dispatchEvent(pointerEvent('pointermove', clientX, clientY));
-  return { root, cursor, isVisible, movePointer };
+  const moveOver = (target: HTMLElement, clientX = 0, clientY = 0) =>
+    target.dispatchEvent(pointerEvent('pointermove', clientX, clientY));
+  const movePointer = (clientX: number, clientY: number) => moveOver(canvas, clientX, clientY);
+  return { root, canvas, panel, cursor, isVisible, movePointer, moveOver };
 }
 
 describe('BrushCursor — 撒 Pin 的筆刷圓圈游標（issue #69 / V2 T3-5）', () => {
@@ -43,6 +49,22 @@ describe('BrushCursor — 撒 Pin 的筆刷圓圈游標（issue #69 / V2 T3-5）
     cursor.setActive(true);
     expect(isVisible()).toBe(false); // 指標還沒進來，先不要憑空冒出一個圓圈
     movePointer(10, 10);
+    expect(isVisible()).toBe(true);
+    cursor.destroy();
+  });
+
+  // 控制面板也是 root 的子元素，事件照樣冒泡上來——只看「在 root 範圍內」
+  // 的話，圓圈會跟著滑到面板上，半徑大時外緣還會露在畫布上（issue #69 檢視回饋）。
+  it('指標移到控制面板等非畫布元素上 → 收起來，不跟著跑出畫布', () => {
+    const { panel, cursor, isVisible, movePointer, moveOver } = makeCursor();
+    cursor.setActive(true);
+    movePointer(10, 10);
+    expect(isVisible()).toBe(true);
+
+    moveOver(panel, 5, 5);
+    expect(isVisible()).toBe(false);
+
+    movePointer(20, 20); // 回到畫布上 → 重新出現
     expect(isVisible()).toBe(true);
     cursor.destroy();
   });
