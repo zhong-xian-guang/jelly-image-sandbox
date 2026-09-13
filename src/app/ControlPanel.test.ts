@@ -37,6 +37,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       fanStrength: 4000,
       fanFalloffExponent: 2,
       fanFrequency: 2,
+      showFormationHint: true,
     },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     fanWidthRange: { min: 20, max: 400, step: 5 },
@@ -55,6 +56,9 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onFanStrengthChange: vi.fn(),
     onFanFalloffChange: vi.fn(),
     onFanFrequencyChange: vi.fn(),
+    onFormationDefineStart: vi.fn(),
+    onFormationDefineEnd: vi.fn(),
+    onShowFormationHintChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -487,7 +491,7 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
 
     const select = findToolSelect(panel);
     expect(select.value).toBe('general');
-    expect([...select.options].map((o) => o.value)).toEqual(['general', 'fan']);
+    expect([...select.options].map((o) => o.value)).toEqual(['general', 'fan', 'formation']);
   });
 
   it('切換選項 → onToolChange 收到新值', () => {
@@ -559,7 +563,9 @@ describe('ControlPanel — 切到非一般操作的工具時鎖住 Pin 控制項
   });
 
   it('切回「一般操作」→ 解鎖、提示重新隱藏，且不強制取消勾選 Pin 模式', () => {
-    const panel = new ControlPanel(makeOptions({ initial: { ...makeOptions().initial, pinMode: true } }));
+    const panel = new ControlPanel(
+      makeOptions({ initial: { ...makeOptions().initial, pinMode: true } }),
+    );
     const select = findToolSelect(panel);
 
     select.value = 'fan';
@@ -571,6 +577,31 @@ describe('ControlPanel — 切到非一般操作的工具時鎖住 Pin 控制項
     expect(clearPinsButton(panel).disabled).toBe(false);
     expect(toolLockHint(panel).hidden).toBe(true);
     expect(pinCheckbox(panel).checked).toBe(true); // 鎖住期間沒被強制取消勾選
+  });
+
+  // issue #68 事後檢視：Pin 模式在非一般操作工具下其實不生效（見
+  // `JellySandbox.pinModeActive`），所以「作用中」的強調色也要跟著熄掉，
+  // 不然會跟旁邊「Pin 暫時無法使用」的提示自相矛盾。
+  it('Pin 模式勾著時切到別的工具 → 「作用中」強調色熄掉；切回一般操作 → 恢復', () => {
+    const panel = new ControlPanel(
+      makeOptions({ initial: { ...makeOptions().initial, pinMode: true } }),
+    );
+    const select = findToolSelect(panel);
+    const label = () =>
+      [...panel.element.querySelectorAll('label')].find((l) =>
+        l.textContent?.includes('Pin 模式'),
+      ) as HTMLElement;
+
+    expect(label().classList.contains('jelly-pin-mode-active')).toBe(true);
+
+    select.value = 'formation';
+    select.dispatchEvent(new Event('change'));
+    expect(label().classList.contains('jelly-pin-mode-active')).toBe(false);
+    expect(pinCheckbox(panel).checked).toBe(true); // 勾選狀態本身不動
+
+    select.value = 'general';
+    select.dispatchEvent(new Event('change'));
+    expect(label().classList.contains('jelly-pin-mode-active')).toBe(true);
   });
 
   it('「顯示 Pin」關閉時切回「一般操作」——兩個鎖住理由是 OR，顯示 Pin 這個理由仍生效', () => {
@@ -636,6 +667,36 @@ describe('ControlPanel — 沙盒工具收合區塊（issue #67 事後檢視追�
       makeOptions({ initial: { ...makeOptions().initial, activeTool: 'fan' } }),
     );
     expect(fanParams(panel).hidden).toBe(false);
+  });
+
+  // issue #68 事後檢視：兩個工具上線後，使用者回報兩組參數在面板上混在一起。
+  // 根因是 CSS（`.jelly-tool-params` 的 `display: flex` 蓋掉 `[hidden]`，jsdom
+  // 載不到樣式表所以測不出來），這裡守的是另一半：同一時間最多只有一組
+  // 參數區塊的 `hidden` 是 false，而且每組都帶自己的標題。
+  it('任一時刻最多只有一組工具參數區塊沒有 hidden', () => {
+    const panel = new ControlPanel(makeOptions());
+    const select = findToolSelect(panel);
+    const blocks = () => [...panel.element.querySelectorAll('.jelly-tool-params')] as HTMLElement[];
+    const visibleCount = () => blocks().filter((el) => !el.hidden).length;
+
+    expect(blocks()).toHaveLength(2); // 電風扇 + 編隊抓取
+    expect(visibleCount()).toBe(0); // 一般操作：兩組都收起來
+
+    select.value = 'fan';
+    select.dispatchEvent(new Event('change'));
+    expect(visibleCount()).toBe(1);
+
+    select.value = 'formation';
+    select.dispatchEvent(new Event('change'));
+    expect(visibleCount()).toBe(1);
+  });
+
+  it('每組工具參數區塊都有自己的標題', () => {
+    const panel = new ControlPanel(makeOptions());
+    const titles = [...panel.element.querySelectorAll('.jelly-tool-params-title')].map(
+      (el) => el.textContent,
+    );
+    expect(titles).toEqual(['電風扇', '編隊抓取']);
   });
 });
 
@@ -727,5 +788,81 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     input.value = '5';
     input.dispatchEvent(new Event('input'));
     expect(opts.onFanFrequencyChange).toHaveBeenCalledWith(5);
+  });
+});
+
+describe('ControlPanel — 編隊抓取控制項（issue #68 / V2 T3-4）', () => {
+  function findToolSelect(panel: ControlPanel): HTMLSelectElement {
+    return [...panel.element.querySelectorAll('select')].find((s) =>
+      s.querySelector('option[value="formation"]'),
+    ) as HTMLSelectElement;
+  }
+
+  function switchToFormation(panel: ControlPanel): void {
+    const select = findToolSelect(panel);
+    select.value = 'formation';
+    select.dispatchEvent(new Event('change'));
+  }
+
+  function formationParams(panel: ControlPanel): HTMLElement {
+    return [...panel.element.querySelectorAll('.jelly-tool-params')].find((el) =>
+      el.textContent?.includes('編隊'),
+    ) as HTMLElement;
+  }
+
+  function defineButton(panel: ControlPanel): HTMLButtonElement {
+    return [...formationParams(panel).querySelectorAll('button')][0] as HTMLButtonElement;
+  }
+
+  it('切到「編隊抓取」→ onToolChange 收到 "formation"，專屬參數區塊顯示、電風扇區塊隱藏', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    switchToFormation(panel);
+
+    expect(opts.onToolChange).toHaveBeenCalledWith('formation');
+    expect(formationParams(panel).hidden).toBe(false);
+  });
+
+  it('初始工具就是「編隊抓取」→ 專屬參數區塊一開始就顯示', () => {
+    const panel = new ControlPanel(
+      makeOptions({ initial: { ...makeOptions().initial, activeTool: 'formation' } }),
+    );
+    expect(formationParams(panel).hidden).toBe(false);
+  });
+
+  it('「顯示編隊抓取提示」checkbox 初始值來自 initial.showFormationHint，切換觸發 onShowFormationHintChange', () => {
+    const opts = makeOptions({ initial: { ...makeOptions().initial, showFormationHint: false } });
+    const panel = new ControlPanel(opts);
+
+    const label = [...panel.element.querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('顯示編隊抓取提示'),
+    );
+    expect(label).toBeDefined();
+    const checkbox = label!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    expect(opts.onShowFormationHintChange).toHaveBeenCalledWith(true);
+  });
+
+  it('按鈕依狀態換文字：開始設定形狀 → 完成設定 → 重新設定編隊形狀，各自呼叫對應回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    switchToFormation(panel);
+    const button = defineButton(panel);
+
+    expect(button.textContent).toBe('開始設定形狀');
+    button.click();
+    expect(opts.onFormationDefineStart).toHaveBeenCalledTimes(1);
+    expect(button.textContent).toBe('完成設定');
+
+    button.click();
+    expect(opts.onFormationDefineEnd).toHaveBeenCalledTimes(1);
+    expect(button.textContent).toBe('重新設定編隊形狀');
+
+    button.click();
+    expect(opts.onFormationDefineStart).toHaveBeenCalledTimes(2);
+    expect(button.textContent).toBe('完成設定');
   });
 });

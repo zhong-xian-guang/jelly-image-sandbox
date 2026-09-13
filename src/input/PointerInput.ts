@@ -88,6 +88,28 @@ export class PointerInput {
     this.tracker.setFanParams(params);
   }
 
+  /** 轉發給 `ToolRouter`（issue #68）——面板「開始設定形狀」／「完成設定」按鈕呼叫。 */
+  beginFormationDefine(): void {
+    this.tracker.beginFormationDefine();
+  }
+
+  endFormationDefine(): void {
+    this.tracker.endFormationDefine();
+  }
+
+  /** 供 `FormationOverlay` 每幀讀（issue #68）——`JellySandbox.frame` 用來投影成螢幕座標。 */
+  get isDefiningFormation(): boolean {
+    return this.tracker.isDefiningFormation;
+  }
+
+  get formationDefinePreview(): readonly Point[] {
+    return this.tracker.formationDefinePreview;
+  }
+
+  get formationActiveGroups(): ToolRouter['formationActiveGroups'] {
+    return this.tracker.formationActiveGroups;
+  }
+
   private localXY(ev: PointerEvent): [number, number] {
     const r = this.target.getBoundingClientRect();
     return [ev.clientX - r.left, ev.clientY - r.top];

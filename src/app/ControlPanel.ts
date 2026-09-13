@@ -135,6 +135,8 @@ export interface ControlPanelInitial {
   fanStrength: number;
   fanFalloffExponent: number;
   fanFrequency: number;
+  /** 編隊抓取形狀標記顯示開關的初始值（issue #68）。 */
+  showFormationHint: boolean;
 }
 
 /** 一個數值滑桿的範圍（issue #67 抽出——`tapStrengthRange` 與三個電風扇範圍共用同一形狀）。 */
@@ -200,6 +202,16 @@ export interface ControlPanelOptions {
   onFanStrengthChange: (strength: number) => void;
   onFanFalloffChange: (falloffExponent: number) => void;
   onFanFrequencyChange: (frequency: number) => void;
+  /**
+   * 「開始設定形狀」／「重新設定編隊形狀」按鈕被按（issue #68）——面板用同一顆
+   * 按鈕依目前是否在定義中／是否已有形狀切換文字（見 `formationParams`），按下
+   * 時進入定義模式；`onFormationDefineEnd` 是它在定義中被按第二次（此時文字是
+   * 「完成設定」）時呼叫。
+   */
+  onFormationDefineStart: () => void;
+  onFormationDefineEnd: () => void;
+  /** 「顯示編隊抓取提示」開關（issue #68）——同 `onShowFanRangeChange` 的理由，純視覺。 */
+  onShowFormationHintChange: (visible: boolean) => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -422,9 +434,7 @@ export class ControlPanel {
     // ／`showFanIcon` 的說明）。這整包只在「目前工具」是電風扇時才需要看到
     // （見下方 `toolSection`），先組起來、`hidden` 交給 `toolSection` 依目前
     // 工具切換。
-    const fanParams = document.createElement('div');
-    fanParams.className = 'jelly-tool-params';
-    fanParams.append(
+    const fanParams = this.toolParams('電風扇', [
       this.checkboxRow('顯示風扇範圍', opts.initial.showFanRange, opts.onShowFanRangeChange),
       this.checkboxRow('顯示風扇圖示', opts.initial.showFanIcon, opts.onShowFanIconChange),
       fanWidth.row,
@@ -432,12 +442,27 @@ export class ControlPanel {
       fanFalloff.row,
       fanFrequency.row,
       this.buttonRow('移除風扇', opts.onRemoveFan),
-    );
+    ]);
 
-    const toolSection = this.toolSection(opts.initial.activeTool, fanParams, (t) => {
-      opts.onToolChange(t);
-      pins.setToolLocked(t !== 'general');
-    });
+    // 編隊抓取專屬參數（issue #68）：「顯示提示」+ 一顆依定義狀態換文字的按鈕
+    // （見 `formationDefineRow`），比照 `fanParams` 的收合模式。
+    const formationParams = this.toolParams('編隊抓取', [
+      this.checkboxRow(
+        '顯示編隊抓取提示',
+        opts.initial.showFormationHint,
+        opts.onShowFormationHintChange,
+      ),
+      this.formationDefineRow(opts.onFormationDefineStart, opts.onFormationDefineEnd),
+    ]);
+
+    const toolSection = this.toolSection(
+      opts.initial.activeTool,
+      { fan: fanParams, formation: formationParams },
+      (t) => {
+        opts.onToolChange(t);
+        pins.setToolLocked(t !== 'general');
+      },
+    );
 
     panel.append(
       this.perfStatus,
@@ -718,6 +743,7 @@ export class ControlPanel {
     for (const [value, text] of [
       ['general', '一般操作'],
       ['fan', '電風扇'],
+      ['formation', '編隊抓取'],
     ] as const) {
       const option = document.createElement('option');
       option.value = value;
@@ -732,17 +758,17 @@ export class ControlPanel {
   }
 
   /**
-   * 「沙盒工具」可折疊區塊（issue #67 事後檢視追加）——「目前工具」選擇器 +
-   * 目前選中工具的專屬參數，包進一個預設收合的 `<details>`。理由：後續會
-   * 陸續加編隊抓取／撒 Pin／移除 Pin 三個工具，每個都有自己的專屬參數列，
-   * 攤在面板最上層只會越疊越長、越來越擠；收合起來預設只看到一行
-   * 「▸ 沙盒工具」，需要用某個工具時才展開。目前只有電風扇一組專屬參數
-   * （`fanParams`），之後每個新工具依樣把自己的參數區塊傳進來、依「目前
-   * 工具」用 `hidden` 切換顯示／隱藏即可（比照這裡 `fanParams` 的做法）。
+   * 「沙盒工具」可折疊區塊（issue #67 事後檢視追加；issue #68 把單一 `fanParams`
+   * 參數推廣成「每個非一般操作工具各自一塊」的映射）——「目前工具」選擇器 +
+   * 目前選中工具的專屬參數，包進一個預設收合的 `<details>`。理由：後續還會
+   * 陸續加撒 Pin／移除 Pin 兩個工具，每個都有自己的專屬參數列，攤在面板最上層
+   * 只會越疊越長、越來越擠；收合起來預設只看到一行「▸ 沙盒工具」，需要用某個
+   * 工具時才展開。之後每個新工具依樣把自己的參數區塊加進 `toolParams`、依「目前
+   * 工具」用 `hidden` 切換顯示／隱藏即可。
    */
   private toolSection(
     initialTool: ToolId,
-    fanParams: HTMLElement,
+    toolParams: Partial<Record<Exclude<ToolId, 'general'>, HTMLElement>>,
     onChange: (tool: ToolId) => void,
   ): HTMLDetailsElement {
     const details = document.createElement('details');
@@ -752,14 +778,76 @@ export class ControlPanel {
     summary.textContent = '沙盒工具';
     details.appendChild(summary);
 
-    fanParams.hidden = initialTool !== 'fan';
+    const applyVisibility = (tool: ToolId): void => {
+      for (const [key, el] of Object.entries(toolParams)) {
+        if (el) el.hidden = key !== tool;
+      }
+    };
+    applyVisibility(initialTool);
+
     const tool = this.toolRow(initialTool, (t) => {
       onChange(t);
-      fanParams.hidden = t !== 'fan';
+      applyVisibility(t);
     });
 
-    details.append(tool.row, fanParams);
+    details.append(tool.row, ...Object.values(toolParams).filter((el): el is HTMLElement => !!el));
     return details;
+  }
+
+  /**
+   * 一組工具專屬參數的外框（issue #68 事後檢視追加）——標題 + 內容列，外觀
+   * （左側色條、淡背景、`[hidden]` 真的隱藏）見 `style.css` 的
+   * `.jelly-tool-params`。原本每個工具各自裸建一個 `div.jelly-tool-params`，
+   * 兩個工具上線後在面板上看起來像同一串混在一起的參數（使用者事後檢視
+   * 回報），所以統一收進這裡、每組都帶自己的標題。
+   */
+  private toolParams(title: string, rows: readonly HTMLElement[]): HTMLElement {
+    const box = document.createElement('div');
+    box.className = 'jelly-tool-params';
+
+    const heading = document.createElement('div');
+    heading.className = 'jelly-tool-params-title';
+    heading.textContent = title;
+
+    box.append(heading, ...rows);
+    return box;
+  }
+
+  /**
+   * 編隊抓取「開始設定形狀」／「完成設定」／「重新設定編隊形狀」按鈕（issue #68）
+   * ——同一顆按鈕依內部狀態換文字，不是三顆各自獨立的按鈕：還沒定義過形狀時
+   * 顯示「開始設定形狀」；按下後進入定義中，文字換成「完成設定」；再按一次結束
+   * 定義（`onFormationDefineEnd`），這之後（已經有形狀）按鈕文字變成「重新設定
+   * 編隊形狀」，再按一次等同重新開始定義、覆蓋掉舊形狀——功能上跟「開始設定
+   * 形狀」完全一樣，只是文字反映「這次是覆蓋，不是從零開始」。
+   */
+  private formationDefineRow(onStart: () => void, onEnd: () => void): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'jelly-control-row';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    let defining = false;
+    let hasShape = false;
+    const updateText = (): void => {
+      button.textContent = defining ? '完成設定' : hasShape ? '重新設定編隊形狀' : '開始設定形狀';
+    };
+    updateText();
+
+    button.addEventListener('click', () => {
+      if (defining) {
+        onEnd();
+        defining = false;
+        hasShape = true;
+      } else {
+        onStart();
+        defining = true;
+      }
+      updateText();
+    });
+
+    row.append(button);
+    return row;
   }
 
   private boundaryRow(
@@ -835,12 +923,11 @@ export class ControlPanel {
     pinRow.className = 'jelly-control-row';
 
     const pinLabel = document.createElement('label');
-    pinLabel.classList.toggle('jelly-pin-mode-active', initialPinMode);
     const pinCheckbox = document.createElement('input');
     pinCheckbox.type = 'checkbox';
     pinCheckbox.checked = initialPinMode;
     pinCheckbox.addEventListener('change', () => {
-      pinLabel.classList.toggle('jelly-pin-mode-active', pinCheckbox.checked);
+      recomputeActiveHighlight();
       onPinModeChange(pinCheckbox.checked);
     });
     pinLabel.append(pinCheckbox, 'Pin 模式');
@@ -864,7 +951,18 @@ export class ControlPanel {
       pinCheckbox.disabled = locked;
       clearButton.disabled = locked;
     };
+    /**
+     * 「Pin 模式作用中」的強調色（issue #68 事後檢視修正）——勾選框勾著**且**
+     * 沒有被工具鎖住才亮。切到編隊抓取這類工具時 Pin 模式其實不生效（見
+     * `JellySandbox.pinModeActive`），還讓文字維持高亮就會變成「橘色說我在
+     * 作用中、旁邊的提示說我無法使用」自相矛盾。勾選狀態本身不動——切回
+     * 一般操作就直接恢復作用、也恢復高亮。
+     */
+    const recomputeActiveHighlight = (): void => {
+      pinLabel.classList.toggle('jelly-pin-mode-active', pinCheckbox.checked && !toolLocked);
+    };
     recomputeLock();
+    recomputeActiveHighlight();
 
     const showRow = this.checkboxRow('顯示 Pin', initialShowPins, (visible) => {
       onShowPinsChange(visible);
@@ -873,7 +971,7 @@ export class ControlPanel {
       if (!visible && pinCheckbox.checked) {
         // 看不到 Pin 了，不能讓 Pin 模式繼續默默放看不到的 Pin。
         pinCheckbox.checked = false;
-        pinLabel.classList.remove('jelly-pin-mode-active');
+        recomputeActiveHighlight();
         onPinModeChange(false);
       }
     });
@@ -882,6 +980,7 @@ export class ControlPanel {
       toolLocked = locked;
       toolHint.hidden = !locked;
       recomputeLock();
+      recomputeActiveHighlight();
     };
 
     return { rows: [showRow, pinRow, toolHint], setToolLocked };
