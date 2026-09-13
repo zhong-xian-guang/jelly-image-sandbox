@@ -160,6 +160,7 @@ import { DropImportInput } from './DropImportInput';
 import { clampFanIconRadiusPx, FanOverlay } from './FanOverlay';
 import { FileImportInput } from './FileImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
+import { FormationOverlay, type FormationOverlayGroup } from './FormationOverlay';
 import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
 import {
@@ -274,6 +275,8 @@ export class JellySandbox {
   private readonly pinMarkers: PinMarkers;
   /** 電風扇矩形外框提示（issue #66）——比照 `pinMarkers`，每幀由 `frame()` 投影更新。 */
   private readonly fanOverlay: FanOverlay;
+  /** 編隊抓取形狀標記提示（issue #68）——同 `fanOverlay` 的模式。 */
+  private readonly formationOverlay: FormationOverlay;
   private readonly demoRunner = new DemoRunner();
   private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
@@ -312,6 +315,8 @@ export class JellySandbox {
    */
   private fanRangeVisible = true;
   private fanIconVisible = true;
+  /** 「顯示編隊抓取提示」開關（issue #68）——同 `fanRangeVisible` 的理由。 */
+  private formationHintVisible = true;
   /**
    * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿目前值（issue #67）
    * ——`PointerInput` 沒有 getter，這裡另存一份供：(a) 面板初始值、
@@ -446,6 +451,7 @@ export class JellySandbox {
         fanStrength: this.fanStrength,
         fanFalloffExponent: this.fanFalloffExponent,
         fanFrequency: this.fanFrequency,
+        showFormationHint: this.formationHintVisible,
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
       fanWidthRange: FAN_WIDTH_RANGE,
@@ -464,6 +470,9 @@ export class JellySandbox {
       onFanStrengthChange: (strength) => this.setFanStrength(strength),
       onFanFalloffChange: (falloffExponent) => this.setFanFalloffExponent(falloffExponent),
       onFanFrequencyChange: (frequency) => this.setFanFrequency(frequency),
+      onFormationDefineStart: () => this.input.beginFormationDefine(),
+      onFormationDefineEnd: () => this.input.endFormationDefine(),
+      onShowFormationHintChange: (visible) => this.setFormationHintVisible(visible),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -501,6 +510,8 @@ export class JellySandbox {
     root.appendChild(this.pinMarkers.element);
     this.fanOverlay = new FanOverlay();
     root.appendChild(this.fanOverlay.element);
+    this.formationOverlay = new FormationOverlay();
+    root.appendChild(this.formationOverlay.element);
     this.applyPinModeCursor();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
@@ -1149,6 +1160,12 @@ export class JellySandbox {
     this.fanOverlay.setShowIcon(visible);
   }
 
+  /** 「顯示編隊抓取提示」開關（issue #68）——同 `setPinsVisible` 的理由。 */
+  private setFormationHintVisible(visible: boolean): void {
+    this.formationHintVisible = visible;
+    this.formationOverlay.setVisible(visible);
+  }
+
   /** 「顯示網格」開關（issue #14 追加，debug 用）——記在 `wireframeVisible`，`replaceJelly` 換新 `JellyRenderer` 時要重套。 */
   private setWireframeVisible(visible: boolean): void {
     this.wireframeVisible = visible;
@@ -1531,7 +1548,12 @@ export class JellySandbox {
     this.renderer.setCamera(this.cameraState.transform);
     this.renderer.render();
 
-    if (this.pinsVisible || this.fanRangeVisible || this.fanIconVisible) {
+    if (
+      this.pinsVisible ||
+      this.fanRangeVisible ||
+      this.fanIconVisible ||
+      this.formationHintVisible
+    ) {
       const canvasSize = this.canvasSize();
       if (this.pinsVisible) {
         this.pinMarkers.update(
@@ -1563,6 +1585,14 @@ export class JellySandbox {
             },
           },
         );
+      }
+      if (this.formationHintVisible) {
+        const project = (p: Point) =>
+          worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
+        const groups: FormationOverlayGroup[] = this.input.isDefiningFormation
+          ? [{ points: this.input.formationDefinePreview.map(project) }]
+          : this.input.formationActiveGroups.map((g) => ({ points: g.points.map(project) }));
+        this.formationOverlay.update(groups);
       }
     }
 

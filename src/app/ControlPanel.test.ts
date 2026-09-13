@@ -37,6 +37,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       fanStrength: 4000,
       fanFalloffExponent: 2,
       fanFrequency: 2,
+      showFormationHint: true,
     },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     fanWidthRange: { min: 20, max: 400, step: 5 },
@@ -55,6 +56,9 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onFanStrengthChange: vi.fn(),
     onFanFalloffChange: vi.fn(),
     onFanFrequencyChange: vi.fn(),
+    onFormationDefineStart: vi.fn(),
+    onFormationDefineEnd: vi.fn(),
+    onShowFormationHintChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -487,7 +491,7 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
 
     const select = findToolSelect(panel);
     expect(select.value).toBe('general');
-    expect([...select.options].map((o) => o.value)).toEqual(['general', 'fan']);
+    expect([...select.options].map((o) => o.value)).toEqual(['general', 'fan', 'formation']);
   });
 
   it('切換選項 → onToolChange 收到新值', () => {
@@ -559,7 +563,9 @@ describe('ControlPanel — 切到非一般操作的工具時鎖住 Pin 控制項
   });
 
   it('切回「一般操作」→ 解鎖、提示重新隱藏，且不強制取消勾選 Pin 模式', () => {
-    const panel = new ControlPanel(makeOptions({ initial: { ...makeOptions().initial, pinMode: true } }));
+    const panel = new ControlPanel(
+      makeOptions({ initial: { ...makeOptions().initial, pinMode: true } }),
+    );
     const select = findToolSelect(panel);
 
     select.value = 'fan';
@@ -727,5 +733,81 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     input.value = '5';
     input.dispatchEvent(new Event('input'));
     expect(opts.onFanFrequencyChange).toHaveBeenCalledWith(5);
+  });
+});
+
+describe('ControlPanel — 編隊抓取控制項（issue #68 / V2 T3-4）', () => {
+  function findToolSelect(panel: ControlPanel): HTMLSelectElement {
+    return [...panel.element.querySelectorAll('select')].find((s) =>
+      s.querySelector('option[value="formation"]'),
+    ) as HTMLSelectElement;
+  }
+
+  function switchToFormation(panel: ControlPanel): void {
+    const select = findToolSelect(panel);
+    select.value = 'formation';
+    select.dispatchEvent(new Event('change'));
+  }
+
+  function formationParams(panel: ControlPanel): HTMLElement {
+    return [...panel.element.querySelectorAll('.jelly-tool-params')].find((el) =>
+      el.textContent?.includes('編隊'),
+    ) as HTMLElement;
+  }
+
+  function defineButton(panel: ControlPanel): HTMLButtonElement {
+    return [...formationParams(panel).querySelectorAll('button')][0] as HTMLButtonElement;
+  }
+
+  it('切到「編隊抓取」→ onToolChange 收到 "formation"，專屬參數區塊顯示、電風扇區塊隱藏', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    switchToFormation(panel);
+
+    expect(opts.onToolChange).toHaveBeenCalledWith('formation');
+    expect(formationParams(panel).hidden).toBe(false);
+  });
+
+  it('初始工具就是「編隊抓取」→ 專屬參數區塊一開始就顯示', () => {
+    const panel = new ControlPanel(
+      makeOptions({ initial: { ...makeOptions().initial, activeTool: 'formation' } }),
+    );
+    expect(formationParams(panel).hidden).toBe(false);
+  });
+
+  it('「顯示編隊抓取提示」checkbox 初始值來自 initial.showFormationHint，切換觸發 onShowFormationHintChange', () => {
+    const opts = makeOptions({ initial: { ...makeOptions().initial, showFormationHint: false } });
+    const panel = new ControlPanel(opts);
+
+    const label = [...panel.element.querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('顯示編隊抓取提示'),
+    );
+    expect(label).toBeDefined();
+    const checkbox = label!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    expect(opts.onShowFormationHintChange).toHaveBeenCalledWith(true);
+  });
+
+  it('按鈕依狀態換文字：開始設定形狀 → 完成設定 → 重新設定編隊形狀，各自呼叫對應回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    switchToFormation(panel);
+    const button = defineButton(panel);
+
+    expect(button.textContent).toBe('開始設定形狀');
+    button.click();
+    expect(opts.onFormationDefineStart).toHaveBeenCalledTimes(1);
+    expect(button.textContent).toBe('完成設定');
+
+    button.click();
+    expect(opts.onFormationDefineEnd).toHaveBeenCalledTimes(1);
+    expect(button.textContent).toBe('重新設定編隊形狀');
+
+    button.click();
+    expect(opts.onFormationDefineStart).toHaveBeenCalledTimes(2);
+    expect(button.textContent).toBe('完成設定');
   });
 });

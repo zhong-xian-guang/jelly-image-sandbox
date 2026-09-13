@@ -455,3 +455,164 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
     ]);
   });
 });
+
+describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
+  it('切到編隊抓取但還沒定義形狀 → down 不 emit 任何事件', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('formation');
+    router.down(1, 0, 0, 0);
+    expect(events).toEqual([]);
+  });
+
+  it('定義兩點後在果凍上拖曳 → 兩個 grab（id 相異）+ 同步的 moveGrab + 兩個 release', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('formation');
+    router.beginFormationDefine();
+    router.down(1, 0, 0, 0); // 世界座標 (1000, 1000)：主點，偏移 (0,0)
+    router.down(1, 10, 0, 0); // 世界座標 (1010, 1000)：偏移 (10, 0)
+    router.endFormationDefine();
+
+    router.down(2, 100, 100, 0); // 世界座標 (1100, 1100)
+    router.move(2, 120, 100);
+    router.up(2, 120, 100, 50);
+
+    expect(events).toEqual([
+      { type: 'grab', id: 'formation:1:0', x: 1100, y: 1100 },
+      { type: 'grab', id: 'formation:1:1', x: 1110, y: 1100 },
+      { type: 'moveGrab', id: 'formation:1:0', x: 1120, y: 1100 },
+      { type: 'moveGrab', id: 'formation:1:1', x: 1130, y: 1100 },
+      { type: 'release', id: 'formation:1:0' },
+      { type: 'release', id: 'formation:1:1' },
+    ]);
+  });
+
+  it('定義中的 down 不 emit 任何事件（只記點）', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('formation');
+    router.beginFormationDefine();
+    router.down(1, 0, 0, 0);
+    router.down(1, 10, 0, 0);
+    router.down(1, 20, 0, 0);
+    expect(events).toEqual([]);
+  });
+
+  it('其中一點的 hitTest 回 false（落在果凍外）→ 只有另一點的 grab/release，不整組取消', () => {
+    const events: InputEvent[] = [];
+    const screenToWorld = vi.fn((x: number, y: number): Point => ({ x: x + 1000, y: y + 1000 }));
+    // 世界座標 x >= 1110 一律判定為落在果凍外（第二個偏移點 1110,1000 命中這條件）。
+    const router = new ToolRouter({
+      screenToWorld,
+      emit: (e) => events.push(e),
+      hitTest: (w) => w.x < 1110,
+    });
+    router.setActiveTool('formation');
+    router.beginFormationDefine();
+    router.down(1, 0, 0, 0); // (1000, 1000)
+    router.down(1, 10, 0, 0); // (1010, 1000) → 偏移 (10, 0)
+    router.endFormationDefine();
+
+    router.down(2, 100, 100, 0); // 世界座標 (1100, 1100)：主點在內、偏移點 (1110,1100) 在外
+    router.up(2, 100, 100, 50);
+
+    expect(events).toEqual([
+      { type: 'grab', id: 'formation:1:0', x: 1100, y: 1100 },
+      { type: 'release', id: 'formation:1:0' },
+    ]);
+  });
+
+  it('偏移量在拖曳中固定、不隨方向旋轉——不管往哪個方向拖，兩點的相對位移都一致', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('formation');
+    router.beginFormationDefine();
+    router.down(1, 0, 0, 0);
+    router.down(1, 10, 0, 0); // 偏移 (10, 0)
+    router.endFormationDefine();
+
+    router.down(2, 0, 0, 0); // (1000, 1000)
+    router.move(2, 5, 30); // 世界座標 (1005, 1030)：往斜下方拖
+    router.up(2, 5, 30, 50);
+
+    const moveEvents = events.filter((e) => e.type === 'moveGrab');
+    expect(moveEvents).toEqual([
+      { type: 'moveGrab', id: 'formation:1:0', x: 1005, y: 1030 },
+      { type: 'moveGrab', id: 'formation:1:1', x: 1015, y: 1030 }, // 仍然是主點 + (10, 0)
+    ]);
+  });
+
+  it('cancel → 對已附著的每個點送 release（跟一般 Grab 的 cancel 一樣，是活著的約束要真的放開）', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('formation');
+    router.beginFormationDefine();
+    router.down(1, 0, 0, 0);
+    router.down(1, 10, 0, 0);
+    router.endFormationDefine();
+
+    router.down(2, 0, 0, 0);
+    router.cancel(2);
+    router.cancel(2); // 已經清掉，不會二次 emit
+
+    expect(events.map((e) => e.type)).toEqual(['grab', 'grab', 'release', 'release']);
+  });
+
+  it('重新設定形狀（再呼叫一次 begin/end）→ 覆蓋掉舊形狀', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('formation');
+    router.beginFormationDefine();
+    router.down(1, 0, 0, 0);
+    router.down(1, 10, 0, 0);
+    router.endFormationDefine();
+    expect(router.formationShape).toEqual([
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+    ]);
+
+    router.beginFormationDefine();
+    router.down(1, 0, 0, 0);
+    router.down(1, 0, 20, 0);
+    router.down(1, 0, -20, 0);
+    router.endFormationDefine();
+    expect(router.formationShape).toEqual([
+      { x: 0, y: 0 },
+      { x: 0, y: 20 },
+      { x: 0, y: -20 },
+    ]);
+
+    router.down(2, 0, 0, 0);
+    expect(events.filter((e) => e.type === 'grab')).toHaveLength(3);
+  });
+
+  it('endFormationDefine 沒記到任何點 → 保留舊形狀不動', () => {
+    const { router } = makeRouter();
+    router.beginFormationDefine();
+    router.down(1, 0, 0, 0);
+    router.endFormationDefine();
+    const shape = router.formationShape;
+
+    router.beginFormationDefine();
+    router.endFormationDefine(); // 沒有任何 down
+    expect(router.formationShape).toEqual(shape);
+  });
+
+  it('切回一般操作 → 編隊抓取的 down 不再作用；切回編隊抓取後形狀仍在，恢復正常', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('formation');
+    router.beginFormationDefine();
+    router.down(1, 0, 0, 0);
+    router.endFormationDefine();
+
+    router.setActiveTool('general');
+    router.down(2, 0, 0, 0); // 一般操作的 grab
+    router.up(2, 0, 0, 500);
+
+    router.setActiveTool('formation');
+    router.down(3, 50, 50, 0);
+    router.up(3, 50, 50, 50);
+
+    expect(events).toEqual([
+      { type: 'grab', id: 2, x: 1000, y: 1000 },
+      { type: 'release', id: 2 },
+      { type: 'grab', id: 'formation:1:0', x: 1050, y: 1050 },
+      { type: 'release', id: 'formation:1:0' },
+    ]);
+  });
+});

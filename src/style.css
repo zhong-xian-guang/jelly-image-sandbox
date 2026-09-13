@@ -612,3 +612,38 @@ body {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/**
+ * 編隊抓取形狀標記（issue #68 / V2 T3-4）：同 `.jelly-fan-overlay` 的疊層模式，
+ * 內容是主點到每個偏移點的連線＋各點小圓（見 `FormationOverlay`）。定義形狀中
+ * 與拖曳中共用同一份 CSS，`update` 整批重繪節點，沒有「有沒有東西」的顯示
+ * 開關（沒有形狀／沒有拖曳時 `update([])`，SVG 內容自然是空的）。
+ */
+.jelly-formation-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.jelly-formation-overlay.is-hidden {
+  display: none;
+}
+
+.jelly-formation-overlay-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.jelly-formation-overlay-line {
+  stroke: rgba(160, 120, 255, 0.85);
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+}
+
+.jelly-formation-overlay-point {
+  fill: rgba(160, 120, 255, 0.9);
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 1.5;
+}
