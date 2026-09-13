@@ -213,12 +213,38 @@ body {
   margin-bottom: 4px;
 }
 
-/** 目前選中工具的專屬參數（issue #67 事後檢視追加）——跟 `.jelly-control-row` 一樣一行一項，靠左內縮一點區隔出「屬於某個工具」。 */
+/**
+ * 目前選中工具的專屬參數（issue #67 事後檢視追加；issue #68 事後檢視改成
+ * 有框有標題的一塊）——一行一項，用左側色條＋淡背景＋自己的標題框出「這一整
+ * 塊都屬於某個工具」，切換工具時不會跟另一個工具的參數看起來像同一串。
+ */
 .jelly-tool-params {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding-left: 4px;
+  padding: 4px 6px;
+  margin: 2px 0;
+  border-left: 3px solid rgba(90, 200, 255, 0.55);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/**
+ * `display: flex` 會蓋掉瀏覽器內建的 `[hidden] { display: none }`（作者樣式
+ * 優先於 UA 樣式）——issue #67 只有電風扇一組參數時不明顯，issue #68 加了
+ * 編隊抓取之後就變成兩組同時攤在面板上、看起來像一長串混在一起的參數
+ * （使用者事後檢視回報）。這條把 `hidden` 補回來，`toolSection` 依「目前
+ * 工具」切換 `el.hidden` 才真的有效。
+ */
+.jelly-tool-params[hidden] {
+  display: none;
+}
+
+/** 每組工具參數自己的標題（issue #68 事後檢視追加）——一眼看出底下這些滑桿／按鈕屬於哪個工具。 */
+.jelly-tool-params-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  opacity: 0.75;
 }
 
 /** Demo／Track 按鈕列前的小標題（issue #15、issue #29 追加）——跟其他控制項分區，一眼看出這區是自動演出／自己錄的。 */

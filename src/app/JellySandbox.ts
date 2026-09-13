@@ -512,7 +512,7 @@ export class JellySandbox {
     root.appendChild(this.fanOverlay.element);
     this.formationOverlay = new FormationOverlay();
     root.appendChild(this.formationOverlay.element);
-    this.applyPinModeCursor();
+    this.applyPinModeVisuals();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
     // 看到「群組」這個概念、按「＋ 新增群組」（issue #43）。
@@ -1029,27 +1029,44 @@ export class JellySandbox {
 
   /**
    * 「Pin 模式」開關（issue #14）——`attachInputHandlers` 的 `applyInput` 靠
-   * `pinModeEnabled` 轉接；這裡順便切畫布游標（十字）跟 Pin 標記的「可點掉」
+   * `pinModeActive` 轉接；這裡順便切畫布游標（十字）跟 Pin 標記的「可點掉」
    * 視覺（紅色脈動），兩者都是純粹的提示，不影響任何判定邏輯。
    */
   private setPinMode(enabled: boolean): void {
     this.pinModeEnabled = enabled;
-    this.applyPinModeCursor();
-    this.pinMarkers.setRemovable(enabled);
+    this.applyPinModeVisuals();
   }
 
-  private applyPinModeCursor(): void {
-    this.renderer.canvas.style.cursor = this.pinModeEnabled ? 'crosshair' : '';
+  /**
+   * Pin 模式**實際生效**與否（issue #68 事後檢視修正）——勾選框開著還不夠，
+   * 還要「目前工具」是一般操作。切到電風扇／編隊抓取這類新工具時，畫布手勢
+   * 整個被該工具接管，面板那邊早就把 Pin 控制項鎖住＋顯示「Pin 暫時無法使用」
+   * （issue #67，見 `ControlPanel.pinRows`）——但轉接這邊原本只看
+   * `pinModeEnabled`，先開 Pin 模式再切到編隊抓取，編隊送出的 `grab` 仍會被
+   * `routeForPinMode` 轉成 `pin`/`unpin`，變成「一次撒一排 Pin」：面板說的跟
+   * 實際行為對不上。「在一片範圍內一次撒／清一批 Pin」是撒 Pin／移除 Pin 兩
+   * 個工具的職責（issue #69 / #70），編隊抓取只管抓取。
+   */
+  private get pinModeActive(): boolean {
+    return this.pinModeEnabled && this.activeTool === 'general';
+  }
+
+  /** 游標（十字）＋ Pin 標記的「可點掉」紅色脈動——兩者都跟著 `pinModeActive` 走，見該 getter。 */
+  private applyPinModeVisuals(): void {
+    this.renderer.canvas.style.cursor = this.pinModeActive ? 'crosshair' : '';
+    this.pinMarkers.setRemovable(this.pinModeActive);
   }
 
   /**
    * 「目前工具」選擇器變更（issue #65 / V2 T3-1）——轉發給 `PointerInput.setActiveTool`；
    * `activeTool` 另外存一份給重新匯入圖片後換綁新 canvas 時重套（見 `attachInputHandlers`
-   * 呼叫處，比照 `applyPinModeCursor` 的手法）。
+   * 呼叫處，比照 `applyPinModeVisuals` 的手法）。切換工具會連帶改變 `pinModeActive`
+   * （見該 getter），所以游標／標記的視覺提示也要跟著重算。
    */
   private setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
     this.input.setActiveTool(tool);
+    this.applyPinModeVisuals();
   }
 
   /**
@@ -1408,7 +1425,7 @@ export class JellySandbox {
       renderer.canvas,
     ));
     this.renderer.setCamera(this.cameraState.transform);
-    this.applyPinModeCursor(); // 新 canvas 是全新元素，游標樣式要重套
+    this.applyPinModeVisuals(); // 新 canvas 是全新元素，游標樣式要重套
     this.input.setActiveTool(this.activeTool); // 新 PointerInput 預設回一般操作，要重套
     this.renderer.setWireframeVisible(this.wireframeVisible); // 新 JellyRenderer 預設隱藏，要重套
     this.renderer.setWallBounds(this.wallBox); // 新 JellyRenderer 預設沒有牆框，要重套
@@ -1428,7 +1445,7 @@ export class JellySandbox {
       hitTest,
       getFan: () => this.sim.fanState(),
       applyInput: (event) => {
-        const routed = routeForPinMode(event, this.pinModeEnabled, this.pinModeContext());
+        const routed = routeForPinMode(event, this.pinModeActive, this.pinModeContext());
         if (routed) {
           this.sim.applyInput(routed);
           this.trackRecorder.record(routed); // no-op 除非正在錄製（issue #29）

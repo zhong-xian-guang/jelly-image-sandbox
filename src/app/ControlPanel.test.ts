@@ -579,6 +579,31 @@ describe('ControlPanel — 切到非一般操作的工具時鎖住 Pin 控制項
     expect(pinCheckbox(panel).checked).toBe(true); // 鎖住期間沒被強制取消勾選
   });
 
+  // issue #68 事後檢視：Pin 模式在非一般操作工具下其實不生效（見
+  // `JellySandbox.pinModeActive`），所以「作用中」的強調色也要跟著熄掉，
+  // 不然會跟旁邊「Pin 暫時無法使用」的提示自相矛盾。
+  it('Pin 模式勾著時切到別的工具 → 「作用中」強調色熄掉；切回一般操作 → 恢復', () => {
+    const panel = new ControlPanel(
+      makeOptions({ initial: { ...makeOptions().initial, pinMode: true } }),
+    );
+    const select = findToolSelect(panel);
+    const label = () =>
+      [...panel.element.querySelectorAll('label')].find((l) =>
+        l.textContent?.includes('Pin 模式'),
+      ) as HTMLElement;
+
+    expect(label().classList.contains('jelly-pin-mode-active')).toBe(true);
+
+    select.value = 'formation';
+    select.dispatchEvent(new Event('change'));
+    expect(label().classList.contains('jelly-pin-mode-active')).toBe(false);
+    expect(pinCheckbox(panel).checked).toBe(true); // 勾選狀態本身不動
+
+    select.value = 'general';
+    select.dispatchEvent(new Event('change'));
+    expect(label().classList.contains('jelly-pin-mode-active')).toBe(true);
+  });
+
   it('「顯示 Pin」關閉時切回「一般操作」——兩個鎖住理由是 OR，顯示 Pin 這個理由仍生效', () => {
     const panel = new ControlPanel(
       makeOptions({ initial: { ...makeOptions().initial, showPins: false } }),
@@ -642,6 +667,36 @@ describe('ControlPanel — 沙盒工具收合區塊（issue #67 事後檢視追�
       makeOptions({ initial: { ...makeOptions().initial, activeTool: 'fan' } }),
     );
     expect(fanParams(panel).hidden).toBe(false);
+  });
+
+  // issue #68 事後檢視：兩個工具上線後，使用者回報兩組參數在面板上混在一起。
+  // 根因是 CSS（`.jelly-tool-params` 的 `display: flex` 蓋掉 `[hidden]`，jsdom
+  // 載不到樣式表所以測不出來），這裡守的是另一半：同一時間最多只有一組
+  // 參數區塊的 `hidden` 是 false，而且每組都帶自己的標題。
+  it('任一時刻最多只有一組工具參數區塊沒有 hidden', () => {
+    const panel = new ControlPanel(makeOptions());
+    const select = findToolSelect(panel);
+    const blocks = () => [...panel.element.querySelectorAll('.jelly-tool-params')] as HTMLElement[];
+    const visibleCount = () => blocks().filter((el) => !el.hidden).length;
+
+    expect(blocks()).toHaveLength(2); // 電風扇 + 編隊抓取
+    expect(visibleCount()).toBe(0); // 一般操作：兩組都收起來
+
+    select.value = 'fan';
+    select.dispatchEvent(new Event('change'));
+    expect(visibleCount()).toBe(1);
+
+    select.value = 'formation';
+    select.dispatchEvent(new Event('change'));
+    expect(visibleCount()).toBe(1);
+  });
+
+  it('每組工具參數區塊都有自己的標題', () => {
+    const panel = new ControlPanel(makeOptions());
+    const titles = [...panel.element.querySelectorAll('.jelly-tool-params-title')].map(
+      (el) => el.textContent,
+    );
+    expect(titles).toEqual(['電風扇', '編隊抓取']);
   });
 });
 

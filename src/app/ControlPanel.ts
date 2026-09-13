@@ -434,9 +434,7 @@ export class ControlPanel {
     // ／`showFanIcon` 的說明）。這整包只在「目前工具」是電風扇時才需要看到
     // （見下方 `toolSection`），先組起來、`hidden` 交給 `toolSection` 依目前
     // 工具切換。
-    const fanParams = document.createElement('div');
-    fanParams.className = 'jelly-tool-params';
-    fanParams.append(
+    const fanParams = this.toolParams('電風扇', [
       this.checkboxRow('顯示風扇範圍', opts.initial.showFanRange, opts.onShowFanRangeChange),
       this.checkboxRow('顯示風扇圖示', opts.initial.showFanIcon, opts.onShowFanIconChange),
       fanWidth.row,
@@ -444,20 +442,18 @@ export class ControlPanel {
       fanFalloff.row,
       fanFrequency.row,
       this.buttonRow('移除風扇', opts.onRemoveFan),
-    );
+    ]);
 
     // 編隊抓取專屬參數（issue #68）：「顯示提示」+ 一顆依定義狀態換文字的按鈕
     // （見 `formationDefineRow`），比照 `fanParams` 的收合模式。
-    const formationParams = document.createElement('div');
-    formationParams.className = 'jelly-tool-params';
-    formationParams.append(
+    const formationParams = this.toolParams('編隊抓取', [
       this.checkboxRow(
         '顯示編隊抓取提示',
         opts.initial.showFormationHint,
         opts.onShowFormationHintChange,
       ),
       this.formationDefineRow(opts.onFormationDefineStart, opts.onFormationDefineEnd),
-    );
+    ]);
 
     const toolSection = this.toolSection(
       opts.initial.activeTool,
@@ -799,6 +795,25 @@ export class ControlPanel {
   }
 
   /**
+   * 一組工具專屬參數的外框（issue #68 事後檢視追加）——標題 + 內容列，外觀
+   * （左側色條、淡背景、`[hidden]` 真的隱藏）見 `style.css` 的
+   * `.jelly-tool-params`。原本每個工具各自裸建一個 `div.jelly-tool-params`，
+   * 兩個工具上線後在面板上看起來像同一串混在一起的參數（使用者事後檢視
+   * 回報），所以統一收進這裡、每組都帶自己的標題。
+   */
+  private toolParams(title: string, rows: readonly HTMLElement[]): HTMLElement {
+    const box = document.createElement('div');
+    box.className = 'jelly-tool-params';
+
+    const heading = document.createElement('div');
+    heading.className = 'jelly-tool-params-title';
+    heading.textContent = title;
+
+    box.append(heading, ...rows);
+    return box;
+  }
+
+  /**
    * 編隊抓取「開始設定形狀」／「完成設定」／「重新設定編隊形狀」按鈕（issue #68）
    * ——同一顆按鈕依內部狀態換文字，不是三顆各自獨立的按鈕：還沒定義過形狀時
    * 顯示「開始設定形狀」；按下後進入定義中，文字換成「完成設定」；再按一次結束
@@ -908,12 +923,11 @@ export class ControlPanel {
     pinRow.className = 'jelly-control-row';
 
     const pinLabel = document.createElement('label');
-    pinLabel.classList.toggle('jelly-pin-mode-active', initialPinMode);
     const pinCheckbox = document.createElement('input');
     pinCheckbox.type = 'checkbox';
     pinCheckbox.checked = initialPinMode;
     pinCheckbox.addEventListener('change', () => {
-      pinLabel.classList.toggle('jelly-pin-mode-active', pinCheckbox.checked);
+      recomputeActiveHighlight();
       onPinModeChange(pinCheckbox.checked);
     });
     pinLabel.append(pinCheckbox, 'Pin 模式');
@@ -937,7 +951,18 @@ export class ControlPanel {
       pinCheckbox.disabled = locked;
       clearButton.disabled = locked;
     };
+    /**
+     * 「Pin 模式作用中」的強調色（issue #68 事後檢視修正）——勾選框勾著**且**
+     * 沒有被工具鎖住才亮。切到編隊抓取這類工具時 Pin 模式其實不生效（見
+     * `JellySandbox.pinModeActive`），還讓文字維持高亮就會變成「橘色說我在
+     * 作用中、旁邊的提示說我無法使用」自相矛盾。勾選狀態本身不動——切回
+     * 一般操作就直接恢復作用、也恢復高亮。
+     */
+    const recomputeActiveHighlight = (): void => {
+      pinLabel.classList.toggle('jelly-pin-mode-active', pinCheckbox.checked && !toolLocked);
+    };
     recomputeLock();
+    recomputeActiveHighlight();
 
     const showRow = this.checkboxRow('顯示 Pin', initialShowPins, (visible) => {
       onShowPinsChange(visible);
@@ -946,7 +971,7 @@ export class ControlPanel {
       if (!visible && pinCheckbox.checked) {
         // 看不到 Pin 了，不能讓 Pin 模式繼續默默放看不到的 Pin。
         pinCheckbox.checked = false;
-        pinLabel.classList.remove('jelly-pin-mode-active');
+        recomputeActiveHighlight();
         onPinModeChange(false);
       }
     });
@@ -955,6 +980,7 @@ export class ControlPanel {
       toolLocked = locked;
       toolHint.hidden = !locked;
       recomputeLock();
+      recomputeActiveHighlight();
     };
 
     return { rows: [showRow, pinRow, toolHint], setToolLocked };
