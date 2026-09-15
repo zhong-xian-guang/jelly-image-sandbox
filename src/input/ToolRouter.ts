@@ -43,6 +43,25 @@
  * 那些具體座標，重播時原樣送回去，不會重算隨機分佈——所以這裡刻意不需要有
  * 種子的 PRNG。
  *
+ * **移除 Pin**（issue #70 / V2 T3-6）：撒 Pin 的反向操作，但手勢形狀相反——它是
+ * **持續**的橡皮擦：`down` 開始一次擦除、`move` 沿路繼續擦、`up`／`cancel` 結束。
+ * 每次（含 `down` 當下那一次）用注入的 `listPins()` 掃一遍場上的 Pin，落在
+ * 「目前指標為圓心、`eraseRadius` 為半徑」的圓內就送既有的 `unpin` 事件——不新增
+ * `InputEvent` 種類，被清掉的 Pin 跟使用者自己點掉的完全一樣。半徑跟撒 Pin 的
+ * 半徑是兩個各自獨立的欄位（`setEraseParams` vs. `setSprayParams`）：兩個工具在
+ * 手感上是分開調的，共用一個值會讓「撒得密一點、擦得準一點」變成不可能。
+ *
+ * 每次手勢記一組本次已經送過 `unpin` 的 Pin id（`EraseSession.erasedPinIds`），
+ * `up`／`cancel` 時連同 session 一起丟掉。真實路徑上 `emit` 是同步進
+ * `sim.applyInput` 的，下一次
+ * `listPins()` 本來就讀不到已經清掉的那顆——但這條保證來自呼叫端的接線方式，
+ * 不是這個類別能自己看到的事；擦除又是每次 `move` 都重掃一遍的高頻迴圈，多送
+ * 一次 `unpin` 在別的接線方式下（例如事件先進佇列、下一幀才套用）就會變成
+ * 重複事件寫進 Track。記一組 id 是這裡自己把這件事關死。
+ *
+ * 只作用於 Pin：不碰 `release`，所以一般 Grab（含還跟著別的指標走的那些）完全
+ * 不受影響。
+ *
  * **電風扇**（issue #66；ADR-0010 v1 單一實例）：`down` 先問 `getFan` 場上目前
  * 有沒有風扇、世界座標是否落在它的矩形內（`isPointInFanRect`）——落在裡面＝
  * 「拖曳既有風扇」（`FanMoveSession`，issue #67 事後追加：使用者不必每次都
@@ -80,10 +99,11 @@ import { isPointInFanRect, type FanState, type PinInfo, type PointerId, type Poi
 import { GestureTracker, type GestureTrackerOptions } from './GestureTracker';
 
 /**
- * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）加進
- * ADR-0011 選擇器；`'general'` 維持既有 Grab/Pin/Tap 手勢。
+ * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）、
+ * `'erase'`（issue #70，＝「移除 Pin」）加進 ADR-0011 選擇器；`'general'` 維持
+ * 既有 Grab/Pin/Tap 手勢。
  */
-export type ToolId = 'general' | 'fan' | 'formation' | 'spray';
+export type ToolId = 'general' | 'fan' | 'formation' | 'spray' | 'erase';
 
 export const DEFAULT_TOOL: ToolId = 'general';
 
@@ -125,6 +145,18 @@ export interface SprayParams {
   spacing: number;
 }
 
+/**
+ * 移除 Pin 的橡皮擦半徑預設值（issue #70）——`setEraseParams` 可在執行期間覆寫。
+ * 刻意跟 `DEFAULT_SPRAY_RADIUS` 是兩個各自獨立的常數（見類別頂端說明）。
+ */
+export const DEFAULT_ERASE_RADIUS = 100;
+
+/** `setEraseParams` 接受的部分更新（issue #70）——目前只有半徑一個欄位。 */
+export interface EraseParams {
+  /** 橡皮擦的世界座標半徑（圓心 = 指標目前位置）。 */
+  radius: number;
+}
+
 export interface ToolRouterOptions extends GestureTrackerOptions {
   /**
    * 場上目前的電風扇幾何（issue #67 追加）——`down` 落在既有風扇矩形內時，
@@ -136,7 +168,9 @@ export interface ToolRouterOptions extends GestureTrackerOptions {
   /**
    * 場上目前的 Pin 清單（issue #69，接 `SimCore.listPins()`）——撒 Pin 時新的
    * 候選點跟既有 Pin 也要保持 ≥ 間距，不然在已經撒過的地方再撒一次會疊成
-   * 一坨。不帶這個選項等同「場上沒有任何 Pin」，只跟這次撒出的候選互斥。
+   * 一坨；移除 Pin（issue #70）更是完全靠它——要擦掉哪幾顆，就是從這份清單裡
+   * 挑出落在橡皮擦圓內的。不帶這個選項等同「場上沒有任何 Pin」：撒 Pin 只跟
+   * 這次撒出的候選互斥，移除 Pin 則永遠沒有東西可擦。
    */
   listPins?: () => readonly PinInfo[];
   /**
@@ -186,6 +220,17 @@ interface FormationSession {
   attached: readonly { offset: Point; id: string }[];
 }
 
+/**
+ * 進行中的一次擦除手勢（issue #70）：`erasedPinIds` 是這次手勢裡已經送過 `unpin`
+ * 的 **Pin** id（`PinInfo.id`，跟 `eraseSessions` 那層的鍵——指標 id——是兩回事，
+ * 只是在這個專案裡兩者共用 `PointerId` 這個型別），避免同一顆在拖曳途中被重複送
+ * （見類別頂端說明）。`up`／`cancel` 連同整個 session 一起丟掉，下一次按下就是
+ * 乾淨的一組。
+ */
+interface EraseSession {
+  erasedPinIds: Set<PointerId>;
+}
+
 export class ToolRouter {
   private readonly gestureTracker: GestureTracker;
   private readonly screenToWorld: (x: number, y: number) => Point;
@@ -220,6 +265,10 @@ export class ToolRouter {
   private spraySpacing = DEFAULT_SPRAY_SPACING;
   /** 撒出的 Pin 合成 id 流水號（`spray:<n>`）——跨多次撒點遞增，各顆身分互不相干。 */
   private nextSprayPin = 1;
+  /** 橡皮擦半徑（issue #70）——面板滑桿即時寫入，跟 `sprayRadius` 各自獨立。 */
+  private eraseRadius = DEFAULT_ERASE_RADIUS;
+  /** 進行中的擦除手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
+  private readonly eraseSessions = new Map<PointerId, EraseSession>();
 
   constructor(opts: ToolRouterOptions) {
     this.gestureTracker = new GestureTracker(opts);
@@ -308,6 +357,15 @@ export class ToolRouter {
     if (params.spacing !== undefined) this.spraySpacing = params.spacing;
   }
 
+  /**
+   * 面板「移除 Pin 範圍半徑」滑桿的即時寫入口（issue #70）——比照
+   * `setSprayParams`，影響**下一次**擦除掃描（`eraseAt` 每次讀目前值），所以
+   * 拖曳途中調滑桿也會立刻反映在還沒擦到的那段路徑上。
+   */
+  setEraseParams(params: Partial<EraseParams>): void {
+    if (params.radius !== undefined) this.eraseRadius = params.radius;
+  }
+
   get currentTool(): ToolId {
     return this.activeTool;
   }
@@ -363,6 +421,13 @@ export class ToolRouter {
       // 撒 Pin 只有 `down` 有事做——點一下就完成，`move`/`up`/`cancel` 那三個
       // 方法因此沒有對應的分支（見類別頂端說明）。
       this.sprayOnce(this.screenToWorld(screenX, screenY));
+      return;
+    }
+    if (this.activeTool === 'erase') {
+      // 按下當下就擦一次——不必等到 move，點一下也該能清掉腳下那幾顆。
+      const session: EraseSession = { erasedPinIds: new Set() };
+      this.eraseSessions.set(id, session);
+      this.eraseAt(this.screenToWorld(screenX, screenY), session);
     }
   }
 
@@ -396,6 +461,13 @@ export class ToolRouter {
           y: world.y + offset.y,
         });
       }
+      return;
+    }
+    if (this.activeTool === 'erase') {
+      // 沒有進行中的手勢就不作用——橡皮擦是「按住拖過去才擦」，不是滑過就擦。
+      const session = this.eraseSessions.get(id);
+      if (!session) return;
+      this.eraseAt(this.screenToWorld(screenX, screenY), session);
     }
   }
 
@@ -419,6 +491,14 @@ export class ToolRouter {
     if (this.activeTool === 'formation') {
       if (this.formationDefinePoints) return; // 定義中：down 才算數
       this.releaseFormationSession(id);
+      return;
+    }
+    if (this.activeTool === 'erase') {
+      // `up` 跟 `cancel` 在這裡是同一件事：結束這次擦除、丟掉已處理集合。刻意
+      // **不**在放開當下再補擦一次——放開前瀏覽器一定送過同座標的 `move`，補的
+      // 那一次只會在 Track 上多錄一筆一模一樣的 `unpin`，還會讓 `up` 與 `cancel`
+      // 無謂地不對稱。
+      this.eraseSessions.delete(id);
     }
   }
 
@@ -437,6 +517,12 @@ export class ToolRouter {
       // 已經是活著的約束（`down` 就 emit 過 grab），跟一般 Grab 的 cancel 同一個
       // 道理：真的要放開，不能悄悄留著（見類別頂端說明）。
       this.releaseFormationSession(id);
+      return;
+    }
+    if (this.activeTool === 'erase') {
+      // 已經擦掉的 Pin 是既成事實，取消不會把它們變回來（比照拖曳風扇的 cancel
+      // 不回捲）——這裡只是停止繼續跟著指標擦。
+      this.eraseSessions.delete(id);
     }
   }
 
@@ -476,6 +562,31 @@ export class ToolRouter {
         y: candidate.y,
       });
     }
+  }
+
+  /**
+   * 擦一次（issue #70）——`down`／`move` 共用。掃一遍 `listPins()`，凡是
+   * 落在以 `center` 為圓心、`eraseRadius` 為半徑的圓內、且本次手勢還沒處理過的
+   * Pin，就送一次 `unpin` 並記進 `session.erasedPinIds`。
+   *
+   * 邊界用 `<=`：半徑滑桿上的數字就是「這一圈裡面的都會被擦掉」，剛好壓在圈上
+   * 的那顆算在裡面才符合圓圈視覺提示給人的預期。
+   *
+   * 刻意分兩段（先挑出 id、再逐一 emit）：呼叫端的 `emit` 通常是同步進
+   * `sim.applyInput`，也就是第一顆 `unpin` 送出去的當下，場上的 Pin 清單就已經
+   * 變了。邊走邊 emit 的話，如果 `listPins()` 回傳的是內部那份清單本身（而不是
+   * 每次都新配的快照），迴圈就會邊跑邊被抽掉元素、漏掉後面幾顆。
+   */
+  private eraseAt(center: Point, session: EraseSession): void {
+    const radius = Math.max(0, this.eraseRadius);
+    const hitPinIds: PointerId[] = [];
+    for (const pin of this.listPins?.() ?? []) {
+      if (session.erasedPinIds.has(pin.id)) continue;
+      if (Math.hypot(pin.point.x - center.x, pin.point.y - center.y) > radius) continue;
+      session.erasedPinIds.add(pin.id);
+      hitPinIds.push(pin.id);
+    }
+    for (const pinId of hitPinIds) this.emit({ type: 'unpin', id: pinId });
   }
 
   /** `up`／`cancel` 共用：對這次手勢裡每個已附著的點送 `release`，清掉 session。 */

@@ -11,8 +11,9 @@ export {
   DEFAULT_FAN_FREQUENCY,
   DEFAULT_SPRAY_RADIUS,
   DEFAULT_SPRAY_SPACING,
+  DEFAULT_ERASE_RADIUS,
 } from './ToolRouter';
-export type { ToolId, ToolRouterOptions, FanParams, SprayParams } from './ToolRouter';
+export type { ToolId, ToolRouterOptions, FanParams, SprayParams, EraseParams } from './ToolRouter';
 export { PointerInput } from './PointerInput';
 export type { PointerInputOptions } from './PointerInput';
 export { routeForPinMode } from './pinModeRouting';

@@ -700,3 +700,9 @@ body {
   border-radius: 50%;
   background: rgba(255, 190, 90, 0.1);
 }
+
+/* 撒 Pin（琥珀）／移除 Pin（紅）共用同一顆圓圈，只換顏色（issue #70）。 */
+.jelly-brush-cursor-circle.is-erase {
+  border-color: rgba(255, 105, 105, 0.9);
+  background: rgba(255, 105, 105, 0.12);
+}

@@ -113,6 +113,7 @@ import {
   DEFAULT_FAN_WIDTH,
   DEFAULT_SPRAY_RADIUS,
   DEFAULT_SPRAY_SPACING,
+  DEFAULT_ERASE_RADIUS,
   PointerInput,
   routeForPinMode,
 } from '../input';
@@ -146,7 +147,7 @@ import {
   type ClipState,
   type ClipTrack,
 } from './clipFile';
-import { BrushCursor } from './BrushCursor';
+import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { ControlPanel } from './ControlPanel';
 import { canvasToPng, createDefaultJelly } from './defaultJelly';
 import {
@@ -218,6 +219,13 @@ const FAN_FREQUENCY_RANGE = { min: 0.2, max: 10, step: 0.1 };
  */
 const SPRAY_RADIUS_RANGE = { min: 20, max: 400, step: 10 };
 const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
+/**
+ * 移除 Pin 的橡皮擦半徑範圍（issue #70），世界座標單位——沿用
+ * `SPRAY_RADIUS_RANGE` 的上下限（兩者都是「以指標為圓心的作用範圍」，尺度一樣
+ * 由果凍大小決定），但刻意是**另一條**滑桿、另一個狀態：撒的時候常常想撒一大片，
+ * 擦的時候多半想擦得精準一點，共用一個值會逼使用者每次切工具都重調。
+ */
+const ERASE_RADIUS_RANGE = { min: 20, max: 400, step: 10 };
 /**
  * Pin 模式下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
  * CSS 直徑（16px）同數量級，換算回世界座標時要除以目前相機縮放（見
@@ -353,6 +361,8 @@ export class JellySandbox {
    */
   private sprayRadius = DEFAULT_SPRAY_RADIUS;
   private spraySpacing = DEFAULT_SPRAY_SPACING;
+  /** 「移除 Pin 範圍半徑」滑桿目前值（issue #70）——用途同 `sprayRadius`。 */
+  private eraseRadius = DEFAULT_ERASE_RADIUS;
   /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
   private wireframeVisible = false;
   /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
@@ -480,6 +490,7 @@ export class JellySandbox {
         showFormationHint: this.formationHintVisible,
         sprayRadius: this.sprayRadius,
         spraySpacing: this.spraySpacing,
+        eraseRadius: this.eraseRadius,
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
       fanWidthRange: FAN_WIDTH_RANGE,
@@ -488,6 +499,7 @@ export class JellySandbox {
       fanFrequencyRange: FAN_FREQUENCY_RANGE,
       sprayRadiusRange: SPRAY_RADIUS_RANGE,
       spraySpacingRange: SPRAY_SPACING_RANGE,
+      eraseRadiusRange: ERASE_RADIUS_RANGE,
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
       onImportImage: () => this.fileImportInput.open(),
       onSaveClip: () => this.saveClip(),
@@ -505,6 +517,7 @@ export class JellySandbox {
       onShowFormationHintChange: (visible) => this.setFormationHintVisible(visible),
       onSprayRadiusChange: (radius) => this.setSprayRadius(radius),
       onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
+      onEraseRadiusChange: (radius) => this.setEraseRadius(radius),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -1106,9 +1119,23 @@ export class JellySandbox {
     this.activeTool = tool;
     this.input.setActiveTool(tool);
     this.applyPinModeVisuals();
-    // 筆刷圓圈游標只屬於撒 Pin 工具（issue #69）——不需要另外的顯示開關，選到
-    // 這個工具就看得到，切走就收起來。
-    this.brushCursor.setActive(tool === 'spray');
+    // 筆刷圓圈游標不需要另外的顯示開關，選到用得到它的工具就看得到，切走就收起來。
+    const brush = this.brushFor(tool);
+    if (brush) this.brushCursor.setVariant(brush.variant);
+    this.brushCursor.setActive(brush !== null);
+  }
+
+  /**
+   * 這個工具要不要筆刷圓圈游標、要什麼顏色、半徑讀哪一條滑桿（issue #69／#70）
+   * ——`null` = 不要。撒 Pin 與移除 Pin 共用同一顆圓圈、只有顏色與半徑來源不同
+   * （見 `BrushCursor`），這三件事綁在一起，收成一個地方才不會「切工具」
+   * （`setActiveTool`）跟「每幀換算半徑」（`frame`）兩處各判斷一次、日後加第三個
+   * 用得到圓圈的工具時漏改其中一處。
+   */
+  private brushFor(tool: ToolId): { variant: BrushVariant; radius: number } | null {
+    if (tool === 'spray') return { variant: 'spray', radius: this.sprayRadius };
+    if (tool === 'erase') return { variant: 'erase', radius: this.eraseRadius };
+    return null;
   }
 
   /** 「撒 Pin 範圍半徑」滑桿（issue #69）——下一次撒點用，同時是筆刷圓圈的大小。 */
@@ -1121,6 +1148,12 @@ export class JellySandbox {
   private setSpraySpacing(spacing: number): void {
     this.spraySpacing = spacing;
     this.input.setSprayParams({ spacing });
+  }
+
+  /** 「移除 Pin 範圍半徑」滑桿（issue #70）——橡皮擦範圍，同時是筆刷圓圈的大小。 */
+  private setEraseRadius(radius: number): void {
+    this.eraseRadius = radius;
+    this.input.setEraseParams({ radius });
   }
 
   /**
@@ -1481,8 +1514,10 @@ export class JellySandbox {
     this.renderer.setCamera(this.cameraState.transform);
     this.applyPinModeVisuals(); // 新 canvas 是全新元素，游標樣式要重套
     this.input.setActiveTool(this.activeTool); // 新 PointerInput 預設回一般操作，要重套
-    // 新 ToolRouter 的撒 Pin 參數也回到預設值，一併重套（issue #69）——比照上一行。
+    // 新 ToolRouter 的撒 Pin／移除 Pin 參數也回到預設值，一併重套（issue #69／#70）
+    // ——比照上一行。
     this.input.setSprayParams({ radius: this.sprayRadius, spacing: this.spraySpacing });
+    this.input.setEraseParams({ radius: this.eraseRadius });
     this.renderer.setWireframeVisible(this.wireframeVisible); // 新 JellyRenderer 預設隱藏，要重套
     this.renderer.setWallBounds(this.wallBox); // 新 JellyRenderer 預設沒有牆框，要重套
   }
@@ -1672,11 +1707,12 @@ export class JellySandbox {
       }
     }
 
-    // 筆刷圓圈游標（issue #69）：半徑是世界座標，每幀換算成目前縮放下的螢幕
-    // 像素——縮放改變時圓圈大小才跟著對。只在撒 Pin 工具下需要算（其餘時候
-    // 這層是隱藏的，`setRadiusPx` 值沒變本來也不寫 DOM）。
-    if (this.activeTool === 'spray') {
-      this.brushCursor.setRadiusPx(this.sprayRadius * this.cameraState.transform.scale);
+    // 筆刷圓圈游標（issue #69／#70）：半徑是世界座標，每幀換算成目前縮放下的
+    // 螢幕像素——縮放改變時圓圈大小才跟著對。用不到圓圈的工具不必算（那時這層
+    // 是隱藏的，`setRadiusPx` 值沒變本來也不寫 DOM）。
+    const brush = this.brushFor(this.activeTool);
+    if (brush) {
+      this.brushCursor.setRadiusPx(brush.radius * this.cameraState.transform.scale);
     }
 
     this.rafId = requestAnimationFrame(this.frame);
