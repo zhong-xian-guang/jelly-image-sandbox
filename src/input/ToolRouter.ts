@@ -28,6 +28,21 @@
  * 這裡跟一般 Grab 的 `cancel` 同一個道理（不是電風扇放置那種「還沒 emit 過任何
  * 東西」的狀態，已經是活著的約束，取消要真的放開，不能悄悄留著）。
  *
+ * **撒 Pin**（issue #69 / V2 T3-5）：點一下就完成的**單次**動作——`down` 以點擊
+ * 處為圓心、`sprayRadius` 為半徑撒一批 Pin，`move`／`up`／`cancel` 完全不作用
+ * （不是按住持續噴）。撒點用經典的 dart throwing：用注入的 `random`（預設
+ * `Math.random`——**執行期**隨機，每次撒的分佈都不一樣；重播的決定性不靠這裡，
+ * 見下段）在圓內反覆生成候選點，跟「這次已接受的候選」以及「注入的 `listPins`
+ * 回傳的既有 Pin」都要 ≥ `spraySpacing` 才接受，再用 `hitTest`（同編隊抓取，
+ * 語意上等同 issue 文件說的 `pick`）濾掉落在果凍外的，存活的才用合成 id
+ * （`spray:<counter>`，跨多次撒點遞增、不重複）送既有的 `pin` 事件——不新增
+ * `InputEvent` 種類，撒出來的每顆之後就跟手動放的 Pin 完全一樣（可單獨拖曳／
+ * 解除／甩不掉）。
+ *
+ * 重播的決定性：`pin` 事件本身帶著算好的絕對 `x`/`y`，`TrackRecorder` 錄的是
+ * 那些具體座標，重播時原樣送回去，不會重算隨機分佈——所以這裡刻意不需要有
+ * 種子的 PRNG。
+ *
  * **電風扇**（issue #66；ADR-0010 v1 單一實例）：`down` 先問 `getFan` 場上目前
  * 有沒有風扇、世界座標是否落在它的矩形內（`isPointInFanRect`）——落在裡面＝
  * 「拖曳既有風扇」（`FanMoveSession`，issue #67 事後追加：使用者不必每次都
@@ -61,14 +76,14 @@
  * `sim.applyInput({ type: 'clearFan' })`（見該檔 `removeFan`）。
  */
 
-import { isPointInFanRect, type FanState, type PointerId, type Point } from '../sim';
+import { isPointInFanRect, type FanState, type PinInfo, type PointerId, type Point } from '../sim';
 import { GestureTracker, type GestureTrackerOptions } from './GestureTracker';
 
 /**
- * `'fan'`（issue #66）、`'formation'`（issue #68）加進 ADR-0011 選擇器；
- * `'general'` 維持既有 Grab/Pin/Tap 手勢。
+ * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）加進
+ * ADR-0011 選擇器；`'general'` 維持既有 Grab/Pin/Tap 手勢。
  */
-export type ToolId = 'general' | 'fan' | 'formation';
+export type ToolId = 'general' | 'fan' | 'formation' | 'spray';
 
 export const DEFAULT_TOOL: ToolId = 'general';
 
@@ -88,6 +103,28 @@ export interface FanParams {
   frequency: number;
 }
 
+/** 撒 Pin 的初始預設值（issue #69）——`setSprayParams` 可在執行期間覆寫。 */
+export const DEFAULT_SPRAY_RADIUS = 140;
+export const DEFAULT_SPRAY_SPACING = 36;
+
+/**
+ * 一次撒點最多嘗試幾個候選點、最多真的撒幾顆（issue #69）——dart throwing 的
+ * 嘗試次數依「半徑 / 間距」的平方估算（範圍內大約塞得下幾顆 × 每顆多試幾次），
+ * 兩個上限只是把最壞情況的成本與 Pin 數量框住：間距調到很小、半徑調到很大時，
+ * 不會一次撒進幾百顆 Pin 把求解器壓垮，也不會讓這個迴圈跑到掉幀。
+ */
+const SPRAY_ATTEMPTS_PER_SLOT = 12;
+const MAX_SPRAY_ATTEMPTS = 1500;
+const MAX_SPRAY_PINS = 200;
+
+/** `setSprayParams` 接受的部分更新（issue #69）——兩個欄位皆可選。 */
+export interface SprayParams {
+  /** 撒點範圍的世界座標半徑（圓心 = 點擊處）。 */
+  radius: number;
+  /** 任兩顆 Pin（含場上既有的）之間的最小世界座標距離——越小越密。 */
+  spacing: number;
+}
+
 export interface ToolRouterOptions extends GestureTrackerOptions {
   /**
    * 場上目前的電風扇幾何（issue #67 追加）——`down` 落在既有風扇矩形內時，
@@ -96,6 +133,18 @@ export interface ToolRouterOptions extends GestureTrackerOptions {
    * ——現有呼叫端／測試不用跟著改。
    */
   getFan?: () => FanState | null;
+  /**
+   * 場上目前的 Pin 清單（issue #69，接 `SimCore.listPins()`）——撒 Pin 時新的
+   * 候選點跟既有 Pin 也要保持 ≥ 間距，不然在已經撒過的地方再撒一次會疊成
+   * 一坨。不帶這個選項等同「場上沒有任何 Pin」，只跟這次撒出的候選互斥。
+   */
+  listPins?: () => readonly PinInfo[];
+  /**
+   * 撒 Pin 的隨機數來源（issue #69），預設 `Math.random`——**執行期**隨機，每次
+   * 撒出來的分佈都不一樣（重播的決定性由事件本身帶的具體座標保證，見類別頂端
+   * 說明）。測試注入有種子的 PRNG 才能逐次一致。
+   */
+  random?: () => number;
 }
 
 /** 放置新風扇進行中的狀態：世界座標原點 + 目前（拖曳中或放開時）的終點。 */
@@ -143,6 +192,8 @@ export class ToolRouter {
   private readonly emit: ToolRouterOptions['emit'];
   private readonly hitTest: ((world: Point) => boolean) | undefined;
   private readonly getFan: (() => FanState | null) | undefined;
+  private readonly listPins: (() => readonly PinInfo[]) | undefined;
+  private readonly random: () => number;
   private activeTool: ToolId = DEFAULT_TOOL;
   /** 進行中的電風扇手勢（放置或拖曳），鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly fanSessions = new Map<PointerId, FanSession>();
@@ -164,6 +215,11 @@ export class ToolRouter {
   private fanStrength = DEFAULT_FAN_STRENGTH;
   private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
   private fanFrequency = DEFAULT_FAN_FREQUENCY;
+  /** 下一次撒點要用的半徑／最小間距（issue #69）——面板兩個滑桿即時寫入。 */
+  private sprayRadius = DEFAULT_SPRAY_RADIUS;
+  private spraySpacing = DEFAULT_SPRAY_SPACING;
+  /** 撒出的 Pin 合成 id 流水號（`spray:<n>`）——跨多次撒點遞增，各顆身分互不相干。 */
+  private nextSprayPin = 1;
 
   constructor(opts: ToolRouterOptions) {
     this.gestureTracker = new GestureTracker(opts);
@@ -171,6 +227,8 @@ export class ToolRouter {
     this.emit = opts.emit;
     this.hitTest = opts.hitTest;
     this.getFan = opts.getFan;
+    this.listPins = opts.listPins;
+    this.random = opts.random ?? Math.random;
   }
 
   setActiveTool(tool: ToolId): void {
@@ -241,6 +299,15 @@ export class ToolRouter {
     if (params.frequency !== undefined) this.fanFrequency = params.frequency;
   }
 
+  /**
+   * 面板兩個撒 Pin 滑桿的即時寫入口（issue #69）——只覆寫有帶到的欄位，影響
+   * **下一次**撒點（`sprayOnce` 每次讀目前值）。比照 `setFanParams`。
+   */
+  setSprayParams(params: Partial<SprayParams>): void {
+    if (params.radius !== undefined) this.sprayRadius = params.radius;
+    if (params.spacing !== undefined) this.spraySpacing = params.spacing;
+  }
+
   get currentTool(): ToolId {
     return this.activeTool;
   }
@@ -290,6 +357,12 @@ export class ToolRouter {
         this.emit({ type: 'grab', id: formationId, x: point.x, y: point.y });
       });
       if (attached.length > 0) this.formationSessions.set(id, { lastWorld: world, attached });
+      return;
+    }
+    if (this.activeTool === 'spray') {
+      // 撒 Pin 只有 `down` 有事做——點一下就完成，`move`/`up`/`cancel` 那三個
+      // 方法因此沒有對應的分支（見類別頂端說明）。
+      this.sprayOnce(this.screenToWorld(screenX, screenY));
     }
   }
 
@@ -367,6 +440,44 @@ export class ToolRouter {
     }
   }
 
+  /**
+   * 撒一次 Pin（issue #69）——`down` 唯一的呼叫處，點一下就完成（`move`／`up`／
+   * `cancel` 對撒 Pin 都不作用）。Dart throwing：在以 `center` 為圓心、`sprayRadius`
+   * 為半徑的圓內均勻取候選點（`sqrt(u)` 才是圓內均勻，直接用 `u` 會擠在圓心），
+   * 跟這次已接受的候選 + 既有 Pin（`listPins`）都要 ≥ `spraySpacing`，再用
+   * `hitTest` 濾掉落在果凍外的，存活的當場送 `pin` 事件。
+   *
+   * 順序刻意是「先比距離、後 `hitTest`」：距離比對只是幾個平方和，`hitTest` 要
+   * 真的走一次 picking，先用便宜的條件淘汰掉大多數候選。被 `hitTest` 濾掉的候選
+   * **不**進 `accepted`——它沒有變成 Pin，不該佔著位置擋住後續候選（果凍邊緣外
+   * 的空白區不會在圓內留下一塊莫名其妙的空洞）。
+   */
+  private sprayOnce(center: Point): void {
+    const radius = Math.max(0, this.sprayRadius);
+    // 間距 0（或負）會讓「還能塞幾顆」變成無限大，用一個極小正值收斂成「幾乎不限」。
+    const spacing = Math.max(this.spraySpacing, 1e-6);
+    const existing = (this.listPins?.() ?? []).map((pin) => pin.point);
+    const accepted: Point[] = [];
+    const slots = (radius / spacing) ** 2;
+    const attempts = Math.min(MAX_SPRAY_ATTEMPTS, Math.ceil(SPRAY_ATTEMPTS_PER_SLOT * slots));
+
+    for (let i = 0; i < attempts && accepted.length < MAX_SPRAY_PINS; i++) {
+      const r = radius * Math.sqrt(this.random());
+      const theta = 2 * Math.PI * this.random();
+      const candidate = { x: center.x + r * Math.cos(theta), y: center.y + r * Math.sin(theta) };
+      if (isWithin(candidate, accepted, spacing) || isWithin(candidate, existing, spacing))
+        continue;
+      if (this.hitTest && !this.hitTest(candidate)) continue; // 落在果凍外——這個候選作廢
+      accepted.push(candidate);
+      this.emit({
+        type: 'pin',
+        id: `spray:${this.nextSprayPin++}`,
+        x: candidate.x,
+        y: candidate.y,
+      });
+    }
+  }
+
   /** `up`／`cancel` 共用：對這次手勢裡每個已附著的點送 `release`，清掉 session。 */
   private releaseFormationSession(id: PointerId): void {
     const session = this.formationSessions.get(id);
@@ -420,4 +531,9 @@ export class ToolRouter {
       frequency: session.frequency,
     });
   }
+}
+
+/** `point` 是否距離 `others` 裡任何一點不到 `minDistance`（撒 Pin 的間距判定）。 */
+function isWithin(point: Point, others: readonly Point[], minDistance: number): boolean {
+  return others.some((o) => Math.hypot(o.x - point.x, o.y - point.y) < minDistance);
 }
