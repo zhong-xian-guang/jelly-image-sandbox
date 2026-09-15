@@ -51,8 +51,9 @@
  * 半徑是兩個各自獨立的欄位（`setEraseParams` vs. `setSprayParams`）：兩個工具在
  * 手感上是分開調的，共用一個值會讓「撒得密一點、擦得準一點」變成不可能。
  *
- * 每次手勢記一組本次已經送過 `unpin` 的 id（`EraseSession.erased`），`up`／`cancel`
- * 時連同 session 一起丟掉。真實路徑上 `emit` 是同步進 `sim.applyInput` 的，下一次
+ * 每次手勢記一組本次已經送過 `unpin` 的 Pin id（`EraseSession.erasedPinIds`），
+ * `up`／`cancel` 時連同 session 一起丟掉。真實路徑上 `emit` 是同步進
+ * `sim.applyInput` 的，下一次
  * `listPins()` 本來就讀不到已經清掉的那顆——但這條保證來自呼叫端的接線方式，
  * 不是這個類別能自己看到的事；擦除又是每次 `move` 都重掃一遍的高頻迴圈，多送
  * 一次 `unpin` 在別的接線方式下（例如事件先進佇列、下一幀才套用）就會變成
@@ -220,12 +221,14 @@ interface FormationSession {
 }
 
 /**
- * 進行中的一次擦除手勢（issue #70）：`erased` 是這次手勢裡已經送過 `unpin` 的
- * Pin id，避免同一顆在拖曳途中被重複送（見類別頂端說明）。`up`／`cancel` 連同
- * 整個 session 一起丟掉，下一次按下就是乾淨的一組。
+ * 進行中的一次擦除手勢（issue #70）：`erasedPinIds` 是這次手勢裡已經送過 `unpin`
+ * 的 **Pin** id（`PinInfo.id`，跟 `eraseSessions` 那層的鍵——指標 id——是兩回事，
+ * 只是在這個專案裡兩者共用 `PointerId` 這個型別），避免同一顆在拖曳途中被重複送
+ * （見類別頂端說明）。`up`／`cancel` 連同整個 session 一起丟掉，下一次按下就是
+ * 乾淨的一組。
  */
 interface EraseSession {
-  erased: Set<PointerId>;
+  erasedPinIds: Set<PointerId>;
 }
 
 export class ToolRouter {
@@ -422,7 +425,7 @@ export class ToolRouter {
     }
     if (this.activeTool === 'erase') {
       // 按下當下就擦一次——不必等到 move，點一下也該能清掉腳下那幾顆。
-      const session: EraseSession = { erased: new Set() };
+      const session: EraseSession = { erasedPinIds: new Set() };
       this.eraseSessions.set(id, session);
       this.eraseAt(this.screenToWorld(screenX, screenY), session);
     }
@@ -491,12 +494,11 @@ export class ToolRouter {
       return;
     }
     if (this.activeTool === 'erase') {
-      // 放開前最後再擦一次：快速拖曳時 `up` 那一下的座標可能還沒被任何 `move`
-      // 走過（尤其是觸控裝置），少擦這一次會在路徑末端留下一顆漏網的 Pin。
-      const session = this.eraseSessions.get(id);
-      if (!session) return;
+      // `up` 跟 `cancel` 在這裡是同一件事：結束這次擦除、丟掉已處理集合。刻意
+      // **不**在放開當下再補擦一次——放開前瀏覽器一定送過同座標的 `move`，補的
+      // 那一次只會在 Track 上多錄一筆一模一樣的 `unpin`，還會讓 `up` 與 `cancel`
+      // 無謂地不對稱。
       this.eraseSessions.delete(id);
-      this.eraseAt(this.screenToWorld(screenX, screenY), session);
     }
   }
 
@@ -563,9 +565,9 @@ export class ToolRouter {
   }
 
   /**
-   * 擦一次（issue #70）——`down`／`move`／`up` 共用。掃一遍 `listPins()`，凡是
+   * 擦一次（issue #70）——`down`／`move` 共用。掃一遍 `listPins()`，凡是
    * 落在以 `center` 為圓心、`eraseRadius` 為半徑的圓內、且本次手勢還沒處理過的
-   * Pin，就送一次 `unpin` 並記進 `session.erased`。
+   * Pin，就送一次 `unpin` 並記進 `session.erasedPinIds`。
    *
    * 邊界用 `<=`：半徑滑桿上的數字就是「這一圈裡面的都會被擦掉」，剛好壓在圈上
    * 的那顆算在裡面才符合圓圈視覺提示給人的預期。
@@ -577,14 +579,14 @@ export class ToolRouter {
    */
   private eraseAt(center: Point, session: EraseSession): void {
     const radius = Math.max(0, this.eraseRadius);
-    const hits: PointerId[] = [];
+    const hitPinIds: PointerId[] = [];
     for (const pin of this.listPins?.() ?? []) {
-      if (session.erased.has(pin.id)) continue;
+      if (session.erasedPinIds.has(pin.id)) continue;
       if (Math.hypot(pin.point.x - center.x, pin.point.y - center.y) > radius) continue;
-      session.erased.add(pin.id);
-      hits.push(pin.id);
+      session.erasedPinIds.add(pin.id);
+      hitPinIds.push(pin.id);
     }
-    for (const pinId of hits) this.emit({ type: 'unpin', id: pinId });
+    for (const pinId of hitPinIds) this.emit({ type: 'unpin', id: pinId });
   }
 
   /** `up`／`cancel` 共用：對這次手勢裡每個已附著的點送 `release`，清掉 session。 */

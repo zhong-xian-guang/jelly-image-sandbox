@@ -147,7 +147,7 @@ import {
   type ClipState,
   type ClipTrack,
 } from './clipFile';
-import { BrushCursor } from './BrushCursor';
+import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { ControlPanel } from './ControlPanel';
 import { canvasToPng, createDefaultJelly } from './defaultJelly';
 import {
@@ -1119,12 +1119,23 @@ export class JellySandbox {
     this.activeTool = tool;
     this.input.setActiveTool(tool);
     this.applyPinModeVisuals();
-    // 筆刷圓圈游標屬於撒 Pin（issue #69）與移除 Pin（issue #70）兩個工具——不需要
-    // 另外的顯示開關，選到其中一個就看得到，切走就收起來；顏色依工具切換（撒是
-    // 琥珀、擦是紅），免得同一圈看不出這一下是要加還是要清。
-    const brush = tool === 'spray' || tool === 'erase';
-    if (brush) this.brushCursor.setVariant(tool === 'spray' ? 'spray' : 'erase');
-    this.brushCursor.setActive(brush);
+    // 筆刷圓圈游標不需要另外的顯示開關，選到用得到它的工具就看得到，切走就收起來。
+    const brush = this.brushFor(tool);
+    if (brush) this.brushCursor.setVariant(brush.variant);
+    this.brushCursor.setActive(brush !== null);
+  }
+
+  /**
+   * 這個工具要不要筆刷圓圈游標、要什麼顏色、半徑讀哪一條滑桿（issue #69／#70）
+   * ——`null` = 不要。撒 Pin 與移除 Pin 共用同一顆圓圈、只有顏色與半徑來源不同
+   * （見 `BrushCursor`），這三件事綁在一起，收成一個地方才不會「切工具」
+   * （`setActiveTool`）跟「每幀換算半徑」（`frame`）兩處各判斷一次、日後加第三個
+   * 用得到圓圈的工具時漏改其中一處。
+   */
+  private brushFor(tool: ToolId): { variant: BrushVariant; radius: number } | null {
+    if (tool === 'spray') return { variant: 'spray', radius: this.sprayRadius };
+    if (tool === 'erase') return { variant: 'erase', radius: this.eraseRadius };
+    return null;
   }
 
   /** 「撒 Pin 範圍半徑」滑桿（issue #69）——下一次撒點用，同時是筆刷圓圈的大小。 */
@@ -1697,12 +1708,11 @@ export class JellySandbox {
     }
 
     // 筆刷圓圈游標（issue #69／#70）：半徑是世界座標，每幀換算成目前縮放下的
-    // 螢幕像素——縮放改變時圓圈大小才跟著對。只在撒 Pin／移除 Pin 工具下需要算
-    // （其餘時候這層是隱藏的，`setRadiusPx` 值沒變本來也不寫 DOM），兩個工具各
-    // 讀自己那條滑桿的半徑。
-    if (this.activeTool === 'spray' || this.activeTool === 'erase') {
-      const radius = this.activeTool === 'spray' ? this.sprayRadius : this.eraseRadius;
-      this.brushCursor.setRadiusPx(radius * this.cameraState.transform.scale);
+    // 螢幕像素——縮放改變時圓圈大小才跟著對。用不到圓圈的工具不必算（那時這層
+    // 是隱藏的，`setRadiusPx` 值沒變本來也不寫 DOM）。
+    const brush = this.brushFor(this.activeTool);
+    if (brush) {
+      this.brushCursor.setRadiusPx(brush.radius * this.cameraState.transform.scale);
     }
 
     this.rafId = requestAnimationFrame(this.frame);

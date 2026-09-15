@@ -898,6 +898,21 @@ describe('ToolRouter — 移除 Pin（issue #70 / V2 T3-6）', () => {
     expect(unpinnedIds()).toEqual(['a', 'a']);
   });
 
+  // 規格：「up/cancel 清掉那個集合、結束」——放開本身不是一次擦除。瀏覽器在
+  // `up` 前一定送過同座標的 `move`，補擦只會在 Track 上多錄一筆重複的 unpin。
+  it('up 只是結束，不在放開當下多擦一次', () => {
+    const { router, unpinnedIds } = makeEraser(
+      [
+        { id: 'a', point: { x: 1000, y: 1000 } },
+        { id: 'b', point: { x: 1300, y: 1000 } },
+      ],
+      { radius: 60 },
+    );
+    router.down(1, 0, 0, 0); // 擦掉 a
+    router.up(1, 300, 0, 200); // 放開處剛好壓在 b 上，但沒有 move 走過
+    expect(unpinnedIds()).toEqual(['a']);
+  });
+
   it('cancel 同樣結束這次擦除（集合清掉，之後的 move 不再作用）', () => {
     const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
       live: false,
