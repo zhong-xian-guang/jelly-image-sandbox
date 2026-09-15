@@ -36,7 +36,7 @@ export class BrushCursor {
   readonly element: HTMLDivElement;
   private readonly circle: HTMLDivElement;
   private active = false;
-  /** 指標目前是否落在畫布上——跟 `active` 一起決定圓圈要不要顯示。 */
+  /** 上一次 `setPosition` 有沒有拿到位置（＝指標在畫布上）——跟 `active` 一起決定圓圈要不要顯示。 */
   private inside = false;
   /** 目前套用的螢幕半徑，`setRadiusPx` 值沒變就不寫 DOM。 */
   private radiusPx = 0;

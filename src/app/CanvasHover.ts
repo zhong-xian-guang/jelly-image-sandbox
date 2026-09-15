@@ -18,6 +18,9 @@
  *
  * 位置是**相對 `root` 左上角**的局部座標，跟 `worldToScreen` 的輸出同一個座標
  * 系，可以直接餵給各 overlay 或反投影回世界座標。
+ *
+ * 對外只有一個 `point` 讀取點，沒有變動通知：呼叫端（`JellySandbox.frame`）本來
+ * 就每幀重算一次疊加層，多一條推送路徑只是多一個介面面。
  */
 
 export interface HoverPoint {
@@ -28,24 +31,16 @@ export interface HoverPoint {
 export interface CanvasHoverOptions {
   /** 這個指標事件的 `target` 是不是目前的畫布——見類別頂端說明。 */
   isCanvas: (target: EventTarget | null) => boolean;
-  /**
-   * 位置變動時通知（可選）。離開畫布帶 `null`。給「想在指標一動就立刻反應、
-   * 不想等下一幀」的呼叫端用（`BrushCursor`）；每幀本來就要重算一次的呼叫端
-   * （`JellySandbox.frame` 的編隊形狀預覽）直接讀 `point` 即可。
-   */
-  onChange?: (point: HoverPoint | null) => void;
 }
 
 export class CanvasHover {
   private readonly root: HTMLElement;
   private readonly isCanvas: (target: EventTarget | null) => boolean;
-  private readonly onChange: ((point: HoverPoint | null) => void) | undefined;
   private current: HoverPoint | null = null;
 
   constructor(root: HTMLElement, opts: CanvasHoverOptions) {
     this.root = root;
     this.isCanvas = opts.isCanvas;
-    this.onChange = opts.onChange;
     root.addEventListener('pointermove', this.onPointerMove);
     root.addEventListener('pointerleave', this.onPointerLeave);
   }
@@ -66,16 +61,10 @@ export class CanvasHover {
       return;
     }
     const rect = this.root.getBoundingClientRect();
-    this.set({ x: ev.clientX - rect.left, y: ev.clientY - rect.top });
+    this.current = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
   };
 
   private onPointerLeave = (): void => {
-    if (this.current === null) return; // 已經在外面了，不重複通知
-    this.set(null);
+    this.current = null;
   };
-
-  private set(point: HoverPoint | null): void {
-    this.current = point;
-    this.onChange?.(point);
-  }
 }

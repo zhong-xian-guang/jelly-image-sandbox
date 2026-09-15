@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { CanvasHover, type HoverPoint } from './CanvasHover';
+import { CanvasHover } from './CanvasHover';
 
 /**
  * 同 `BrushCursor.test.ts`：這個專案用的 jsdom 版本沒有全域 `PointerEvent`
@@ -27,11 +27,7 @@ function makeHover() {
   const canvas = document.createElement('canvas');
   const panel = document.createElement('div');
   root.append(canvas, panel);
-  const changes: (HoverPoint | null)[] = [];
-  const hover = new CanvasHover(root, {
-    isCanvas: (target) => target === canvas,
-    onChange: (p) => changes.push(p),
-  });
+  const hover = new CanvasHover(root, { isCanvas: (target) => target === canvas });
   const moveOver = (target: HTMLElement, clientX = 0, clientY = 0) =>
     target.dispatchEvent(pointerEvent('pointermove', clientX, clientY));
   return {
@@ -39,7 +35,6 @@ function makeHover() {
     canvas,
     panel,
     hover,
-    changes,
     moveOver,
     movePointer: (x: number, y: number) => moveOver(canvas, x, y),
   };
@@ -80,20 +75,13 @@ describe('CanvasHover — 畫布上的指標懸停位置（issue #79 / V2 T3-8�
     hover.destroy();
   });
 
-  it('onChange 在進場／移動／離場各通知一次，離場帶 null', () => {
-    const { root, hover, changes, movePointer } = makeHover();
-    movePointer(10, 10);
-    movePointer(20, 20);
-    root.dispatchEvent(pointerEvent('pointerleave'));
-    expect(changes).toEqual([{ x: 10, y: 10 }, { x: 20, y: 20 }, null]);
-    hover.destroy();
-  });
-
-  it('已經在畫布外時再收到離場事件 → 不重複通知', () => {
-    const { root, hover, changes } = makeHover();
-    root.dispatchEvent(pointerEvent('pointerleave'));
-    root.dispatchEvent(pointerEvent('pointerleave'));
-    expect(changes).toEqual([]);
+  // 按住拖曳中指標事件照樣冒泡到 root，所以拖曳期間位置仍會更新——`ToolRouter`
+  // 那邊拿不到懸停移動是因為 `PointerInput` 自己過濾掉了，不是沒有事件。
+  it('按住拖曳中仍持續更新位置', () => {
+    const { canvas, hover, movePointer } = makeHover();
+    canvas.dispatchEvent(pointerEvent('pointerdown', 10, 10));
+    movePointer(35, 45);
+    expect(hover.point).toEqual({ x: 35, y: 45 });
     hover.destroy();
   });
 

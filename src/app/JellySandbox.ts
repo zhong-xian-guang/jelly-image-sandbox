@@ -106,6 +106,7 @@ import {
   CameraInput,
   type CameraCommand,
   type CameraState,
+  type CanvasSize,
   createCameraState,
   screenToWorld,
   updateCamera,
@@ -613,11 +614,8 @@ export class JellySandbox {
     root.appendChild(this.brushCursor.element);
     // `isCanvas` 讀當下的 `renderer.canvas`：重新匯入圖片會換掉整個 canvas 元素，
     // 用回呼而非直接傳元素，換過之後判定自動跟著新的那一個走（issue #69）。
-    // 筆刷圓圈走 `onChange`（指標一動就搬，不等下一幀）；編隊形狀預覽每幀本來
-    // 就要重算，改在 `frame()` 直接讀 `canvasHover.point`（issue #79）。
     this.canvasHover = new CanvasHover(root, {
       isCanvas: (target) => target === this.renderer.canvas,
-      onChange: (point) => this.brushCursor.setPosition(point),
     });
     this.applyPinModeVisuals();
 
@@ -1699,6 +1697,11 @@ export class JellySandbox {
     const elapsed = elapsedMs / 1000;
     this.lastFrameMs = nowMs;
 
+    // 筆刷圓圈是**游標**不是提示（issue #69／#79）：它代替滑鼠指標本身，永遠
+    // 不該落後指標，所以排在暫停守衛之前——暫停中果凍定格，但滑鼠還是會動。
+    // 提示層（含編隊形狀預覽）則跟著暫停一起定格，見下方那一區。
+    this.updateBrushCursor();
+
     // 暫停中（issue #34）：略過固定步迴圈、PerfMonitor 取樣與相機更新——果凍
     // 定格在當下形變、播放秒數不動、鏡頭不動、排定事件不觸發——只重畫這一格。
     // `lastFrameMs` 上面已更新，暫停期間累積的真實時間全數丟棄，按繼續時
@@ -1793,16 +1796,22 @@ export class JellySandbox {
       }
     }
 
-    // 筆刷圓圈游標（issue #69／#70）：半徑是世界座標，每幀換算成目前縮放下的
-    // 螢幕像素——縮放改變時圓圈大小才跟著對。用不到圓圈的工具不必算（那時這層
-    // 是隱藏的，`setRadiusPx` 值沒變本來也不寫 DOM）。
+    this.rafId = requestAnimationFrame(this.frame);
+  };
+
+  /**
+   * 筆刷圓圈游標（issue #69／#70）：位置直接取 `canvasHover`（指標不在畫布上時
+   * 是 `null`，圓圈跟著收起來）；半徑是世界座標，每幀換算成目前縮放下的螢幕
+   * 像素——縮放改變時圓圈大小才跟著對。用不到圓圈的工具不必算半徑（那時這層
+   * 是隱藏的，`setRadiusPx` 值沒變本來也不寫 DOM）。
+   */
+  private updateBrushCursor(): void {
+    this.brushCursor.setPosition(this.canvasHover.point);
     const brush = this.brushFor(this.activeTool);
     if (brush) {
       this.brushCursor.setRadiusPx(brush.radius * this.cameraState.transform.scale);
     }
-
-    this.rafId = requestAnimationFrame(this.frame);
-  };
+  }
 
   /**
    * 這一幀編隊抓取提示要畫哪幾組（issue #68；issue #79 補上閒置時的懸停預覽）
@@ -1817,12 +1826,12 @@ export class JellySandbox {
    *    還沒定義過形狀 → 空陣列，不留鬼影。
    *
    * 按下的瞬間 3 換成 2：兩者都以指標為主點、偏移量相同，視覺上是同一組點接手，
-   * 不會跳位。
+   * 不會跳位。唯一的例外是「按下時整組點**一個都沒命中**果凍」——那時
+   * `ToolRouter` 根本不建立 session（沒有任何 `grab` 送出去），`formationActiveGroups`
+   * 是空的，於是落回 3 繼續畫預覽跟著游標。這是刻意的：那一下什麼都沒抓到，
+   * 讓形狀繼續顯示才看得出「剛才那下落在果凍外了」，畫面整個空掉反而像壞了。
    */
-  private formationOverlayGroups(canvasSize: {
-    width: number;
-    height: number;
-  }): FormationOverlayGroup[] {
+  private formationOverlayGroups(canvasSize: CanvasSize): FormationOverlayGroup[] {
     const project = (p: Point) => worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
     if (this.input.isDefiningFormation) {
       return [{ points: this.input.formationDefinePreview.map(project) }];
@@ -1831,8 +1840,9 @@ export class JellySandbox {
     if (active.length > 0) {
       return active.map((g) => ({ points: g.points.map(project) }));
     }
+    if (this.activeTool !== 'formation') return [];
     const hover = this.canvasHover.point;
-    if (this.activeTool !== 'formation' || !hover) return [];
+    if (!hover) return [];
     const anchor = screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y);
     const preview = this.input.formationPreviewAt(anchor);
     return preview.length > 0 ? [{ points: preview.map(project) }] : [];
@@ -1843,7 +1853,7 @@ export class JellySandbox {
     this.renderer.resize(this.root.clientWidth, this.root.clientHeight);
   };
 
-  private canvasSize(): { width: number; height: number } {
+  private canvasSize(): CanvasSize {
     return { width: this.root.clientWidth, height: this.root.clientHeight };
   }
 }
