@@ -18,9 +18,11 @@
  *
  * 「顯示網格」是純 debug 用的三角化線框開關，接 `JellyRenderer.setWireframeVisible`。
  *
- * 「播放時隱藏提示」（issue #71）是蓋過上述所有提示開關的全域一列——播放中一律
- * 暫時隱藏、播完各自還原，實際的壓下／還原在 `JellySandbox.applyHintVisibility`。
- * 它自己不受播放／錄製鎖定影響（見 `onHideHintsDuringPlaybackChange`）。
+ * 「播放時隱藏提示」（issue #71）是蓋過面板上每一顆提示顯示開關的全域一列
+ * （顯示網格、顯示 Pin，加上工具區塊裡的顯示風扇範圍／圖示、顯示編隊抓取提示）
+ * ——播放中一律暫時隱藏、播完各自還原，實際的壓下／還原在
+ * `JellySandbox.applyHintVisibility`。它自己不受播放／錄製鎖定影響（見
+ * `onHideHintsDuringPlaybackChange`）。
  *
  * 「Demo」按鈕（issue #15）播放中會被 `JellySandbox` 呼叫 `setPlaybackControlsEnabled(false)`
  * 全部鎖住，理由同上——避免疊加播放兩個 Demo 留下沒人清的殘留 Pin/Grab。
