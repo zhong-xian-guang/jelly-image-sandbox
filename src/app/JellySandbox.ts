@@ -35,6 +35,13 @@
  * 計算（見 `setPinsVisible`）；`ControlPanel` 那邊會同時鎖住 Pin 模式／清除所有
  * Pin，所見即所得。
  *
+ * **播放時隱藏提示**（issue #71 / V2 T3-7）：一個全域開關，開著時只要有 Demo／
+ * Track 在播放，所有視覺提示（顯示網格、Pin 標記、風扇範圍／圖示、編隊抓取提示）
+ * 一律暫時壓下，播完各自回到使用者原本的開關狀態——那些開關的值全程不被改寫，
+ * 「當下實際看不看得到」由 `effectiveHints()` 現算、`applyHintVisibility()` 推給
+ * 各層，所以不需要另外記一份還原快照。筆刷圓圈游標不受影響，理由見
+ * `applyHintVisibility`。
+ *
  * **牆壁邊框**（issue #9 追加）：切到 Walled 邊界時，`WalledBoundary.box`（世界
  * 座標常數）同步畫成 `JellyRenderer` 裡的一個外框（見 `setWallBounds`），撞牆
  * 時看得到界線在哪，不會覺得「明明沒碰到東西卻被彈回來」。切回 Infinite 或
@@ -241,6 +248,32 @@ const PIN_REMOVE_RADIUS_PX = 16;
 const REDUCED_TARGET_PARTICLE_COUNT = Math.round(DEFAULT_PARAMS.targetParticleCount / 2);
 
 /**
+ * 會被「播放時隱藏提示」（issue #71）蓋到的提示層，每層一個 key——即面板上那五顆
+ * 顯示開關。撒 Pin／移除 Pin 的筆刷圓圈刻意不在此列，理由見
+ * `JellySandbox.applyHintVisibility`。
+ */
+type HintKey = 'wireframe' | 'pins' | 'fanRange' | 'fanIcon' | 'formation';
+/** 各提示層的顯示狀態：可能是使用者的意圖（`hintIntent`），也可能是算完壓下之後的實際值（`effectiveHints`）。 */
+type HintVisibility = Record<HintKey, boolean>;
+/** 播放中被壓下時的實際狀態——全域開關沒有逐層覆寫，所以壓下就是全滅。 */
+const ALL_HINTS_HIDDEN: Readonly<HintVisibility> = {
+  wireframe: false,
+  pins: false,
+  fanRange: false,
+  fanIcon: false,
+  formation: false,
+};
+
+/**
+ * 這幾層提示是 DOM 覆蓋層，每幀要把世界座標投影成螢幕座標才畫得出來——都看不到
+ * 時 `frame()` 連投影都不必算。`wireframe` 不在此列：線框是 `JellyRenderer` 在
+ * WebGL 那邊自己畫的，不經 `worldToScreen`。
+ */
+function needsHintProjection(hints: Readonly<HintVisibility>): boolean {
+  return hints.pins || hints.fanRange || hints.fanIcon || hints.formation;
+}
+
+/**
  * 一條已錄好的 Track（issue #33 / V2 T1-1；issue #36 / V2 T1-4 加相機軌）——
  * `steps` 是相對自己起點的時間軸，`startStep` 是它在疊加時間軸上的起始 sim step
  * （UI 以「秒」編輯，`STEP_SECONDS` 換算），`label`／`customLabel` 是清單上顯示的
@@ -332,18 +365,24 @@ export class JellySandbox {
    * 重新匯入圖片換綁新 canvas 時要靠這個重套（見 `attachInputHandlers` 呼叫處）。
    */
   private activeTool: ToolId = 'general';
-  /** 「顯示 Pin」開關——關閉時 `pinMarkers` 整層藏起來、跳過每幀的投影計算。 */
-  private pinsVisible = true;
   /**
-   * 「顯示風扇範圍」／「顯示風扇圖示」兩個開關（issue #66；issue #67 事後檢視
-   * 拆成兩顆，見 `ControlPanel` 的說明）——任一為 true 才需要每幀投影、餵給
-   * `fanOverlay.update`；個別的顯示／隱藏交給 `FanOverlay.setShowRange`／
-   * `setShowIcon`。
+   * 五個提示開關「使用者想不想看」的意圖——`wireframe` 是顯示網格（issue #14，
+   * debug 線框）、`pins` 是 Pin 標記（issue #14）、`fanRange`／`fanIcon` 是風扇
+   * 矩形範圍與圖示（issue #66；issue #67 事後檢視拆成兩顆，見 `ControlPanel`
+   * 的說明）、`formation` 是編隊抓取形狀標記（issue #68）。
+   *
+   * issue #71 起收成一個 record 而非五個各自為政的欄位：它們永遠成組被讀（見
+   * `effectiveHints`），而且新增一層提示時「要改哪幾處」才收斂得住。這裡存的
+   * 一律是使用者的意圖，播放中被壓下時完全不動——所以播完各自還原不需要另外
+   * 記一份快照。`replaceJelly` 換新 `JellyRenderer`／overlay 後也是靠它重套。
    */
-  private fanRangeVisible = true;
-  private fanIconVisible = true;
-  /** 「顯示編隊抓取提示」開關（issue #68）——同 `fanRangeVisible` 的理由。 */
-  private formationHintVisible = true;
+  private readonly hintIntent: HintVisibility = {
+    wireframe: false,
+    pins: true,
+    fanRange: true,
+    fanIcon: true,
+    formation: true,
+  };
   /**
    * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿目前值（issue #67）
    * ——`PointerInput` 沒有 getter，這裡另存一份供：(a) 面板初始值、
@@ -363,8 +402,13 @@ export class JellySandbox {
   private spraySpacing = DEFAULT_SPRAY_SPACING;
   /** 「移除 Pin 範圍半徑」滑桿目前值（issue #70）——用途同 `sprayRadius`。 */
   private eraseRadius = DEFAULT_ERASE_RADIUS;
-  /** 網格線框開關（debug 用）——`SimCore` 沒有它，重新匯入圖片時要靠這個重套。 */
-  private wireframeVisible = false;
+  /**
+   * 「播放時隱藏提示」全域開關（issue #71 / V2 T3-7）——開著時，播放中把所有提示
+   * 一律壓下（見 `hintsSuppressed`／`applyHintVisibility`）。它跟上面那幾個
+   * `*Visible` 旗標是兩層：那些是「使用者想不想看」的意圖、永遠保持使用者設定的
+   * 值不被播放改寫，這個只是暫時壓下的理由，播完就自動鬆開、各自回到原本的意圖。
+   */
+  private hideHintsDuringPlayback = false;
   /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
   private playbackLocked = false;
   /**
@@ -477,20 +521,21 @@ export class JellySandbox {
         softness: DEFAULT_SOFTNESS,
         tapStrength: this.sim.params.tapStrength,
         pinMode: this.pinModeEnabled,
-        showPins: this.pinsVisible,
+        showPins: this.hintIntent.pins,
         followLocked: !this.cameraState.followEnabled,
-        showWireframe: this.wireframeVisible,
+        showWireframe: this.hintIntent.wireframe,
         recordTarget: this.recordTarget,
-        showFanRange: this.fanRangeVisible,
-        showFanIcon: this.fanIconVisible,
+        showFanRange: this.hintIntent.fanRange,
+        showFanIcon: this.hintIntent.fanIcon,
         fanWidth: this.fanWidth,
         fanStrength: this.fanStrength,
         fanFalloffExponent: this.fanFalloffExponent,
         fanFrequency: this.fanFrequency,
-        showFormationHint: this.formationHintVisible,
+        showFormationHint: this.hintIntent.formation,
         sprayRadius: this.sprayRadius,
         spraySpacing: this.spraySpacing,
         eraseRadius: this.eraseRadius,
+        hideHintsDuringPlayback: this.hideHintsDuringPlayback,
       },
       tapStrengthRange: TAP_STRENGTH_RANGE,
       fanWidthRange: FAN_WIDTH_RANGE,
@@ -506,29 +551,30 @@ export class JellySandbox {
       onLoadClip: () => this.clipFileInput.open(),
       onToolChange: (tool) => this.setActiveTool(tool),
       onRemoveFan: () => this.removeFan(),
-      onShowFanRangeChange: (visible) => this.setFanRangeVisible(visible),
-      onShowFanIconChange: (visible) => this.setFanIconVisible(visible),
+      onShowFanRangeChange: (visible) => this.setHintVisible('fanRange', visible),
+      onShowFanIconChange: (visible) => this.setHintVisible('fanIcon', visible),
       onFanWidthChange: (width) => this.setFanWidth(width),
       onFanStrengthChange: (strength) => this.setFanStrength(strength),
       onFanFalloffChange: (falloffExponent) => this.setFanFalloffExponent(falloffExponent),
       onFanFrequencyChange: (frequency) => this.setFanFrequency(frequency),
       onFormationDefineStart: () => this.input.beginFormationDefine(),
       onFormationDefineEnd: () => this.input.endFormationDefine(),
-      onShowFormationHintChange: (visible) => this.setFormationHintVisible(visible),
+      onShowFormationHintChange: (visible) => this.setHintVisible('formation', visible),
       onSprayRadiusChange: (radius) => this.setSprayRadius(radius),
       onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
       onEraseRadiusChange: (radius) => this.setEraseRadius(radius),
+      onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
       onPinModeChange: (enabled) => this.setPinMode(enabled),
       onClearPins: () => this.clearPins(),
-      onShowPinsChange: (visible) => this.setPinsVisible(visible),
+      onShowPinsChange: (visible) => this.setHintVisible('pins', visible),
       onFollowLockChange: (locked) => this.setFollowLock(locked),
       onFrameJelly: () => this.frameJelly(),
       onRunDemo: (id) => this.runDemo(id),
       onReset: () => this.resetSim(),
-      onWireframeChange: (visible) => this.setWireframeVisible(visible),
+      onWireframeChange: (visible) => this.setHintVisible('wireframe', visible),
       onRecordTargetChange: (target) => {
         this.recordTarget = target;
       },
@@ -978,12 +1024,17 @@ export class JellySandbox {
    * `disabled`。`locked` 等同「Demo／Track 正在播放」——同步驅動 issue #34 的
    * 播放狀態列（暫停鈕＋秒數讀出只在播放中出現），並在播放結束時把暫停旗標
    * 強制歸零，下一次播放不會殘留上一輪的定格狀態。
+   *
+   * 同時是「播放時隱藏提示」（issue #71）的唯一觸發點：開始播放時壓下所有提示、
+   * 播完（或按停止／重設）鬆開，各自回到使用者原本的開關狀態——那些開關的值全程
+   * 沒被動過，所以「還原」不需要另外記一份快照（見 `applyHintVisibility`）。
    */
   private setPlaybackLocked(locked: boolean): void {
     if (this.playbackLocked === locked) return;
     this.playbackLocked = locked;
     this.controlPanel.setPlaybackControlsEnabled(!locked);
     this.controlPanel.setPlaybackActive(locked);
+    this.applyHintVisibility();
     if (!locked) this.setPaused(false);
   }
 
@@ -1243,37 +1294,68 @@ export class JellySandbox {
   }
 
   /**
-   * 「顯示 Pin」開關——只管標記的顯示／隱藏。`ControlPanel` 那邊已經在使用者
-   * 關掉顯示時順便把「Pin 模式」的勾選框也一起強制關掉（所見即所得），這裡
-   * 不用重複處理；只要單純記著這個旗標，`frame()` 每幀據此決定要不要投影更新。
+   * 面板上任何一個提示顯示開關被切換（「顯示網格」「顯示 Pin」「顯示風扇範圍」
+   * 「顯示風扇圖示」「顯示編隊抓取提示」）——五顆共用這一個入口：記下使用者的
+   * 意圖，實際看不看得到交給 `applyHintVisibility` 算（播放中可能被壓下）。
+   *
+   * 「顯示 Pin」關掉時，`ControlPanel` 那邊已經順便把「Pin 模式」的勾選框一起
+   * 強制關掉（所見即所得），這裡不用重複處理。
    */
-  private setPinsVisible(visible: boolean): void {
-    this.pinsVisible = visible;
-    this.pinMarkers.setVisible(visible);
+  private setHintVisible(key: HintKey, visible: boolean): void {
+    this.hintIntent[key] = visible;
+    this.applyHintVisibility();
   }
 
-  /** 「顯示風扇範圍」開關（issue #66；issue #67 事後檢視拆成兩顆）——同 `setPinsVisible` 的理由。 */
-  private setFanRangeVisible(visible: boolean): void {
-    this.fanRangeVisible = visible;
-    this.fanOverlay.setShowRange(visible);
+  /**
+   * 「播放時隱藏提示」全域開關（issue #71 / V2 T3-7）——只改「要不要在播放中壓下
+   * 提示」這個意圖本身，上面那幾個 `*Visible` 旗標一律不動；當下是否真的看得到
+   * 交給 `applyHintVisibility` 算。沒在播放時切它，畫面不會有任何變化（`suppressed`
+   * 仍是 false），這正是驗收條件「這個開關本身不受播放狀態影響、隨時可切換」。
+   */
+  private setHideHintsDuringPlayback(enabled: boolean): void {
+    this.hideHintsDuringPlayback = enabled;
+    this.applyHintVisibility();
   }
 
-  /** 「顯示風扇圖示」開關（issue #67 事後檢視追加）——同 `setPinsVisible` 的理由。 */
-  private setFanIconVisible(visible: boolean): void {
-    this.fanIconVisible = visible;
-    this.fanOverlay.setShowIcon(visible);
+  /**
+   * 提示現在是不是被播放暫時壓下（issue #71）——開關開著 ＋ 目前有 Demo／Track
+   * 在播放。「有東西在播」沿用既有的 `playbackLocked`（`frame()` 每幀用
+   * `demoRunner.isRunning` 同步、`playAll`／`runDemo` 按下當幀就先鎖，見
+   * `setPlaybackLocked`），不另外開第二個播放狀態旗標——兩個旗標遲早會對不上。
+   */
+  private get hintsSuppressed(): boolean {
+    return this.hideHintsDuringPlayback && this.playbackLocked;
   }
 
-  /** 「顯示編隊抓取提示」開關（issue #68）——同 `setPinsVisible` 的理由。 */
-  private setFormationHintVisible(visible: boolean): void {
-    this.formationHintVisible = visible;
-    this.formationOverlay.setVisible(visible);
+  /**
+   * 每層提示「現在實際上該不該顯示」（issue #71）——沒被壓下時就是使用者的意圖
+   * 原樣；被壓下時全體隱藏（這個開關是全域的，沒有逐層的覆寫，見 issue #64
+   * Out of Scope）。`applyHintVisibility`（推給各層）與 `frame()`（決定要不要花
+   * 力氣算每幀的螢幕座標投影）共用這一份，兩邊才不會各判斷一次而分岔。
+   */
+  private effectiveHints(): Readonly<HintVisibility> {
+    return this.hintsSuppressed ? ALL_HINTS_HIDDEN : this.hintIntent;
   }
 
-  /** 「顯示網格」開關（issue #14 追加，debug 用）——記在 `wireframeVisible`，`replaceJelly` 換新 `JellyRenderer` 時要重套。 */
-  private setWireframeVisible(visible: boolean): void {
-    this.wireframeVisible = visible;
-    this.renderer.setWireframeVisible(visible);
+  /**
+   * 把 `effectiveHints()` 推到各個提示層（issue #71）——所有「提示的顯示狀態可能
+   * 變了」的路徑都收斂到這一個出口：`setHintVisible`（五顆開關）、
+   * `setHideHintsDuringPlayback`、播放開始／結束（`setPlaybackLocked`）、重新
+   * 匯入圖片換新 Renderer（`replaceJelly`）。日後多一層提示，要動的是
+   * `HintKey`／`hintIntent` 的初始值、這裡一行、以及（若它需要每幀投影）
+   * `needsHintProjection`——不必回頭找散在各處的旗標。
+   *
+   * 撒 Pin／移除 Pin 的筆刷圓圈**不在**這裡：它本來就只在選中那個工具時才出現
+   * （見 `setActiveTool`），是「現在這個工具的作用範圍在哪」的游標而非場景提示，
+   * 播放中不該跟著消失（issue #64 US36）。
+   */
+  private applyHintVisibility(): void {
+    const hints = this.effectiveHints();
+    this.renderer.setWireframeVisible(hints.wireframe);
+    this.pinMarkers.setVisible(hints.pins);
+    this.fanOverlay.setShowRange(hints.fanRange);
+    this.fanOverlay.setShowIcon(hints.fanIcon);
+    this.formationOverlay.setVisible(hints.formation);
   }
 
   /**
@@ -1518,7 +1600,7 @@ export class JellySandbox {
     // ——比照上一行。
     this.input.setSprayParams({ radius: this.sprayRadius, spacing: this.spraySpacing });
     this.input.setEraseParams({ radius: this.eraseRadius });
-    this.renderer.setWireframeVisible(this.wireframeVisible); // 新 JellyRenderer 預設隱藏，要重套
+    this.applyHintVisibility(); // 新 JellyRenderer 的線框預設隱藏，要按目前的提示狀態重套
     this.renderer.setWallBounds(this.wallBox); // 新 JellyRenderer 預設沒有牆框，要重套
   }
 
@@ -1659,14 +1741,12 @@ export class JellySandbox {
     this.renderer.setCamera(this.cameraState.transform);
     this.renderer.render();
 
-    if (
-      this.pinsVisible ||
-      this.fanRangeVisible ||
-      this.fanIconVisible ||
-      this.formationHintVisible
-    ) {
+    // 每幀的螢幕座標投影只對「實際看得到」的提示做（issue #71 把播放中被壓下的
+    // 也算進來：藏起來的那一幀本來就不必算）。
+    const hints = this.effectiveHints();
+    if (needsHintProjection(hints)) {
       const canvasSize = this.canvasSize();
-      if (this.pinsVisible) {
+      if (hints.pins) {
         this.pinMarkers.update(
           this.sim.listPins().map((pin) => {
             const screen = worldToScreen(
@@ -1679,7 +1759,7 @@ export class JellySandbox {
           }),
         );
       }
-      if (this.fanRangeVisible || this.fanIconVisible) {
+      if (hints.fanRange || hints.fanIcon) {
         const fan = this.sim.fanState();
         this.fanOverlay.update(
           fan && {
@@ -1697,7 +1777,7 @@ export class JellySandbox {
           },
         );
       }
-      if (this.formationHintVisible) {
+      if (hints.formation) {
         const project = (p: Point) =>
           worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
         const groups: FormationOverlayGroup[] = this.input.isDefiningFormation
