@@ -96,7 +96,12 @@
  */
 
 import { isPointInFanRect, type FanState, type PinInfo, type PointerId, type Point } from '../sim';
-import { GestureTracker, type GestureTrackerOptions } from './GestureTracker';
+import {
+  DEFAULT_GESTURE_CONFIG,
+  GestureTracker,
+  type GestureConfig,
+  type GestureTrackerOptions,
+} from './GestureTracker';
 
 /**
  * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）、
@@ -218,6 +223,15 @@ type FanSession = FanPlaceSession | FanMoveSession;
 interface FormationSession {
   lastWorld: Point;
   attached: readonly { offset: Point; id: string }[];
+  /**
+   * 按下當下的螢幕座標／時間／世界座標（issue #81）——`up` 用前兩者比對輕拍
+   * 門檻（同 `GestureTracker` 那組），用 `startWorld` 決定每記 `tap` 打在哪：
+   * 比照 `GestureTracker.up`，輕拍打在**按下**的位置而非放開的位置。
+   */
+  startX: number;
+  startY: number;
+  startT: number;
+  startWorld: Point;
 }
 
 /**
@@ -269,6 +283,12 @@ export class ToolRouter {
   private eraseRadius = DEFAULT_ERASE_RADIUS;
   /** 進行中的擦除手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly eraseSessions = new Map<PointerId, EraseSession>();
+  /**
+   * 解析後的手勢門檻（issue #81）——編隊抓取的輕拍判定要跟一般操作**同一組**
+   * 數值，否則同一個使用者在兩個模式下「怎樣算快速按放」會前後矛盾。`opts` 原本
+   * 只轉給 `GestureTracker`，這裡另存一份自己用（同一個來源，不是第二套設定）。
+   */
+  private readonly config: GestureConfig;
 
   constructor(opts: ToolRouterOptions) {
     this.gestureTracker = new GestureTracker(opts);
@@ -278,6 +298,7 @@ export class ToolRouter {
     this.getFan = opts.getFan;
     this.listPins = opts.listPins;
     this.random = opts.random ?? Math.random;
+    this.config = { ...DEFAULT_GESTURE_CONFIG, ...opts.config };
   }
 
   setActiveTool(tool: ToolId): void {
@@ -429,7 +450,16 @@ export class ToolRouter {
         attached.push({ offset, id: formationId });
         this.emit({ type: 'grab', id: formationId, x: point.x, y: point.y });
       });
-      if (attached.length > 0) this.formationSessions.set(id, { lastWorld: world, attached });
+      if (attached.length > 0) {
+        this.formationSessions.set(id, {
+          lastWorld: world,
+          attached,
+          startX: screenX,
+          startY: screenY,
+          startT: timeMs,
+          startWorld: world,
+        });
+      }
       return;
     }
     if (this.activeTool === 'spray') {
@@ -505,6 +535,7 @@ export class ToolRouter {
     }
     if (this.activeTool === 'formation') {
       if (this.formationDefinePoints) return; // 定義中：down 才算數
+      this.emitFormationTapIfAny(id, screenX, screenY, timeMs);
       this.releaseFormationSession(id);
       return;
     }
@@ -602,6 +633,39 @@ export class ToolRouter {
       hitPinIds.push(pin.id);
     }
     for (const pinId of hitPinIds) this.emit({ type: 'unpin', id: pinId });
+  }
+
+  /**
+   * 這次編隊手勢如果是「快速按放」（issue #81 / V2 T3-9），對每個已附著的點各送
+   * 一次 `tap`——由 `up` 在 `releaseFormationSession` 之前呼叫，湊出跟一般操作
+   * 同形的 `grab×N → tap×N → release×N`。
+   *
+   * 為什麼編隊也要有輕拍：#64 US23 說「編隊抓取用起來就是同時操作好幾個一般的
+   * Grab」，那麼快速按放理當拍出一整組；ADR-0011 也指出快速點放與拖曳本來就是
+   * 兩種不衝突的手勢，共存沒有歧義。門檻用 `this.config`（與一般操作同一組來源，
+   * 見該欄位），座標比照 `GestureTracker.up` 取**按下當下**的位置。
+   *
+   * 落在果凍外、`down` 時被跳過的偏移點不在 `attached` 裡，自然不會被拍——跟
+   * `grab`／`release` 的處理一致。`cancel` 刻意不走這裡：中斷不是完成一次輕拍。
+   */
+  private emitFormationTapIfAny(
+    id: PointerId,
+    screenX: number,
+    screenY: number,
+    timeMs: number,
+  ): void {
+    const session = this.formationSessions.get(id);
+    if (!session) return;
+    const heldMs = timeMs - session.startT;
+    const movedPx = Math.hypot(screenX - session.startX, screenY - session.startY);
+    if (heldMs > this.config.tapMaxMs || movedPx > this.config.tapMaxDist) return;
+    for (const { offset } of session.attached) {
+      this.emit({
+        type: 'tap',
+        x: session.startWorld.x + offset.x,
+        y: session.startWorld.y + offset.y,
+      });
+    }
   }
 
   /** `up`／`cancel` 共用：對這次手勢裡每個已附著的點送 `release`，清掉 session。 */

@@ -523,7 +523,9 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
     router.endFormationDefine();
 
     router.down(2, 100, 100, 0); // 世界座標 (1100, 1100)：主點在內、偏移點 (1110,1100) 在外
-    router.up(2, 100, 100, 50);
+    // 按久一點（> tapMaxMs）避免同時觸發編隊輕拍（issue #81）——這一則只管
+    // grab/release 的落點過濾，輕拍的部分由該 issue 自己那組測試涵蓋。
+    router.up(2, 100, 100, 300);
 
     expect(events).toEqual([
       { type: 'grab', id: 'formation:1:0', x: 1100, y: 1100 },
@@ -616,8 +618,9 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
     router.up(2, 0, 0, 500);
 
     router.setActiveTool('formation');
+    // 同上：按久一點避開編隊輕拍（issue #81），這一則只管工具切換後 down 有沒有恢復作用。
     router.down(3, 50, 50, 0);
-    router.up(3, 50, 50, 50);
+    router.up(3, 50, 50, 300);
 
     expect(events).toEqual([
       { type: 'grab', id: 2, x: 1000, y: 1000 },
@@ -683,6 +686,122 @@ describe('ToolRouter — 編隊形狀的懸停預覽（issue #79 / V2 T3-8）', 
     router.formationPreviewAt({ x: 1, y: 2 });
     router.formationPreviewAt({ x: 3, y: 4 });
     expect(events.length).toBe(before);
+  });
+});
+
+describe('ToolRouter — 編隊抓取的輕拍（issue #81 / V2 T3-9）', () => {
+  /** 定義一個「主點 + 右 10」的兩點形狀，之後拿它試輕拍。 */
+  function withShape(extra?: Partial<ToolRouterOptions>) {
+    const made = makeRouter(undefined, undefined, extra);
+    made.router.setActiveTool('formation');
+    made.router.beginFormationDefine();
+    made.router.down(1, 0, 0, 0);
+    made.router.down(1, 10, 0, 0);
+    made.router.endFormationDefine();
+    made.events.length = 0; // 定義階段不 emit，清掉以防萬一
+    return made;
+  }
+
+  it('快速按放 → 每個命中點各一次 tap，順序是 grab×N → tap×N → release×N', () => {
+    const { router, events } = withShape();
+    router.down(2, 100, 100, 0);
+    router.up(2, 101, 100, 200); // 200ms、位移 1px → 算輕拍
+
+    expect(events).toEqual([
+      { type: 'grab', id: 'formation:1:0', x: 1100, y: 1100 },
+      { type: 'grab', id: 'formation:1:1', x: 1110, y: 1100 },
+      { type: 'tap', x: 1100, y: 1100 },
+      { type: 'tap', x: 1110, y: 1100 },
+      { type: 'release', id: 'formation:1:0' },
+      { type: 'release', id: 'formation:1:1' },
+    ]);
+  });
+
+  // 比照 `GestureTracker.up`：tap 打在**按下當下**的位置，不是放開位置。
+  it('tap 座標用按下當下的位置，不是放開位置', () => {
+    const { router, events } = withShape();
+    router.down(2, 50, 50, 0);
+    router.up(2, 54, 52, 100); // 位移 ~4.5px，仍在門檻內
+    const taps = events.filter((e) => e.type === 'tap');
+    expect(taps).toEqual([
+      { type: 'tap', x: 1050, y: 1050 },
+      { type: 'tap', x: 1060, y: 1050 },
+    ]);
+  });
+
+  it('按太久（> tapMaxMs）→ 不算輕拍，只有 grab/release', () => {
+    const { router, events } = withShape();
+    router.down(2, 100, 100, 0);
+    router.up(2, 100, 100, 300);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'grab', 'release', 'release']);
+  });
+
+  it('位移太大（> tapMaxDist）→ 不算輕拍，即使很快', () => {
+    const { router, events } = withShape();
+    router.down(2, 100, 100, 0);
+    router.move(2, 130, 100);
+    router.up(2, 130, 100, 50);
+    expect(events.filter((e) => e.type === 'tap')).toEqual([]);
+    expect(events.map((e) => e.type)).toEqual([
+      'grab',
+      'grab',
+      'moveGrab',
+      'moveGrab',
+      'release',
+      'release',
+    ]);
+  });
+
+  // 輕拍的門檻必須跟一般操作是同一組——同一個使用者在兩個模式下「怎樣算快速
+  // 按放」不一致的話，手感會前後矛盾。
+  it('沿用注入的 GestureConfig 門檻（與一般操作同一組）', () => {
+    const made = makeRouter({ tapMaxMs: 50 });
+    made.router.setActiveTool('formation');
+    made.router.beginFormationDefine();
+    made.router.down(1, 0, 0, 0);
+    made.router.endFormationDefine();
+    made.events.length = 0;
+
+    made.router.down(2, 0, 0, 0);
+    made.router.up(2, 0, 0, 120); // 120ms > 放寬後的 50ms → 不算輕拍
+    expect(made.events.filter((e) => e.type === 'tap')).toEqual([]);
+  });
+
+  it('部分偏移點落在果凍外 → 只有命中的那幾點被拍', () => {
+    // 只讓主點（x = 1100）命中；右邊那點（x = 1110）落在果凍外。
+    const { router, events } = withShape({ hitTest: (p) => p.x === 1100 });
+    router.down(2, 100, 100, 0);
+    router.up(2, 100, 100, 100);
+    expect(events).toEqual([
+      { type: 'grab', id: 'formation:1:0', x: 1100, y: 1100 },
+      { type: 'tap', x: 1100, y: 1100 },
+      { type: 'release', id: 'formation:1:0' },
+    ]);
+  });
+
+  it('整組都落在果凍外 → 什麼都不送', () => {
+    const { router, events } = withShape({ hitTest: () => false });
+    router.down(2, 100, 100, 0);
+    router.up(2, 100, 100, 100);
+    expect(events).toEqual([]);
+  });
+
+  // 取消不是「完成一次輕拍」——手勢被中斷時只放開，不補一記 tap。
+  it('cancel → 只 release，不送 tap', () => {
+    const { router, events } = withShape();
+    router.down(2, 100, 100, 0);
+    router.cancel(2);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'grab', 'release', 'release']);
+  });
+
+  it('輕拍完 session 已清掉——再 up 一次不會重送', () => {
+    const { router, events } = withShape();
+    router.down(2, 100, 100, 0);
+    router.up(2, 100, 100, 100);
+    const count = events.length;
+    router.up(2, 100, 100, 150);
+    expect(events.length).toBe(count);
+    expect(router.formationActiveGroups).toEqual([]);
   });
 });
 
