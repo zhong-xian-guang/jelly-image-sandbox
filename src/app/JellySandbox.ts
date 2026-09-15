@@ -155,6 +155,7 @@ import {
   type ClipTrack,
 } from './clipFile';
 import { BrushCursor, type BrushVariant } from './BrushCursor';
+import { CanvasHover } from './CanvasHover';
 import { ControlPanel } from './ControlPanel';
 import { canvasToPng, createDefaultJelly } from './defaultJelly';
 import {
@@ -332,11 +333,16 @@ export class JellySandbox {
   /** 編隊抓取形狀標記提示（issue #68）——同 `fanOverlay` 的模式。 */
   private readonly formationOverlay: FormationOverlay;
   /**
-   * 撒 Pin 的筆刷圓圈游標（issue #69）——同樣是純 DOM overlay，但指標位置由它
-   * 自己監聽（見 `BrushCursor` 說明）；這裡只負責「目前工具是不是撒 Pin」與
-   * 「半徑換算成幾個螢幕像素」。
+   * 撒 Pin 的筆刷圓圈游標（issue #69）——同樣是純 DOM overlay；這裡負責「目前
+   * 工具是不是撒 Pin」「半徑換算成幾個螢幕像素」與每幀餵它 `canvasHover` 的位置。
    */
   private readonly brushCursor: BrushCursor;
+  /**
+   * 指標在畫布上的懸停位置（issue #79 / V2 T3-8）——`PointerInput` 只追按下之後
+   * 的移動，「按下去之前先讓使用者看到這一下會做什麼」的兩個預覽（筆刷圓圈、
+   * 編隊形狀）都靠它。見 `CanvasHover` 說明。
+   */
+  private readonly canvasHover: CanvasHover;
   private readonly demoRunner = new DemoRunner();
   private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
@@ -603,12 +609,16 @@ export class JellySandbox {
     root.appendChild(this.fanOverlay.element);
     this.formationOverlay = new FormationOverlay();
     root.appendChild(this.formationOverlay.element);
+    this.brushCursor = new BrushCursor();
+    root.appendChild(this.brushCursor.element);
     // `isCanvas` 讀當下的 `renderer.canvas`：重新匯入圖片會換掉整個 canvas 元素，
     // 用回呼而非直接傳元素，換過之後判定自動跟著新的那一個走（issue #69）。
-    this.brushCursor = new BrushCursor(root, {
+    // 筆刷圓圈走 `onChange`（指標一動就搬，不等下一幀）；編隊形狀預覽每幀本來
+    // 就要重算，改在 `frame()` 直接讀 `canvasHover.point`（issue #79）。
+    this.canvasHover = new CanvasHover(root, {
       isCanvas: (target) => target === this.renderer.canvas,
+      onChange: (point) => this.brushCursor.setPosition(point),
     });
-    root.appendChild(this.brushCursor.element);
     this.applyPinModeVisuals();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
@@ -665,7 +675,8 @@ export class JellySandbox {
     this.notice.remove();
     this.controlPanel.destroy();
     this.pinMarkers.destroy();
-    this.brushCursor.destroy(); // 它在 root 上掛了指標監聽（issue #69），一定要解掉
+    this.canvasHover.destroy(); // 它在 root 上掛了指標監聽（issue #79），一定要解掉
+    this.brushCursor.destroy();
     this.input.destroy();
     this.cameraInput.destroy();
     this.renderer.destroy();
@@ -1778,12 +1789,7 @@ export class JellySandbox {
         );
       }
       if (hints.formation) {
-        const project = (p: Point) =>
-          worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
-        const groups: FormationOverlayGroup[] = this.input.isDefiningFormation
-          ? [{ points: this.input.formationDefinePreview.map(project) }]
-          : this.input.formationActiveGroups.map((g) => ({ points: g.points.map(project) }));
-        this.formationOverlay.update(groups);
+        this.formationOverlay.update(this.formationOverlayGroups(canvasSize));
       }
     }
 
@@ -1797,6 +1803,40 @@ export class JellySandbox {
 
     this.rafId = requestAnimationFrame(this.frame);
   };
+
+  /**
+   * 這一幀編隊抓取提示要畫哪幾組（issue #68；issue #79 補上閒置時的懸停預覽）
+   * ——三種狀態依序優先，任一時刻只會是其中一種：
+   *
+   * 1. **定義形狀中**：畫已經點下的那幾個點（還在累積，尚未成為形狀）。
+   * 2. **拖曳中**：畫每個作用中手勢真正抓到的點（`formationActiveGroups` 只列
+   *    `attached`，落在果凍外被跳過的偏移點不畫——issue #68 原設計）。
+   * 3. **閒置**：形狀已定義、指標在畫布上 → 以指標處為主點畫整組形狀，按下去
+   *    之前就看得到「這一下會抓哪幾點」。少了這一段，那顆顯示開關在平常什麼
+   *    都看不到（issue #79 的起因）。指標不在畫布上（移到面板、離開視窗）或
+   *    還沒定義過形狀 → 空陣列，不留鬼影。
+   *
+   * 按下的瞬間 3 換成 2：兩者都以指標為主點、偏移量相同，視覺上是同一組點接手，
+   * 不會跳位。
+   */
+  private formationOverlayGroups(canvasSize: {
+    width: number;
+    height: number;
+  }): FormationOverlayGroup[] {
+    const project = (p: Point) => worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
+    if (this.input.isDefiningFormation) {
+      return [{ points: this.input.formationDefinePreview.map(project) }];
+    }
+    const active = this.input.formationActiveGroups;
+    if (active.length > 0) {
+      return active.map((g) => ({ points: g.points.map(project) }));
+    }
+    const hover = this.canvasHover.point;
+    if (this.activeTool !== 'formation' || !hover) return [];
+    const anchor = screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y);
+    const preview = this.input.formationPreviewAt(anchor);
+    return preview.length > 0 ? [{ points: preview.map(project) }] : [];
+  }
 
   private onResize = (): void => {
     // 畫布尺寸交給 Renderer；相機下一幀的 `updateCamera` 會用新畫布尺寸重新 fit。

@@ -320,6 +320,21 @@ export class ToolRouter {
   }
 
   /**
+   * 「如果現在在 `anchor` 按下去，會抓到哪幾個點」的世界座標（issue #79 / V2 T3-8）
+   * ——`FormationOverlay` 拿它畫閒置時跟著游標走的形狀預覽。還沒定義過形狀就回
+   * 空陣列（沒有東西可預覽）。
+   *
+   * 刻意**不**用 `hitTest` 過濾掉落在果凍外的點：預覽畫的是「形狀」，命中與否
+   * 按下去那一刻才算（見 `down` 的編隊分支）——先幫使用者把點藏起來，反而看不出
+   * 整組形狀擺在哪、也沒辦法瞄準。
+   */
+  formationPreviewAt(anchor: Point): readonly Point[] {
+    const offsets = this.formationOffsets;
+    if (!offsets) return [];
+    return offsets.map((o) => ({ x: anchor.x + o.x, y: anchor.y + o.y }));
+  }
+
+  /**
    * 目前作用中的編隊抓取手勢（issue #68）——`FormationOverlay` 每幀讀，畫出
    * 各點目前的世界座標 + 連回主點的線。只列 `attached`（這次手勢裡真的落在
    * Jelly 上、已經送出 `grab` 的點）——`down` 時被 `hitTest` 跳過的偏移點沒有

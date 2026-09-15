@@ -129,6 +129,11 @@ export class PointerInput {
     return this.tracker.formationActiveGroups;
   }
 
+  /** 轉發給 `ToolRouter.formationPreviewAt`（issue #79）——閒置時跟著游標的形狀預覽。 */
+  formationPreviewAt(anchor: Point): readonly Point[] {
+    return this.tracker.formationPreviewAt(anchor);
+  }
+
   private localXY(ev: PointerEvent): [number, number] {
     const r = this.target.getBoundingClientRect();
     return [ev.clientX - r.left, ev.clientY - r.top];
