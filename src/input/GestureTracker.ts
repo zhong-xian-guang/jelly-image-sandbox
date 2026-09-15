@@ -26,6 +26,46 @@ export interface GestureConfig {
 
 export const DEFAULT_GESTURE_CONFIG: GestureConfig = { tapMaxMs: 250, tapMaxDist: 6 };
 
+/**
+ * 把使用者可能只給一半的門檻補成完整的一組（issue #81 抽出）——`GestureTracker`
+ * 與 `ToolRouter` 都得解析同一份 `opts.config`，各寫一次展開就會變成兩套預設值
+ * 的來源，改了其中一個很難發現另一個沒跟上。
+ */
+export function resolveGestureConfig(config?: Partial<GestureConfig>): GestureConfig {
+  return { ...DEFAULT_GESTURE_CONFIG, ...config };
+}
+
+/**
+ * 一次手勢**按下當下**的定格：螢幕座標、時間、世界座標。`isTap` 拿前三者判定，
+ * `startWorld` 則是「輕拍打在按下點、不是放開點」這條規則的依據。
+ *
+ * `GestureTracker`（一般操作）與 `ToolRouter` 的編隊抓取 session（issue #81）
+ * 共用同一個形狀——兩邊的輕拍必須是同一回事，型別抄兩份遲早會各自漂移。
+ */
+export interface GestureStart {
+  startX: number;
+  startY: number;
+  startT: number;
+  startWorld: Point;
+}
+
+/**
+ * 這次手勢算不算「快速按放」＝ 輕拍（issue #81 抽出成純函式共用）：按住夠短
+ * **且**螢幕位移夠小。位移只比對 down／up 兩點，不累計路徑長度——拖遠再拖回
+ * 仍算輕拍，這個取捨兩個模式一致，使用者不會覺得換個工具手感就變了。
+ */
+export function isTap(
+  start: GestureStart,
+  screenX: number,
+  screenY: number,
+  timeMs: number,
+  config: GestureConfig,
+): boolean {
+  const heldMs = timeMs - start.startT;
+  const movedPx = Math.hypot(screenX - start.startX, screenY - start.startY);
+  return heldMs <= config.tapMaxMs && movedPx <= config.tapMaxDist;
+}
+
 export interface GestureTrackerOptions {
   /** 畫布局部座標（左上為原點）→ 世界座標。 */
   screenToWorld: (screenX: number, screenY: number) => Point;
@@ -40,25 +80,18 @@ export interface GestureTrackerOptions {
   config?: Partial<GestureConfig>;
 }
 
-interface Track {
-  startX: number;
-  startY: number;
-  startT: number;
-  startWorld: Point;
-}
-
 export class GestureTracker {
   private readonly screenToWorld: (x: number, y: number) => Point;
   private readonly emit: (event: InputEvent) => void;
   private readonly hitTest?: (world: Point) => boolean;
   private readonly config: GestureConfig;
-  private readonly tracks = new Map<PointerId, Track>();
+  private readonly tracks = new Map<PointerId, GestureStart>();
 
   constructor(opts: GestureTrackerOptions) {
     this.screenToWorld = opts.screenToWorld;
     this.emit = opts.emit;
     this.hitTest = opts.hitTest;
-    this.config = { ...DEFAULT_GESTURE_CONFIG, ...opts.config };
+    this.config = resolveGestureConfig(opts.config);
   }
 
   down(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
@@ -78,9 +111,7 @@ export class GestureTracker {
     const t = this.tracks.get(id);
     if (!t) return;
     this.tracks.delete(id);
-    const heldMs = timeMs - t.startT;
-    const movedPx = Math.hypot(screenX - t.startX, screenY - t.startY);
-    if (heldMs <= this.config.tapMaxMs && movedPx <= this.config.tapMaxDist) {
+    if (isTap(t, screenX, screenY, timeMs, this.config)) {
       this.emit({ type: 'tap', x: t.startWorld.x, y: t.startWorld.y });
     }
     this.emit({ type: 'release', id });
