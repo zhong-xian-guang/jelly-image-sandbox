@@ -798,3 +798,172 @@ describe('ToolRouter — 撒 Pin（issue #69 / V2 T3-5）', () => {
     ]);
   });
 });
+
+describe('ToolRouter — 移除 Pin（issue #70 / V2 T3-6）', () => {
+  /**
+   * 這個工具唯一的資料來源是注入的 `listPins`，所以測試這一端要模擬真實路徑上
+   * `SimCore` 的行為：`emit` 收到 `unpin` 就把那顆從清單裡拿掉（真實路徑上 emit
+   * 是同步進 `sim.applyInput` 的）。用一個永遠不變的靜態清單測不到「清掉之後
+   * 它就不在清單裡了」這件事。`live: false` 則刻意保留靜態清單，用來單獨驗證
+   * 「同一次拖曳內不重送」這件事真的由本次手勢的已處理集合擋下，而不是碰巧
+   * 靠清單變短。
+   */
+  function makeEraser(
+    pins: readonly { id: string; point: Point }[],
+    opts?: { live?: boolean; radius?: number },
+  ) {
+    const store = [...pins];
+    const events: InputEvent[] = [];
+    const router = new ToolRouter({
+      screenToWorld: (x, y) => ({ x: x + 1000, y: y + 1000 }),
+      emit: (e) => {
+        events.push(e);
+        if ((opts?.live ?? true) && e.type === 'unpin') {
+          const index = store.findIndex((p) => p.id === e.id);
+          if (index >= 0) store.splice(index, 1);
+        }
+      },
+      listPins: () => store,
+    });
+    router.setActiveTool('erase');
+    if (opts?.radius !== undefined) router.setEraseParams({ radius: opts.radius });
+    const unpinnedIds = () => events.flatMap((e) => (e.type === 'unpin' ? [e.id] : []));
+    return { router, events, store, unpinnedIds };
+  }
+
+  it('按下當下就把圓心半徑內的既有 Pin 清掉（不必等到 move）', () => {
+    const { router, unpinnedIds } = makeEraser(
+      [
+        { id: 'a', point: { x: 1000, y: 1000 } },
+        { id: 'far', point: { x: 1500, y: 1500 } },
+      ],
+      { radius: 60 },
+    );
+    router.down(1, 0, 0, 0); // 世界座標 (1000, 1000)
+    expect(unpinnedIds()).toEqual(['a']);
+  });
+
+  it('拖曳經過 → 進到半徑內的 Pin 依序被清掉；始終在半徑外的不受影響', () => {
+    const { router, unpinnedIds, store } = makeEraser(
+      [
+        { id: 'a', point: { x: 1000, y: 1000 } },
+        { id: 'b', point: { x: 1100, y: 1000 } },
+        { id: 'c', point: { x: 1200, y: 1000 } },
+        { id: 'away', point: { x: 1100, y: 1900 } },
+      ],
+      { radius: 40 },
+    );
+    router.down(1, 0, 0, 0);
+    expect(unpinnedIds()).toEqual(['a']);
+    router.move(1, 100, 0);
+    expect(unpinnedIds()).toEqual(['a', 'b']);
+    router.move(1, 200, 0);
+    expect(unpinnedIds()).toEqual(['a', 'b', 'c']);
+    router.up(1, 200, 0, 300);
+    expect(store.map((p) => p.id)).toEqual(['away']);
+  });
+
+  it('同一顆 Pin 在同一次拖曳中只送一次 unpin（即使它一直待在半徑內）', () => {
+    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
+      live: false, // 清單刻意不變短，逼「已處理集合」自己擋下重送
+      radius: 200,
+    });
+    router.down(1, 0, 0, 0);
+    router.move(1, 10, 10);
+    router.move(1, 20, 20);
+    router.move(1, 5, 5);
+    expect(unpinnedIds()).toEqual(['a']);
+  });
+
+  it('放開後再次拖過同一個位置 → 已經清掉的 id 不會被重送', () => {
+    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
+      radius: 80,
+    });
+    router.down(1, 0, 0, 0);
+    router.up(1, 0, 0, 100);
+    router.down(2, 0, 0, 200);
+    router.move(2, 10, 10);
+    router.up(2, 10, 10, 300);
+    expect(unpinnedIds()).toEqual(['a']);
+  });
+
+  it('放開後重新按下 → 新一次手勢的集合是乾淨的（同一顆若還在，照樣會被清）', () => {
+    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
+      live: false, // 模擬「第一次的 unpin 沒有真的生效」，驗證集合確實有被清掉
+      radius: 80,
+    });
+    router.down(1, 0, 0, 0);
+    router.up(1, 0, 0, 100);
+    router.down(2, 0, 0, 200);
+    expect(unpinnedIds()).toEqual(['a', 'a']);
+  });
+
+  it('cancel 同樣結束這次擦除（集合清掉，之後的 move 不再作用）', () => {
+    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
+      live: false,
+      radius: 80,
+    });
+    router.down(1, 500, 500, 0); // 離 Pin 很遠，什麼都沒清到
+    router.cancel(1);
+    router.move(1, 0, 0); // 沒有進行中的手勢 → 不作用
+    expect(unpinnedIds()).toEqual([]);
+  });
+
+  it('沒按下就 move → 不作用（不是「滑過去就擦掉」）', () => {
+    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
+      radius: 80,
+    });
+    router.move(1, 0, 0);
+    expect(unpinnedIds()).toEqual([]);
+  });
+
+  it('半徑滑桿調大 → 同一個位置能擦到更遠的 Pin', () => {
+    const pins = [{ id: 'a', point: { x: 1100, y: 1000 } }];
+    const small = makeEraser(pins, { radius: 50 });
+    small.router.down(1, 0, 0, 0);
+    expect(small.unpinnedIds()).toEqual([]);
+
+    const large = makeEraser(pins, { radius: 150 });
+    large.router.down(1, 0, 0, 0);
+    expect(large.unpinnedIds()).toEqual(['a']);
+  });
+
+  // 兩個工具的半徑是各自獨立的欄位（issue #70 驗收條件）：把撒 Pin 的半徑調到
+  // 極小，橡皮擦的作用範圍不該跟著縮水。
+  it('跟撒 Pin 的半徑各自獨立——調撒 Pin 的半徑不影響擦除範圍', () => {
+    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1100, y: 1000 } }], {
+      radius: 150,
+    });
+    router.setSprayParams({ radius: 1 });
+    router.down(1, 0, 0, 0); // 世界座標 (1000, 1000)，距離 Pin 100
+    expect(unpinnedIds()).toEqual(['a']);
+  });
+
+  it('只作用於 Pin——不送 release，也不動到一般 Grab；切回一般操作仍是既有手勢', () => {
+    const { router, events } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
+      radius: 80,
+    });
+    router.down(1, 0, 0, 0);
+    router.move(1, 5, 5);
+    router.up(1, 5, 5, 300);
+    expect(events.every((e) => e.type === 'unpin')).toBe(true);
+
+    router.setActiveTool('general');
+    const before = events.length;
+    router.down(2, 0, 0, 400);
+    router.up(2, 0, 0, 900);
+    expect(events.slice(before)).toEqual([
+      { type: 'grab', id: 2, x: 1000, y: 1000 },
+      { type: 'release', id: 2 },
+    ]);
+  });
+
+  it('沒有注入 listPins（場上沒有 Pin 可讀）→ 什麼都不送，不爆炸', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('erase');
+    router.down(1, 0, 0, 0);
+    router.move(1, 10, 10);
+    router.up(1, 10, 10, 300);
+    expect(events).toEqual([]);
+  });
+});

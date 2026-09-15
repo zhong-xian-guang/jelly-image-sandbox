@@ -140,6 +140,8 @@ export interface ControlPanelInitial {
   /** 撒 Pin 兩個滑桿的初始值（issue #69）——見 `../input` 的 `DEFAULT_SPRAY_*`。 */
   sprayRadius: number;
   spraySpacing: number;
+  /** 移除 Pin 半徑滑桿的初始值（issue #70）——見 `../input` 的 `DEFAULT_ERASE_RADIUS`。 */
+  eraseRadius: number;
 }
 
 /** 一個數值滑桿的範圍（issue #67 抽出——`tapStrengthRange` 與三個電風扇範圍共用同一形狀）。 */
@@ -160,6 +162,8 @@ export interface ControlPanelOptions {
   /** 撒 Pin「範圍半徑」／「最小間距」兩個滑桿各自的範圍（issue #69）。 */
   sprayRadiusRange: RangeSpec;
   spraySpacingRange: RangeSpec;
+  /** 移除 Pin「範圍半徑」滑桿的範圍（issue #70）。 */
+  eraseRadiusRange: RangeSpec;
   /** 「Demo」按鈕列表（issue #15），依序顯示；點下呼叫 `onRunDemo(id)`。 */
   demos: readonly DemoMenuItem[];
   /**
@@ -225,6 +229,11 @@ export interface ControlPanelOptions {
    */
   onSprayRadiusChange: (radius: number) => void;
   onSpraySpacingChange: (spacing: number) => void;
+  /**
+   * 移除 Pin「範圍半徑」滑桿變更（issue #70）——跟撒 Pin 的半徑是兩個各自獨立的
+   * 值（見 `ToolRouter.setEraseParams`），這裡也就是兩個各自獨立的回呼。
+   */
+  onEraseRadiusChange: (radius: number) => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -490,9 +499,22 @@ export class ControlPanel {
       ).row,
     ]);
 
+    // 移除 Pin 專屬參數（issue #70）：只有橡皮擦半徑一個滑桿。跟撒 Pin 的半徑
+    // 各自獨立，所以是兩個區塊裡的兩條滑桿，而不是共用一條。
+    const eraseParams = this.toolParams('移除 Pin', [
+      this.rangeRow(
+        '移除 Pin 範圍半徑',
+        opts.eraseRadiusRange.min,
+        opts.eraseRadiusRange.max,
+        opts.eraseRadiusRange.step,
+        opts.initial.eraseRadius,
+        opts.onEraseRadiusChange,
+      ).row,
+    ]);
+
     const toolSection = this.toolSection(
       opts.initial.activeTool,
-      { fan: fanParams, formation: formationParams, spray: sprayParams },
+      { fan: fanParams, formation: formationParams, spray: sprayParams, erase: eraseParams },
       (t) => {
         opts.onToolChange(t);
         pins.setToolLocked(t !== 'general');
@@ -765,8 +787,8 @@ export class ControlPanel {
    * 「目前工具」下拉（issue #65 / V2 T3-1；ADR-0011）——只涵蓋新增的沙盒工具。
    * 「一般操作」＝維持既有 Grab/Pin/Tap 純手勢，選中它時 `ToolRouter` 原封不動
    * 委派給既有 `GestureTracker`；「電風扇」（issue #66）之後在畫布上按下拖曳放開
-   * 即放置一個風扇；「編隊抓取」（issue #68）、「撒 Pin」（issue #69）同理各自
-   * 接管畫布手勢。後續「移除 Pin」上線時在這裡加選項。
+   * 即放置一個風扇；「編隊抓取」（issue #68）、「撒 Pin」（issue #69）、
+   * 「移除 Pin」（issue #70）同理各自接管畫布手勢。
    */
   private toolRow(
     initial: ToolId,
@@ -781,6 +803,7 @@ export class ControlPanel {
       ['fan', '電風扇'],
       ['formation', '編隊抓取'],
       ['spray', '撒 Pin'],
+      ['erase', '移除 Pin'],
     ] as const) {
       const option = document.createElement('option');
       option.value = value;
@@ -800,8 +823,8 @@ export class ControlPanel {
    * 目前選中工具的專屬參數，包進一個預設收合的 `<details>`。理由：後續還會
    * 陸續加撒 Pin／移除 Pin 兩個工具，每個都有自己的專屬參數列，攤在面板最上層
    * 只會越疊越長、越來越擠；收合起來預設只看到一行「▸ 沙盒工具」，需要用某個
-   * 工具時才展開。之後每個新工具依樣把自己的參數區塊加進 `toolParams`、依「目前
-   * 工具」用 `hidden` 切換顯示／隱藏即可。
+   * 工具時才展開。每個新工具依樣把自己的參數區塊加進 `toolParams`、依「目前
+   * 工具」用 `hidden` 切換顯示／隱藏即可（issue #70 的移除 Pin 就是這樣加的）。
    */
   private toolSection(
     initialTool: ToolId,

@@ -1,8 +1,11 @@
 /**
  * `BrushCursor`（issue #69 / V2 T3-5）——撒 Pin 工具的筆刷圓圈游標：一個跟著
  * 指標走、半徑等於目前撒點範圍的圓圈，讓使用者按下去之前就知道「這一下會撒
- * 在多大一圈裡」。比照 `PinMarkers`／`FanOverlay`／`FormationOverlay` 的純 DOM
- * overlay 模式，`pointer-events: none`——不擋手勢。
+ * 在多大一圈裡」。issue #70 / V2 T3-6 的移除 Pin 共用同一顆圓圈（那邊同樣是
+ * 「以指標為圓心、半徑為範圍」的操作，視覺需求一模一樣），只用 `setVariant`
+ * 換個顏色區分：撒是琥珀色、擦是紅色——同一個位置同樣大的一圈，顏色是唯一
+ * 分辨得出「這一下是要加還是要清」的線索。比照 `PinMarkers`／`FanOverlay`／
+ * `FormationOverlay` 的純 DOM overlay 模式，`pointer-events: none`——不擋手勢。
  *
  * 跟另外三層不同的是它**自己**監聽指標移動：那三層畫的是模擬狀態（Pin／風扇／
  * 編隊），資料每幀由 `JellySandbox.frame` 投影後餵進來；這一層畫的是「指標現在
@@ -11,7 +14,7 @@
  * 匯入圖片會換掉整個 canvas 元素（見 `JellySandbox.replaceJelly`），掛在 root
  * 才不用跟著重綁；canvas 上的指標事件本來就會冒泡到 root。
  *
- * 顯示條件：`setActive(true)`（目前工具是撒 Pin）＋ 指標確實**落在畫布上**。
+ * 顯示條件：`setActive(true)`（目前工具是撒 Pin 或移除 Pin）＋ 指標確實**落在畫布上**。
  * 後者靠注入的 `isCanvas(target)` 判定，不能只看「在 root 範圍內」——控制面板
  * 也是 root 的子元素，滑鼠移過去時事件照樣冒泡上來，圓圈會跟著跑到面板上；
  * 面板本身雖然蓋得住圓心（z-index 10 > 5），半徑大時圈的外緣仍會露在畫布上，
@@ -24,6 +27,14 @@
  */
 
 const ACTIVE_CLASS = 'is-active';
+
+/**
+ * 圓圈的用途（issue #70）——只影響顏色（CSS `.is-<variant>`），幾何完全共用。
+ * `'spray'` = 撒 Pin（琥珀），`'erase'` = 移除 Pin（紅）。
+ */
+export type BrushVariant = 'spray' | 'erase';
+
+const VARIANTS: readonly BrushVariant[] = ['spray', 'erase'];
 
 export interface BrushCursorOptions {
   /** 這個指標事件的 `target` 是不是目前的畫布——見類別頂端說明。 */
@@ -50,12 +61,21 @@ export class BrushCursor {
     this.circle = document.createElement('div');
     this.circle.className = 'jelly-brush-cursor-circle';
     this.element.appendChild(this.circle);
+    this.setVariant('spray');
 
     root.addEventListener('pointermove', this.onPointerMove);
     root.addEventListener('pointerleave', this.onPointerLeave);
   }
 
-  /** 「目前工具」切到／切離撒 Pin 時呼叫。 */
+  /**
+   * 圓圈的顏色用途（issue #70）——`JellySandbox` 在切到撒 Pin／移除 Pin 時設定。
+   * 只加／移 CSS class，不碰顯示與否（那是 `setActive` 的事）。
+   */
+  setVariant(variant: BrushVariant): void {
+    for (const v of VARIANTS) this.circle.classList.toggle(`is-${v}`, v === variant);
+  }
+
+  /** 「目前工具」切到／切離撒 Pin 或移除 Pin 時呼叫。 */
   setActive(active: boolean): void {
     if (this.active === active) return;
     this.active = active;

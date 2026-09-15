@@ -1,8 +1,9 @@
 /**
- * `BrushCursor`（issue #69 / V2 T3-5）的 DOM 測試——這層唯一有狀態的地方是
- * 「顯示與否 = 工具是撒 Pin × 指標在畫布範圍內」這個組合，以及指標離開後不要
- * 留下鬼影。圓圈長什麼樣子（虛線、顏色）是 CSS 的事，jsdom 載不到樣式表，
- * 那部分靠瀏覽器人工驗證，不在這裡測。
+ * `BrushCursor`（issue #69 / V2 T3-5；issue #70 追加 `setVariant`）的 DOM 測試
+ * ——這層唯一有狀態的地方是「顯示與否 = 工具是撒 Pin／移除 Pin × 指標在畫布
+ * 範圍內」這個組合、切到哪個用途（顏色 class），以及指標離開後不要留下鬼影。
+ * 圓圈長什麼樣子（虛線、實際顏色）是 CSS 的事，jsdom 載不到樣式表，那部分靠
+ * 瀏覽器人工驗證，不在這裡測。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -99,6 +100,24 @@ describe('BrushCursor — 撒 Pin 的筆刷圓圈游標（issue #69 / V2 T3-5）
     const circle = cursor.element.querySelector('.jelly-brush-cursor-circle') as HTMLElement;
     expect(circle.style.width).toBe('120px');
     expect(circle.style.height).toBe('120px');
+    cursor.destroy();
+  });
+
+  // issue #70：移除 Pin 共用同一顆圓圈，只換顏色（CSS class）——同一時間只能帶
+  // 一個用途的 class，不然兩組顏色規則會互相蓋。實際的顏色靠瀏覽器人工驗證。
+  it('setVariant → 圓圈只帶目前用途的 class，預設是撒 Pin', () => {
+    const { cursor } = makeCursor();
+    const circle = cursor.element.querySelector('.jelly-brush-cursor-circle') as HTMLElement;
+    expect(circle.classList.contains('is-spray')).toBe(true);
+    expect(circle.classList.contains('is-erase')).toBe(false);
+
+    cursor.setVariant('erase');
+    expect(circle.classList.contains('is-erase')).toBe(true);
+    expect(circle.classList.contains('is-spray')).toBe(false);
+
+    cursor.setVariant('spray');
+    expect(circle.classList.contains('is-spray')).toBe(true);
+    expect(circle.classList.contains('is-erase')).toBe(false);
     cursor.destroy();
   });
 

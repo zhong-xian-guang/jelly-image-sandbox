@@ -28,7 +28,13 @@
 
 import type { FanState, InputEvent, PinInfo, Point } from '../sim';
 import type { GestureConfig } from './GestureTracker';
-import { type FanParams, type SprayParams, type ToolId, ToolRouter } from './ToolRouter';
+import {
+  type EraseParams,
+  type FanParams,
+  type SprayParams,
+  type ToolId,
+  ToolRouter,
+} from './ToolRouter';
 
 export interface PointerInputOptions {
   screenToWorld: (screenX: number, screenY: number) => Point;
@@ -94,6 +100,11 @@ export class PointerInput {
   /** 轉發給 `ToolRouter.setSprayParams`（issue #69）——面板撒 Pin 滑桿變更時呼叫。 */
   setSprayParams(params: Partial<SprayParams>): void {
     this.tracker.setSprayParams(params);
+  }
+
+  /** 轉發給 `ToolRouter.setEraseParams`（issue #70）——面板移除 Pin 滑桿變更時呼叫。 */
+  setEraseParams(params: Partial<EraseParams>): void {
+    this.tracker.setEraseParams(params);
   }
 
   /** 轉發給 `ToolRouter`（issue #68）——面板「開始設定形狀」／「完成設定」按鈕呼叫。 */

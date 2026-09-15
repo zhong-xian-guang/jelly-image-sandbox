@@ -40,6 +40,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       showFormationHint: true,
       sprayRadius: 140,
       spraySpacing: 36,
+      eraseRadius: 100,
     },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     fanWidthRange: { min: 20, max: 400, step: 5 },
@@ -48,6 +49,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     fanFrequencyRange: { min: 0.2, max: 10, step: 0.1 },
     sprayRadiusRange: { min: 20, max: 400, step: 10 },
     spraySpacingRange: { min: 12, max: 120, step: 2 },
+    eraseRadiusRange: { min: 20, max: 400, step: 10 },
     demos: [],
     onImportImage: vi.fn(),
     onSaveClip: vi.fn(),
@@ -65,6 +67,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onShowFormationHintChange: vi.fn(),
     onSprayRadiusChange: vi.fn(),
     onSpraySpacingChange: vi.fn(),
+    onEraseRadiusChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -502,6 +505,7 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
       'fan',
       'formation',
       'spray',
+      'erase',
     ]);
   });
 
@@ -690,8 +694,8 @@ describe('ControlPanel — 沙盒工具收合區塊（issue #67 事後檢視追�
     const blocks = () => [...panel.element.querySelectorAll('.jelly-tool-params')] as HTMLElement[];
     const visibleCount = () => blocks().filter((el) => !el.hidden).length;
 
-    expect(blocks()).toHaveLength(3); // 電風扇 + 編隊抓取 + 撒 Pin
-    expect(visibleCount()).toBe(0); // 一般操作：三組都收起來
+    expect(blocks()).toHaveLength(4); // 電風扇 + 編隊抓取 + 撒 Pin + 移除 Pin
+    expect(visibleCount()).toBe(0); // 一般操作：四組都收起來
 
     select.value = 'fan';
     select.dispatchEvent(new Event('change'));
@@ -704,6 +708,10 @@ describe('ControlPanel — 沙盒工具收合區塊（issue #67 事後檢視追�
     select.value = 'spray';
     select.dispatchEvent(new Event('change'));
     expect(visibleCount()).toBe(1);
+
+    select.value = 'erase';
+    select.dispatchEvent(new Event('change'));
+    expect(visibleCount()).toBe(1);
   });
 
   it('每組工具參數區塊都有自己的標題', () => {
@@ -711,7 +719,7 @@ describe('ControlPanel — 沙盒工具收合區塊（issue #67 事後檢視追�
     const titles = [...panel.element.querySelectorAll('.jelly-tool-params-title')].map(
       (el) => el.textContent,
     );
-    expect(titles).toEqual(['電風扇', '編隊抓取', '撒 Pin']);
+    expect(titles).toEqual(['電風扇', '編隊抓取', '撒 Pin', '移除 Pin']);
   });
 });
 
@@ -941,6 +949,72 @@ describe('ControlPanel — 撒 Pin 控制項（issue #69 / V2 T3-5）', () => {
     const panel = new ControlPanel(makeOptions());
     const select = findToolSelect(panel);
     select.value = 'spray';
+    select.dispatchEvent(new Event('change'));
+
+    const pinCheckbox = [...panel.element.querySelectorAll('label')]
+      .find((l) => l.textContent?.includes('Pin 模式'))
+      ?.querySelector('input[type=checkbox]') as HTMLInputElement;
+    expect(pinCheckbox.disabled).toBe(true);
+  });
+});
+
+describe('ControlPanel — 移除 Pin 控制項（issue #70 / V2 T3-6）', () => {
+  function findToolSelect(panel: ControlPanel): HTMLSelectElement {
+    return [...panel.element.querySelectorAll('select')].find((s) =>
+      s.querySelector('option[value="erase"]'),
+    ) as HTMLSelectElement;
+  }
+
+  function eraseParams(panel: ControlPanel): HTMLElement {
+    return [...panel.element.querySelectorAll('.jelly-tool-params')].find((el) =>
+      el.textContent?.includes('移除 Pin 範圍半徑'),
+    ) as HTMLElement;
+  }
+
+  it('切到「移除 Pin」→ onToolChange 收到 "erase"，專屬參數區塊顯示', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const select = findToolSelect(panel);
+
+    expect(eraseParams(panel).hidden).toBe(true);
+    select.value = 'erase';
+    select.dispatchEvent(new Event('change'));
+
+    expect(opts.onToolChange).toHaveBeenCalledWith('erase');
+    expect(eraseParams(panel).hidden).toBe(false);
+  });
+
+  it('「移除 Pin 範圍半徑」滑桿初始值來自 initial.eraseRadius，拖動觸發 onEraseRadiusChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '移除 Pin 範圍半徑');
+
+    expect(Number(input.value)).toBe(opts.initial.eraseRadius);
+    input.value = '250';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onEraseRadiusChange).toHaveBeenCalledWith(250);
+  });
+
+  // 驗收條件「跟撒 Pin 的半徑參數各自獨立」在面板這一端的意思：兩條各自獨立的
+  // 滑桿、各自獨立的回呼，動其中一條不會連帶觸發另一條。
+  it('跟撒 Pin 的半徑是兩條各自獨立的滑桿，動一條不動到另一條', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const eraseInput = findRangeInputByLabel(panel, '移除 Pin 範圍半徑');
+    const sprayInput = findRangeInputByLabel(panel, '撒 Pin 範圍半徑');
+    expect(eraseInput).not.toBe(sprayInput);
+
+    eraseInput.value = '200';
+    eraseInput.dispatchEvent(new Event('input'));
+    expect(opts.onEraseRadiusChange).toHaveBeenCalledWith(200);
+    expect(opts.onSprayRadiusChange).not.toHaveBeenCalled();
+    expect(Number(sprayInput.value)).toBe(opts.initial.sprayRadius);
+  });
+
+  it('切到「移除 Pin」→ Pin 控制項一併鎖住（畫布手勢已被這個工具接管）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const select = findToolSelect(panel);
+    select.value = 'erase';
     select.dispatchEvent(new Event('change'));
 
     const pinCheckbox = [...panel.element.querySelectorAll('label')]
