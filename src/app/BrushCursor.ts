@@ -7,24 +7,20 @@
  * 分辨得出「這一下是要加還是要清」的線索。比照 `PinMarkers`／`FanOverlay`／
  * `FormationOverlay` 的純 DOM overlay 模式，`pointer-events: none`——不擋手勢。
  *
- * 跟另外三層不同的是它**自己**監聽指標移動：那三層畫的是模擬狀態（Pin／風扇／
- * 編隊），資料每幀由 `JellySandbox.frame` 投影後餵進來；這一層畫的是「指標現在
- * 在哪」，跟模擬無關，每幀去問一次沒有意義（而且 `PointerInput` 只追按下之後
- * 的移動，滑鼠單純懸停時它不會有事件）。監聽掛在 `root` 而非 canvas 上——重新
- * 匯入圖片會換掉整個 canvas 元素（見 `JellySandbox.replaceJelly`），掛在 root
- * 才不用跟著重綁；canvas 上的指標事件本來就會冒泡到 root。
+ * 跟另外三層一樣是被動的：位置由呼叫端餵進來（`setPosition`），這一層只管畫。
+ * 差別在資料來源——那三層畫的是模擬狀態（Pin／風扇／編隊），每幀由
+ * `JellySandbox.frame` 投影後餵；這一層畫的是「指標現在在哪」，來源是
+ * `CanvasHover`（issue #79 從本檔抽出的共用懸停追蹤，見該檔說明：`PointerInput`
+ * 只追按下之後的移動，單純懸停時輸入層是靜默的，所以得另外監聽）。
  *
- * 顯示條件：`setActive(true)`（目前工具是撒 Pin 或移除 Pin）＋ 指標確實**落在畫布上**。
- * 後者靠注入的 `isCanvas(target)` 判定，不能只看「在 root 範圍內」——控制面板
- * 也是 root 的子元素，滑鼠移過去時事件照樣冒泡上來，圓圈會跟著跑到面板上；
- * 面板本身雖然蓋得住圓心（z-index 10 > 5），半徑大時圈的外緣仍會露在畫布上，
- * 看起來像撒點範圍莫名其妙飄走了。`isCanvas` 用回呼而非直接收 canvas 元素，
- * 是因為重新匯入圖片會換掉 canvas，回呼每次讀當下那一個就永遠是對的。
- *
- * 兩個條件任一不成立就整個藏起來——工具切走後不該留一圈鬼影，指標離開畫布
- * （移到面板上、或離開視窗）時圓圈也不該黏在最後一個位置。半徑由呼叫端每幀
- * 換算成螢幕像素後餵進來（`setRadiusPx`），縮放改變時圓圈大小跟著對。
+ * 顯示條件：`setActive(true)`（目前工具是撒 Pin 或移除 Pin）＋ `setPosition`
+ * 拿到非 `null` 的位置（指標確實落在畫布上，由 `CanvasHover` 判定）。兩個條件
+ * 任一不成立就整個藏起來——工具切走後不該留一圈鬼影，指標離開畫布（移到面板
+ * 上、或離開視窗）時圓圈也不該黏在最後一個位置。半徑由呼叫端每幀換算成螢幕
+ * 像素後餵進來（`setRadiusPx`），縮放改變時圓圈大小跟著對。
  */
+
+import type { HoverPoint } from './CanvasHover';
 
 const ACTIVE_CLASS = 'is-active';
 
@@ -36,25 +32,16 @@ export type BrushVariant = 'spray' | 'erase';
 
 const VARIANTS: readonly BrushVariant[] = ['spray', 'erase'];
 
-export interface BrushCursorOptions {
-  /** 這個指標事件的 `target` 是不是目前的畫布——見類別頂端說明。 */
-  isCanvas: (target: EventTarget | null) => boolean;
-}
-
 export class BrushCursor {
   readonly element: HTMLDivElement;
-  private readonly root: HTMLElement;
-  private readonly isCanvas: (target: EventTarget | null) => boolean;
   private readonly circle: HTMLDivElement;
   private active = false;
-  /** 指標目前是否落在畫布上——跟 `active` 一起決定圓圈要不要顯示。 */
+  /** 上一次 `setPosition` 有沒有拿到位置（＝指標在畫布上）——跟 `active` 一起決定圓圈要不要顯示。 */
   private inside = false;
   /** 目前套用的螢幕半徑，`setRadiusPx` 值沒變就不寫 DOM。 */
   private radiusPx = 0;
 
-  constructor(root: HTMLElement, opts: BrushCursorOptions) {
-    this.root = root;
-    this.isCanvas = opts.isCanvas;
+  constructor() {
     this.element = document.createElement('div');
     this.element.className = 'jelly-brush-cursor';
 
@@ -62,9 +49,23 @@ export class BrushCursor {
     this.circle.className = 'jelly-brush-cursor-circle';
     this.element.appendChild(this.circle);
     this.setVariant('spray');
+  }
 
-    root.addEventListener('pointermove', this.onPointerMove);
-    root.addEventListener('pointerleave', this.onPointerLeave);
+  /**
+   * 指標在畫布上的位置（`CanvasHover.point`，畫布局部座標），離開畫布時餵 `null`
+   * ——圓圈跟著搬家或收起來。
+   */
+  setPosition(point: HoverPoint | null): void {
+    if (point === null) {
+      if (!this.inside) return;
+      this.inside = false;
+      this.applyVisibility();
+      return;
+    }
+    this.circle.style.transform = `translate(${point.x}px, ${point.y}px) translate(-50%, -50%)`;
+    if (this.inside) return;
+    this.inside = true;
+    this.applyVisibility();
   }
 
   /**
@@ -92,30 +93,8 @@ export class BrushCursor {
   }
 
   destroy(): void {
-    this.root.removeEventListener('pointermove', this.onPointerMove);
-    this.root.removeEventListener('pointerleave', this.onPointerLeave);
     this.element.remove();
   }
-
-  private onPointerMove = (ev: PointerEvent): void => {
-    if (!this.active) return;
-    // 指標移到控制面板之類的其他子元素上 → 收起來，不要跟著跑出畫布（見類別頂端說明）。
-    if (!this.isCanvas(ev.target)) {
-      this.onPointerLeave();
-      return;
-    }
-    const rect = this.root.getBoundingClientRect();
-    this.circle.style.transform = `translate(${ev.clientX - rect.left}px, ${ev.clientY - rect.top}px) translate(-50%, -50%)`;
-    if (this.inside) return;
-    this.inside = true;
-    this.applyVisibility();
-  };
-
-  private onPointerLeave = (): void => {
-    if (!this.inside) return;
-    this.inside = false;
-    this.applyVisibility();
-  };
 
   private applyVisibility(): void {
     this.element.classList.toggle(ACTIVE_CLASS, this.active && this.inside);

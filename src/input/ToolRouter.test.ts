@@ -628,6 +628,64 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
   });
 });
 
+describe('ToolRouter — 編隊形狀的懸停預覽（issue #79 / V2 T3-8）', () => {
+  /** 定義一個「主點 + 右 10 + 下 20」的形狀，之後拿它試預覽。 */
+  function withShape() {
+    const made = makeRouter();
+    made.router.setActiveTool('formation');
+    made.router.beginFormationDefine();
+    made.router.down(1, 0, 0, 0);
+    made.router.down(1, 10, 0, 0);
+    made.router.down(1, 0, 20, 0);
+    made.router.endFormationDefine();
+    return made;
+  }
+
+  it('還沒定義過形狀 → 沒有預覽點（沒有東西可預覽）', () => {
+    const { router } = makeRouter();
+    expect(router.formationPreviewAt({ x: 500, y: 500 })).toEqual([]);
+  });
+
+  it('已定義形狀 → 以傳入的世界座標為主點，套上各偏移量', () => {
+    const { router } = withShape();
+    expect(router.formationPreviewAt({ x: 500, y: 300 })).toEqual([
+      { x: 500, y: 300 },
+      { x: 510, y: 300 },
+      { x: 500, y: 320 },
+    ]);
+  });
+
+  // 「拖曳時整組偏移量不隨方向旋轉、只整體跟著指標平移」（CONTEXT.md 編隊抓取）
+  // ——預覽是那個行為的事前呈現，換個主點只能是整組平移。
+  it('換一個主點 → 整組平移，點與點的相對關係完全不變', () => {
+    const { router } = withShape();
+    const a = router.formationPreviewAt({ x: 0, y: 0 });
+    const b = router.formationPreviewAt({ x: -40, y: 70 });
+    expect(b).toEqual(a.map((p) => ({ x: p.x - 40, y: p.y + 70 })));
+  });
+
+  it('重新設定形狀 → 預覽跟著換成新形狀', () => {
+    const { router } = withShape();
+    router.beginFormationDefine();
+    router.down(1, 0, 0, 0);
+    router.down(1, -5, -5, 0);
+    router.endFormationDefine();
+    expect(router.formationPreviewAt({ x: 100, y: 100 })).toEqual([
+      { x: 100, y: 100 },
+      { x: 95, y: 95 },
+    ]);
+  });
+
+  // 預覽純粹是視覺提示，呼叫它不該驚動求解器（ADR-0005：只有真正的操作才走 emit）。
+  it('讀預覽不送出任何 InputEvent', () => {
+    const { router, events } = withShape();
+    const before = events.length;
+    router.formationPreviewAt({ x: 1, y: 2 });
+    router.formationPreviewAt({ x: 3, y: 4 });
+    expect(events.length).toBe(before);
+  });
+});
+
 describe('ToolRouter — 撒 Pin（issue #69 / V2 T3-5）', () => {
   /** 撒點用的隨機數注入固定種子，測試才逐次一致（預設是 `Math.random`）。 */
   const seeded = () => mulberry32(0x5eed);

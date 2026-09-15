@@ -106,6 +106,7 @@ import {
   CameraInput,
   type CameraCommand,
   type CameraState,
+  type CanvasSize,
   createCameraState,
   screenToWorld,
   updateCamera,
@@ -155,6 +156,7 @@ import {
   type ClipTrack,
 } from './clipFile';
 import { BrushCursor, type BrushVariant } from './BrushCursor';
+import { CanvasHover } from './CanvasHover';
 import { ControlPanel } from './ControlPanel';
 import { canvasToPng, createDefaultJelly } from './defaultJelly';
 import {
@@ -332,11 +334,16 @@ export class JellySandbox {
   /** 編隊抓取形狀標記提示（issue #68）——同 `fanOverlay` 的模式。 */
   private readonly formationOverlay: FormationOverlay;
   /**
-   * 撒 Pin 的筆刷圓圈游標（issue #69）——同樣是純 DOM overlay，但指標位置由它
-   * 自己監聽（見 `BrushCursor` 說明）；這裡只負責「目前工具是不是撒 Pin」與
-   * 「半徑換算成幾個螢幕像素」。
+   * 撒 Pin 的筆刷圓圈游標（issue #69）——同樣是純 DOM overlay；這裡負責「目前
+   * 工具是不是撒 Pin」「半徑換算成幾個螢幕像素」與每幀餵它 `canvasHover` 的位置。
    */
   private readonly brushCursor: BrushCursor;
+  /**
+   * 指標在畫布上的懸停位置（issue #79 / V2 T3-8）——`PointerInput` 只追按下之後
+   * 的移動，「按下去之前先讓使用者看到這一下會做什麼」的兩個預覽（筆刷圓圈、
+   * 編隊形狀）都靠它。見 `CanvasHover` 說明。
+   */
+  private readonly canvasHover: CanvasHover;
   private readonly demoRunner = new DemoRunner();
   private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
@@ -603,12 +610,13 @@ export class JellySandbox {
     root.appendChild(this.fanOverlay.element);
     this.formationOverlay = new FormationOverlay();
     root.appendChild(this.formationOverlay.element);
+    this.brushCursor = new BrushCursor();
+    root.appendChild(this.brushCursor.element);
     // `isCanvas` 讀當下的 `renderer.canvas`：重新匯入圖片會換掉整個 canvas 元素，
     // 用回呼而非直接傳元素，換過之後判定自動跟著新的那一個走（issue #69）。
-    this.brushCursor = new BrushCursor(root, {
+    this.canvasHover = new CanvasHover(root, {
       isCanvas: (target) => target === this.renderer.canvas,
     });
-    root.appendChild(this.brushCursor.element);
     this.applyPinModeVisuals();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
@@ -665,7 +673,8 @@ export class JellySandbox {
     this.notice.remove();
     this.controlPanel.destroy();
     this.pinMarkers.destroy();
-    this.brushCursor.destroy(); // 它在 root 上掛了指標監聽（issue #69），一定要解掉
+    this.canvasHover.destroy(); // 它在 root 上掛了指標監聽（issue #79），一定要解掉
+    this.brushCursor.destroy();
     this.input.destroy();
     this.cameraInput.destroy();
     this.renderer.destroy();
@@ -1688,6 +1697,11 @@ export class JellySandbox {
     const elapsed = elapsedMs / 1000;
     this.lastFrameMs = nowMs;
 
+    // 筆刷圓圈是**游標**不是提示（issue #69／#79）：它代替滑鼠指標本身，永遠
+    // 不該落後指標，所以排在暫停守衛之前——暫停中果凍定格，但滑鼠還是會動。
+    // 提示層（含編隊形狀預覽）則跟著暫停一起定格，見下方那一區。
+    this.updateBrushCursor();
+
     // 暫停中（issue #34）：略過固定步迴圈、PerfMonitor 取樣與相機更新——果凍
     // 定格在當下形變、播放秒數不動、鏡頭不動、排定事件不觸發——只重畫這一格。
     // `lastFrameMs` 上面已更新，暫停期間累積的真實時間全數丟棄，按繼續時
@@ -1778,32 +1792,68 @@ export class JellySandbox {
         );
       }
       if (hints.formation) {
-        const project = (p: Point) =>
-          worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
-        const groups: FormationOverlayGroup[] = this.input.isDefiningFormation
-          ? [{ points: this.input.formationDefinePreview.map(project) }]
-          : this.input.formationActiveGroups.map((g) => ({ points: g.points.map(project) }));
-        this.formationOverlay.update(groups);
+        this.formationOverlay.update(this.formationOverlayGroups(canvasSize));
       }
-    }
-
-    // 筆刷圓圈游標（issue #69／#70）：半徑是世界座標，每幀換算成目前縮放下的
-    // 螢幕像素——縮放改變時圓圈大小才跟著對。用不到圓圈的工具不必算（那時這層
-    // 是隱藏的，`setRadiusPx` 值沒變本來也不寫 DOM）。
-    const brush = this.brushFor(this.activeTool);
-    if (brush) {
-      this.brushCursor.setRadiusPx(brush.radius * this.cameraState.transform.scale);
     }
 
     this.rafId = requestAnimationFrame(this.frame);
   };
+
+  /**
+   * 筆刷圓圈游標（issue #69／#70）：位置直接取 `canvasHover`（指標不在畫布上時
+   * 是 `null`，圓圈跟著收起來）；半徑是世界座標，每幀換算成目前縮放下的螢幕
+   * 像素——縮放改變時圓圈大小才跟著對。用不到圓圈的工具不必算半徑（那時這層
+   * 是隱藏的，`setRadiusPx` 值沒變本來也不寫 DOM）。
+   */
+  private updateBrushCursor(): void {
+    this.brushCursor.setPosition(this.canvasHover.point);
+    const brush = this.brushFor(this.activeTool);
+    if (brush) {
+      this.brushCursor.setRadiusPx(brush.radius * this.cameraState.transform.scale);
+    }
+  }
+
+  /**
+   * 這一幀編隊抓取提示要畫哪幾組（issue #68；issue #79 補上閒置時的懸停預覽）
+   * ——三種狀態依序優先，任一時刻只會是其中一種：
+   *
+   * 1. **定義形狀中**：畫已經點下的那幾個點（還在累積，尚未成為形狀）。
+   * 2. **拖曳中**：畫每個作用中手勢真正抓到的點（`formationActiveGroups` 只列
+   *    `attached`，落在果凍外被跳過的偏移點不畫——issue #68 原設計）。
+   * 3. **閒置**：形狀已定義、指標在畫布上 → 以指標處為主點畫整組形狀，按下去
+   *    之前就看得到「這一下會抓哪幾點」。少了這一段，那顆顯示開關在平常什麼
+   *    都看不到（issue #79 的起因）。指標不在畫布上（移到面板、離開視窗）或
+   *    還沒定義過形狀 → 空陣列，不留鬼影。
+   *
+   * 按下的瞬間 3 換成 2：兩者都以指標為主點、偏移量相同，視覺上是同一組點接手，
+   * 不會跳位。唯一的例外是「按下時整組點**一個都沒命中**果凍」——那時
+   * `ToolRouter` 根本不建立 session（沒有任何 `grab` 送出去），`formationActiveGroups`
+   * 是空的，於是落回 3 繼續畫預覽跟著游標。這是刻意的：那一下什麼都沒抓到，
+   * 讓形狀繼續顯示才看得出「剛才那下落在果凍外了」，畫面整個空掉反而像壞了。
+   */
+  private formationOverlayGroups(canvasSize: CanvasSize): FormationOverlayGroup[] {
+    const project = (p: Point) => worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
+    if (this.input.isDefiningFormation) {
+      return [{ points: this.input.formationDefinePreview.map(project) }];
+    }
+    const active = this.input.formationActiveGroups;
+    if (active.length > 0) {
+      return active.map((g) => ({ points: g.points.map(project) }));
+    }
+    if (this.activeTool !== 'formation') return [];
+    const hover = this.canvasHover.point;
+    if (!hover) return [];
+    const anchor = screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y);
+    const preview = this.input.formationPreviewAt(anchor);
+    return preview.length > 0 ? [{ points: preview.map(project) }] : [];
+  }
 
   private onResize = (): void => {
     // 畫布尺寸交給 Renderer；相機下一幀的 `updateCamera` 會用新畫布尺寸重新 fit。
     this.renderer.resize(this.root.clientWidth, this.root.clientHeight);
   };
 
-  private canvasSize(): { width: number; height: number } {
+  private canvasSize(): CanvasSize {
     return { width: this.root.clientWidth, height: this.root.clientHeight };
   }
 }
