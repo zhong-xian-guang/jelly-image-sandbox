@@ -18,6 +18,10 @@
  *
  * 「顯示網格」是純 debug 用的三角化線框開關，接 `JellyRenderer.setWireframeVisible`。
  *
+ * 「播放時隱藏提示」（issue #71）是蓋過上述所有提示開關的全域一列——播放中一律
+ * 暫時隱藏、播完各自還原，實際的壓下／還原在 `JellySandbox.applyHintVisibility`。
+ * 它自己不受播放／錄製鎖定影響（見 `onHideHintsDuringPlaybackChange`）。
+ *
  * 「Demo」按鈕（issue #15）播放中會被 `JellySandbox` 呼叫 `setPlaybackControlsEnabled(false)`
  * 全部鎖住，理由同上——避免疊加播放兩個 Demo 留下沒人清的殘留 Pin/Grab。
  *
@@ -142,6 +146,8 @@ export interface ControlPanelInitial {
   spraySpacing: number;
   /** 移除 Pin 半徑滑桿的初始值（issue #70）——見 `../input` 的 `DEFAULT_ERASE_RADIUS`。 */
   eraseRadius: number;
+  /** 「播放時隱藏提示」全域開關的初始值（issue #71）——見 `onHideHintsDuringPlaybackChange`。 */
+  hideHintsDuringPlayback: boolean;
 }
 
 /** 一個數值滑桿的範圍（issue #67 抽出——`tapStrengthRange` 與三個電風扇範圍共用同一形狀）。 */
@@ -234,6 +240,15 @@ export interface ControlPanelOptions {
    * 值（見 `ToolRouter.setEraseParams`），這裡也就是兩個各自獨立的回呼。
    */
   onEraseRadiusChange: (radius: number) => void;
+  /**
+   * 「播放時隱藏提示」全域開關（issue #71 / V2 T3-7）——開啟後只要有任何 Track／
+   * Demo 在播放，所有視覺提示（顯示網格／顯示 Pin／風扇範圍／風扇圖示／編隊抓取
+   * 提示）一律暫時隱藏，播放結束再各自恢復原本的開關狀態；實際的壓下／還原在
+   * `JellySandbox`，面板這邊只送出新值。是**全域**的一列、不屬於任何工具專屬
+   * 區塊，而且刻意不被 `setPlaybackControlsEnabled`／`setRecordingActive` 鎖住
+   * ——播放中臨時想看一眼提示（或反過來）隨時都能切。
+   */
+  onHideHintsDuringPlaybackChange: (enabled: boolean) => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -529,6 +544,13 @@ export class ControlPanel {
       toolSection,
       boundary.row,
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
+      // 全域一列（issue #71）：蓋掉的是所有提示，所以刻意放在工具專屬區塊外面、
+      // 緊接在「顯示網格」這類視覺開關旁邊，切工具不會讓它消失。
+      this.checkboxRow(
+        '播放時隱藏提示',
+        opts.initial.hideHintsDuringPlayback,
+        opts.onHideHintsDuringPlaybackChange,
+      ),
       softness.row,
       tapStrength.row,
       ...pins.rows,

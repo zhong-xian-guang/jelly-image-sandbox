@@ -41,6 +41,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       sprayRadius: 140,
       spraySpacing: 36,
       eraseRadius: 100,
+      hideHintsDuringPlayback: false,
     },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     fanWidthRange: { min: 20, max: 400, step: 5 },
@@ -68,6 +69,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onSprayRadiusChange: vi.fn(),
     onSpraySpacingChange: vi.fn(),
     onEraseRadiusChange: vi.fn(),
+    onHideHintsDuringPlaybackChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -1021,5 +1023,62 @@ describe('ControlPanel — 移除 Pin 控制項（issue #70 / V2 T3-6）', () =>
       .find((l) => l.textContent?.includes('Pin 模式'))
       ?.querySelector('input[type=checkbox]') as HTMLInputElement;
     expect(pinCheckbox.disabled).toBe(true);
+  });
+});
+
+describe('ControlPanel — 播放時隱藏提示（issue #71 / V2 T3-7）', () => {
+  function findHideHintsCheckbox(panel: ControlPanel): HTMLInputElement {
+    const label = [...panel.element.querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('播放時隱藏提示'),
+    );
+    expect(label).toBeDefined();
+    return label!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+  }
+
+  it('checkbox 初始值來自 initial.hideHintsDuringPlayback，切換觸發 onHideHintsDuringPlaybackChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const checkbox = findHideHintsCheckbox(panel);
+    expect(checkbox.checked).toBe(false);
+
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    expect(opts.onHideHintsDuringPlaybackChange).toHaveBeenCalledWith(true);
+
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event('change'));
+    expect(opts.onHideHintsDuringPlaybackChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('初始值為 true → 勾選框一開始就是勾著的', () => {
+    const base = makeOptions();
+    const panel = new ControlPanel(
+      makeOptions({ initial: { ...base.initial, hideHintsDuringPlayback: true } }),
+    );
+    expect(findHideHintsCheckbox(panel).checked).toBe(true);
+  });
+
+  // 驗收條件：這個開關「本身不受播放狀態影響、隨時可切換」——播放中鎖住的是
+  // Demo／錄製／Track 清單那一批，不包含它。
+  it('播放中／錄製中仍可切換（不被 setPlaybackControlsEnabled／setRecordingActive 鎖住）', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    panel.setPlaybackControlsEnabled(false);
+    panel.setRecordingActive(true);
+
+    const checkbox = findHideHintsCheckbox(panel);
+    expect(checkbox.disabled).toBe(false);
+
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    expect(opts.onHideHintsDuringPlaybackChange).toHaveBeenCalledWith(true);
+  });
+
+  // 它蓋掉的是「所有提示」，不是某個工具專屬的東西——因此不該躲在任何一個
+  // 工具專屬區塊（`.jelly-tool-params`）裡面，切工具不會讓它消失。
+  it('是面板上的全域一列，不屬於任何工具專屬參數區塊', () => {
+    const panel = new ControlPanel(makeOptions());
+    const checkbox = findHideHintsCheckbox(panel);
+    expect(checkbox.closest('.jelly-tool-params')).toBeNull();
   });
 });
