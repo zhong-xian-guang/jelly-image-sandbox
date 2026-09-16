@@ -3,23 +3,39 @@ import { describe, expect, it } from 'vitest';
 import type { SimMesh } from '../mesh';
 import { InfiniteBoundary, WalledBoundary } from './boundary';
 import { SimCore } from './SimCore';
-import type { InputEvent } from './types';
+import type { InputEvent, SurfacePoint } from './types';
 
 /**
  * 手搭一張規則三角網格當測試 fixture（不經 mesh pipeline，讓求解器測試獨立）。
  * `nx × ny` 個頂點、間距 `s`，每個 cell 切兩個三角形（CCW，y 向下）。
+ * 可選 `keepCell(i, j)`：只保留遮罩內的 cell（沒被任何三角形用到的頂點一併
+ * 剔除、索引重編），用來刻凹形 fixture。
  */
-function gridMesh(nx: number, ny: number, s: number): SimMesh {
-  const pos: number[] = [];
-  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) pos.push(i * s, j * s);
-
+function gridMesh(
+  nx: number,
+  ny: number,
+  s: number,
+  keepCell: (i: number, j: number) => boolean = () => true,
+): SimMesh {
   const idx = (i: number, j: number) => j * nx + i;
-  const ind: number[] = [];
+  const rawInd: number[] = [];
   for (let j = 0; j < ny - 1; j++)
     for (let i = 0; i < nx - 1; i++) {
-      ind.push(idx(i, j), idx(i + 1, j), idx(i + 1, j + 1));
-      ind.push(idx(i, j), idx(i + 1, j + 1), idx(i, j + 1));
+      if (!keepCell(i, j)) continue;
+      rawInd.push(idx(i, j), idx(i + 1, j), idx(i + 1, j + 1));
+      rawInd.push(idx(i, j), idx(i + 1, j + 1), idx(i, j + 1));
     }
+
+  // 未用到的頂點剔除、其餘保持 row-major 順序重編（全保留時索引 = `j * nx + i`）。
+  const used = new Set(rawInd);
+  const remap = new Map<number, number>();
+  const pos: number[] = [];
+  for (let raw = 0; raw < nx * ny; raw++) {
+    if (!used.has(raw)) continue;
+    remap.set(raw, remap.size);
+    pos.push((raw % nx) * s, Math.floor(raw / nx) * s);
+  }
+  const ind = rawInd.map((raw) => remap.get(raw)!);
 
   const positions = new Float32Array(pos);
   const indices = new Uint32Array(ind);
@@ -1193,5 +1209,49 @@ describe('SimCore — reset', () => {
     const reusedResult = Array.from(reused.positions);
 
     expect(reusedResult).toEqual(freshResult);
+  });
+});
+
+describe('SimCore — Region 依網格拓撲分組（issue #83）', () => {
+  /**
+   * 音叉形：13×13 頂點網格（間距 8）挖掉第 6 欄、第 0–9 列的 cell → 兩根叉齒
+   * x∈[0,48] 與 x∈[56,96]，只靠底部兩列 cell 相連。兩齒尖端相距 8，遠小於
+   * Region cell 邊長（對角線 ≈ 136 × cellFrac 0.15 ≈ 20）。
+   */
+  const FORK = () => gridMesh(13, 13, 8, (i, j) => !(i === 6 && j <= 9));
+
+  /** 以 `pick` 拿到的 surface point 在目前位置下的世界座標（重心內插）。 */
+  function surfacePos(sim: SimCore, sp: SurfacePoint): { x: number; y: number } {
+    const pos = sim.positions;
+    let x = 0;
+    let y = 0;
+    for (let k = 0; k < 3; k++) {
+      x += sp.w[k]! * pos[2 * sp.tri[k]!]!;
+      y += sp.w[k]! * pos[2 * sp.tri[k]! + 1]!;
+    }
+    return { x, y };
+  }
+
+  it('拉 A 齒尖端，隔著縫隙、網格上不相連的 B 齒尖端不跟著動', () => {
+    const sim = new SimCore(FORK());
+    // 釘住整排叉齒根部（y = 80），排除經底部的正當傳導——剩下的耦合只能來自
+    // 求解器把兩齒放進同一個 Region。
+    for (let x = 0; x <= 96; x += 8) sim.applyInput({ type: 'pin', id: `root${x}`, x, y: 80 });
+    const bTip = sim.pick(56, 0)!;
+    const bBefore = surfacePos(sim, bTip);
+
+    sim.applyInput({ type: 'grab', id: 'a', x: 48, y: 0 });
+    sim.applyInput({ type: 'moveGrab', id: 'a', x: 28, y: -30 });
+    run(sim, 120);
+
+    const a = sim.attachPoint('a')!;
+    const aMoved = Math.hypot(a.x - 48, a.y - 0);
+    expect(aMoved).toBeGreaterThan(30); // 拉得動 A
+
+    const bAfter = surfacePos(sim, bTip);
+    const bMoved = Math.hypot(bAfter.x - bBefore.x, bAfter.y - bBefore.y);
+    // 修前 B 跟著走 ≈ 55%；修後剩下的是兩齒根部經底部那列邊真的相連、落在同一
+    // 格時合法成為一個 Region 的微量耦合（≈ 2%）。
+    expect(bMoved).toBeLessThan(aMoved * 0.05);
   });
 });
