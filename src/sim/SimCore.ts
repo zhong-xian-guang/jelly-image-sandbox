@@ -22,8 +22,9 @@
  *      位置，馬上就被蓋掉。
  *   2. 預測：symplectic Euler、無重力（所有 Particle 一視同仁；已烤進步驟 1 的
  *      電風扇加速度會在這裡被積分進位置）。
- *   3. shape-matching 脊椎：重疊方格 lattice 的每個 Region 做 2×2 polar
- *      decomposition 取旋轉 → goal → `x += α_sm·(g − x)`。
+ *   3. shape-matching 脊椎：重疊方格 lattice（每格再依網格拓撲切連通分量，
+ *      issue #83）的每個 Region 做 2×2 polar decomposition 取旋轉 → goal →
+ *      `x += α_sm·(g − x)`。
  *   4. XPBD 細節層（`params.xpbd`，可關）：每條邊一條 distance 約束、每個三角形
  *      一條 signed-area 約束（`C = 有號面積 − 靜止有號面積`，翻面時號變、梯度
  *      翻正——不取絕對值）。compliant projection、1 iteration、`α̃ = compliance/h²`。
@@ -245,40 +246,92 @@ export class SimCore {
   /**
    * 在 Sim mesh 靜止 bbox 上鋪重疊方格 lattice，重建 Region 清單。
    * cell 邊長 `L = 對角線 × cellFrac`，每軸以 `L / 2` 的 stride 重疊 2×。
-   * 含 ≥ 4 個 Particle 的 cell 才是一個 Region。改 `params.cellFrac` 後呼叫。
+   *
+   * 一個 cell 內的 Particle **再依網格邊切成連通分量**，每個分量各自成一個
+   * Region（issue #83）：凹形物件上兩塊只隔著透明縫、網格上並不相連的部位
+   * （例如相鄰的兩根尖角）會落進同一個方格，若不切開就會被當成一塊剛體擬合
+   * ——拉一邊、另一邊跟著走，像有隱形桿子連著。BFS 限制在該 cell 的成員子集
+   * 內，所以繞 cell 外面才相連的兩坨（馬蹄形的兩端）也會正確分開。
+   *
+   * 含 ≥ 4 個 Particle 的分量才是一個 Region（門檻沿用拆分前的規則：實測真實
+   * 網格在預設／最硬 cellFrac 下拆分後無任何頂點失去 Region；降門檻會多出大量
+   * bbox 邊緣的 2–3 點共線小 Region，經 goal 等權平均稀釋大 Region 的拉力、改變
+   * 凸形物件手感，不在 issue #83 範圍）。改 `params.cellFrac` 後呼叫。
    */
   rebuildRegions(): void {
     const bb = this.bounds(this.rest);
     const { minX, minY, maxX, maxY } = bb;
     const L = Math.max(this.diag(bb) * this.params.cellFrac, 1e-3);
     const stride = L / 2;
+    const adjacency = this.adjacency();
+    // `cellOf[i]` = Particle i 目前所屬 cell 的序號（限制 BFS 不跨出 cell）；
+    // `visited[i]` = 已被歸入某分量的 cell 序號。兩者都用 cell 序號當時間戳，免清空。
+    const cellOf = new Int32Array(this.n).fill(-1);
+    const visited = new Int32Array(this.n).fill(-1);
+    const queue: number[] = [];
     const regions: Region[] = [];
+    let cellId = 0;
     for (let gx = minX - stride; gx < maxX + stride; gx += stride) {
-      for (let gy = minY - stride; gy < maxY + stride; gy += stride) {
-        const members: number[] = [];
+      for (let gy = minY - stride; gy < maxY + stride; gy += stride, cellId++) {
+        const inCell: number[] = [];
         for (let i = 0; i < this.n; i++) {
           const x = this.rest[2 * i]!;
           const y = this.rest[2 * i + 1]!;
-          if (x >= gx && x < gx + L && y >= gy && y < gy + L) members.push(i);
+          if (x >= gx && x < gx + L && y >= gy && y < gy + L) {
+            inCell.push(i);
+            cellOf[i] = cellId;
+          }
         }
-        if (members.length < 4) continue;
-        let cx = 0;
-        let cy = 0;
-        for (const i of members) {
-          cx += this.rest[2 * i]!;
-          cy += this.rest[2 * i + 1]!;
+        for (const seed of inCell) {
+          if (visited[seed] === cellId) continue;
+          const members: number[] = [];
+          visited[seed] = cellId;
+          queue.length = 0;
+          queue.push(seed);
+          for (let head = 0; head < queue.length; head++) {
+            const i = queue[head]!;
+            members.push(i);
+            for (const j of adjacency[i]!) {
+              if (cellOf[j] !== cellId || visited[j] === cellId) continue;
+              visited[j] = cellId;
+              queue.push(j);
+            }
+          }
+          if (members.length < 4) continue;
+          members.sort((a, b) => a - b);
+          regions.push(this.makeRegion(members));
         }
-        cx /= members.length;
-        cy /= members.length;
-        const q = new Float64Array(members.length * 2);
-        for (let m = 0; m < members.length; m++) {
-          q[2 * m] = this.rest[2 * members[m]!]! - cx;
-          q[2 * m + 1] = this.rest[2 * members[m]! + 1]! - cy;
-        }
-        regions.push({ members, q });
       }
     }
     this.regions = regions;
+  }
+
+  /** 每個 Particle 的鄰接 Particle 清單（由 `edges` 建，順序決定性）。 */
+  private adjacency(): number[][] {
+    const adjacency: number[][] = Array.from({ length: this.n }, () => []);
+    for (const e of this.edges) {
+      adjacency[e.p]!.push(e.q);
+      adjacency[e.q]!.push(e.p);
+    }
+    return adjacency;
+  }
+
+  /** 以 `members` 的靜止質心為原點記下各成員的相對座標 `q`。 */
+  private makeRegion(members: number[]): Region {
+    let cx = 0;
+    let cy = 0;
+    for (const i of members) {
+      cx += this.rest[2 * i]!;
+      cy += this.rest[2 * i + 1]!;
+    }
+    cx /= members.length;
+    cy /= members.length;
+    const q = new Float64Array(members.length * 2);
+    for (let m = 0; m < members.length; m++) {
+      q[2 * m] = this.rest[2 * members[m]!]! - cx;
+      q[2 * m + 1] = this.rest[2 * members[m]! + 1]! - cy;
+    }
+    return { members, q };
   }
 
   /** 替換碰撞環境（`WalledBoundary` / `InfiniteBoundary`）。執行期可隨時呼叫。 */
