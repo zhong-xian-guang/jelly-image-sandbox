@@ -28,6 +28,14 @@
  * 這裡跟一般 Grab 的 `cancel` 同一個道理（不是電風扇放置那種「還沒 emit 過任何
  * 東西」的狀態，已經是活著的約束，取消要真的放開，不能悄悄留著）。
  *
+ * **編隊抓取的輕拍**（issue #81 / V2 T3-9）：若這次手勢是快速按放（用
+ * `GestureTracker` 那支 `isTap`，與一般操作同一組門檻），`up` 會在送 `release`
+ * 之前先對 `attached` 裡每個點各送一次 `tap`——整組因此是
+ * `grab×N → tap×N → release×N`，跟一般操作的 `grab → tap → release` 同形
+ * （#64 US23：編隊抓取就是同時操作好幾個一般的 Grab）。`tap` 打在**按下當下**
+ * 的位置（`startWorld + offset`），跟 `GestureTracker` 一致。`cancel` 是例外，
+ * 不送 `tap`：中斷不是完成一次輕拍。
+ *
  * **撒 Pin**（issue #69 / V2 T3-5）：點一下就完成的**單次**動作——`down` 以點擊
  * 處為圓心、`sprayRadius` 為半徑撒一批 Pin，`move`／`up`／`cancel` 完全不作用
  * （不是按住持續噴）。撒點用經典的 dart throwing：用注入的 `random`（預設
@@ -96,7 +104,14 @@
  */
 
 import { isPointInFanRect, type FanState, type PinInfo, type PointerId, type Point } from '../sim';
-import { GestureTracker, type GestureTrackerOptions } from './GestureTracker';
+import {
+  GestureTracker,
+  isTap,
+  resolveGestureConfig,
+  type GestureConfig,
+  type GestureStart,
+  type GestureTrackerOptions,
+} from './GestureTracker';
 
 /**
  * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）、
@@ -215,7 +230,12 @@ type FanSession = FanPlaceSession | FanMoveSession;
  * `grab` 的偏移量索引 + 對應合成 id（落在外面的索引被過濾掉、完全不進這個
  * 清單，`move`/`up`/`cancel` 因此天然只作用於真的抓到的那幾點）。
  */
-interface FormationSession {
+interface FormationSession extends GestureStart {
+  /**
+   * 指標**目前**的世界座標（`move` 每次整顆重新指派）。跟 `GestureStart.startWorld`
+   * 分得很清楚：拖曳讀這個，輕拍讀那個（issue #81）——`down` 當下兩者的值相同，
+   * 但存的是各自的物件，之後誰也不會被對方帶著跑。
+   */
   lastWorld: Point;
   attached: readonly { offset: Point; id: string }[];
 }
@@ -269,6 +289,13 @@ export class ToolRouter {
   private eraseRadius = DEFAULT_ERASE_RADIUS;
   /** 進行中的擦除手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly eraseSessions = new Map<PointerId, EraseSession>();
+  /**
+   * 解析後的手勢門檻（issue #81）——編隊抓取的輕拍判定要跟一般操作**同一組**
+   * 數值，否則同一個使用者在兩個模式下「怎樣算快速按放」會前後矛盾。`opts` 原本
+   * 只轉給 `GestureTracker`，這裡用同一支 `resolveGestureConfig` 另存一份自己用
+   * （同一個來源與同一套預設值，不是第二套設定）。
+   */
+  private readonly config: GestureConfig;
 
   constructor(opts: ToolRouterOptions) {
     this.gestureTracker = new GestureTracker(opts);
@@ -278,6 +305,7 @@ export class ToolRouter {
     this.getFan = opts.getFan;
     this.listPins = opts.listPins;
     this.random = opts.random ?? Math.random;
+    this.config = resolveGestureConfig(opts.config);
   }
 
   setActiveTool(tool: ToolId): void {
@@ -429,7 +457,16 @@ export class ToolRouter {
         attached.push({ offset, id: formationId });
         this.emit({ type: 'grab', id: formationId, x: point.x, y: point.y });
       });
-      if (attached.length > 0) this.formationSessions.set(id, { lastWorld: world, attached });
+      if (attached.length > 0) {
+        this.formationSessions.set(id, {
+          lastWorld: { x: world.x, y: world.y },
+          attached,
+          startX: screenX,
+          startY: screenY,
+          startT: timeMs,
+          startWorld: world,
+        });
+      }
       return;
     }
     if (this.activeTool === 'spray') {
@@ -505,6 +542,7 @@ export class ToolRouter {
     }
     if (this.activeTool === 'formation') {
       if (this.formationDefinePoints) return; // 定義中：down 才算數
+      this.emitFormationTapIfAny(id, screenX, screenY, timeMs);
       this.releaseFormationSession(id);
       return;
     }
@@ -602,6 +640,38 @@ export class ToolRouter {
       hitPinIds.push(pin.id);
     }
     for (const pinId of hitPinIds) this.emit({ type: 'unpin', id: pinId });
+  }
+
+  /**
+   * 這次編隊手勢如果是「快速按放」（issue #81 / V2 T3-9），對每個已附著的點各送
+   * 一次 `tap`——由 `up` 在 `releaseFormationSession` 之前呼叫，湊出跟一般操作
+   * 同形的 `grab×N → tap×N → release×N`。
+   *
+   * 為什麼編隊也要有輕拍：#64 US23 說「編隊抓取用起來就是同時操作好幾個一般的
+   * Grab」，那麼快速按放理當拍出一整組；ADR-0011 也指出快速點放與拖曳本來就是
+   * 兩種不衝突的手勢，共存沒有歧義。判定直接用 `GestureTracker` 那支 `isTap`，
+   * 座標同樣取 `startWorld`（**按下當下**的位置）——兩個模式的輕拍是同一回事，
+   * 共用同一份判定才不會日後各自漂移。
+   *
+   * 落在果凍外、`down` 時被跳過的偏移點不在 `attached` 裡，自然不會被拍——跟
+   * `grab`／`release` 的處理一致。`cancel` 刻意不走這裡：中斷不是完成一次輕拍。
+   */
+  private emitFormationTapIfAny(
+    id: PointerId,
+    screenX: number,
+    screenY: number,
+    timeMs: number,
+  ): void {
+    const session = this.formationSessions.get(id);
+    if (!session) return;
+    if (!isTap(session, screenX, screenY, timeMs, this.config)) return;
+    for (const { offset } of session.attached) {
+      this.emit({
+        type: 'tap',
+        x: session.startWorld.x + offset.x,
+        y: session.startWorld.y + offset.y,
+      });
+    }
   }
 
   /** `up`／`cancel` 共用：對這次手勢裡每個已附著的點送 `release`，清掉 session。 */
