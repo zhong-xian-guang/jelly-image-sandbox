@@ -16,7 +16,7 @@
 4. **描 Contour**：手刻 marching squares，alpha 當 scalar field。輸出封閉多邊形路徑（外環 + 洞環）。
 5. **簡化**：`simplify-js`（BSD-2-Clause）Douglas–Peucker。初始容差：mask 像素座標下 `1.5`px，之後調。
 6. **三角化**：`cdt2d`（MIT）做 constrained Delaunay，約束邊 = 簡化後的 Contour 邊。
-7. **內部點**：在 Contour 內撒 jittered grid（或 blue-noise）當 Steiner points 一併餵入。初始間距：讓整塊 Jelly 約 200–500 個 Particle——**目標 Particle 數預定開放給使用者調整**（「網格密度」拉霸，見 CONTEXT.md、issue #89；預設 350）。**抖動用有種子的 PRNG**（種子 = hash(降採樣後 alpha mask 位元組 + 所有網格參數)），同一張圖 + 同參數永遠得到同一個 Sim mesh（見 [ADR-0005](../adr/0005-v1-keeps-sim-deterministic-and-input-recordable.md)）。整個管線不得用 `Math.random` 或 wall-clock。
+7. **內部點**：在 Contour 內撒 jittered grid（或 blue-noise）當 Steiner points 一併餵入。初始間距：讓整塊 Jelly 約 200–500 個 Particle——**目標 Particle 數由使用者調整**（「網格密度」拉霸 100–800，見 CONTEXT.md、issue #89；預設 350）。**抖動用有種子的 PRNG**（種子 = hash(降採樣後 alpha mask 位元組 + 所有網格參數)），同一張圖 + 同參數永遠得到同一個 Sim mesh（見 [ADR-0005](../adr/0005-v1-keeps-sim-deterministic-and-input-recordable.md)）。整個管線不得用 `Math.random` 或 wall-clock。
 8. **Ruppert 品質細化**（自寫，`src/mesh/refine.ts`，見 ADR-0002）：最小角下界初始 `25°`、最大面積上界 = `2 × 目標間距²`；壞三角形補 circumcenter；constrained segment 被既有頂點或待插入 circumcenter encroach（落在直徑圓內）改分裂中點。每回合以固定點序重跑 `cdt2d`（批次細化）→ 決定性。批次插入時，同回合兩個相距小於「較小外接半徑的一半」的 circumcenter 只取一個，避免補點互相生 sliver 而發散。兩道終止保險：回合數上限 `30`、頂點數上限 = `目標 Particle 數 × 4`；尖銳凹形輸入角可能撞到上限，殘餘壞三角形交給下一步。
 9. **Sliver 清理**：細化後仍面積 `< ε_area` 或最小角 `< 15°` 的三角形，丟棄或與鄰邊合併（保護 signed-area 約束的梯度）。
 10. **指定 UV**：每個頂點 UV = 它在原圖的正規化座標。
@@ -116,13 +116,13 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 |---|---|
 | Alpha mask 最長邊 | 1024 px |
 | Douglas–Peucker 容差 | 1.5 px（mask 座標） |
-| 目標 Particle 數 | 200–500（細化後實測約 430–470） |
+| 目標 Particle 數 | **使用者可調**（「網格密度」拉霸 100–800、步進 10，預設 350；效能降級時自動砍半、可手動拉回，issue #89）；細化後實際頂點數約為目標的 1.2–1.35 倍 |
 | Ruppert 最小角 | 25° |
 | Ruppert 最大面積 | 2 × 目標間距² |
 | Ruppert 終止保險 | 回合上限 30、頂點上限 目標數 × 4 |
 | Sliver 丟棄門檻 | 面積 < ε 或最小角 < 15° |
 | 顯示幀 | 60 Hz |
-| substep / 幀 | 4（弱裝置 2） |
+| substep / 幀 | 4（弱裝置 2；降級當幀同時把「網格密度」拉霸砍半） |
 | 約束迭代 / substep | 1 |
 | Region cell 邊長 | Jelly 對角線 × 0.15（prototype 手感實測） |
 | Region 最小成員數 | 4（拆連通分量後的分量大小；issue #83 實測真實網格拆分後預設／最硬 cellFrac 下無頂點失去 Region，故不降） |

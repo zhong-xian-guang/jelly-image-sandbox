@@ -152,6 +152,8 @@ export interface ControlPanelInitial {
   hideHintsDuringPlayback: boolean;
   /** 「匯入尺寸」拉霸的初始值（issue #88 / V3 T1-1），世界單位——見 `onImportSizeChange`。 */
   importSize: number;
+  /** 「網格密度」拉霸的初始值（issue #89 / V3 T1-2），Particle 數——見 `onMeshDensityChange`。 */
+  meshDensity: number;
 }
 
 /** 一個數值滑桿的範圍（issue #67 抽出——`tapStrengthRange` 與三個電風扇範圍共用同一形狀）。 */
@@ -176,6 +178,8 @@ export interface ControlPanelOptions {
   eraseRadiusRange: RangeSpec;
   /** 「匯入尺寸」拉霸的範圍（issue #88）。 */
   importSizeRange: RangeSpec;
+  /** 「網格密度」拉霸的範圍（issue #89）。 */
+  meshDensityRange: RangeSpec;
   /** 「Demo」按鈕列表（issue #15），依序顯示；點下呼叫 `onRunDemo(id)`。 */
   demos: readonly DemoMenuItem[];
   /**
@@ -262,6 +266,12 @@ export interface ControlPanelOptions {
    * 也不因載入片段而被改寫（拉霸永遠代表「下一次」的意圖）。
    */
   onImportSizeChange: (size: number) => void;
+  /**
+   * 「網格密度」拉霸變更（issue #89 / V3 T1-2，見 CONTEXT.md「網格密度」）——下一次
+   * 匯入的 `targetParticleCount`。同 `onImportSizeChange`：只管「下一次」，不鎖、不因
+   * 載入片段而改寫。效能退路壓拉霸走 `setMeshDensity`（只動顯示），不會回到這裡。
+   */
+  onMeshDensityChange: (density: number) => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -390,6 +400,9 @@ export class ControlPanel {
   private readonly softnessInput: HTMLInputElement;
   private readonly tapStrengthInput: HTMLInputElement;
   private readonly boundarySelect: HTMLSelectElement;
+  /** 「網格密度」拉霸與旁邊的數值——效能退路 `setMeshDensity` 兩個都要更新（issue #89）。 */
+  private readonly meshDensityInput: HTMLInputElement;
+  private readonly meshDensityOutput: HTMLOutputElement;
 
   constructor(opts: ControlPanelOptions) {
     this.onTrackStartTimeChange = opts.onTrackStartTimeChange;
@@ -451,6 +464,14 @@ export class ControlPanel {
       opts.initial.importSize,
       opts.onImportSizeChange,
     );
+    const meshDensity = this.rangeRowWithValue(
+      '網格密度',
+      opts.meshDensityRange,
+      opts.initial.meshDensity,
+      opts.onMeshDensityChange,
+    );
+    this.meshDensityInput = meshDensity.input;
+    this.meshDensityOutput = meshDensity.output;
 
     const fanWidth = this.rangeRow(
       '風扇寬度',
@@ -576,6 +597,7 @@ export class ControlPanel {
       // 物理參數放一起、用小標題隔開；場上的果凍不受影響。
       this.importHeading(),
       importSize.row,
+      meshDensity.row,
       ...pins.rows,
       followLock.row,
       this.buttonRow('框住果凍', opts.onFrameJelly),
@@ -811,6 +833,17 @@ export class ControlPanel {
   /** 載入片段後把邊界模式下拉灌回面板（issue #58）。同 `setSoftness` 的理由。 */
   setBoundary(mode: BoundaryMode): void {
     if (this.boundarySelect.value !== mode) this.boundarySelect.value = mode;
+  }
+
+  /**
+   * 效能退路壓拉霸（issue #89）——`JellySandbox` 在 `PerfMonitor` 降級那一幀把「網格
+   * 密度」砍半後灌回面板。只動拉霸與旁邊的數值、不觸發 `input` 事件、不呼叫
+   * `onMeshDensityChange`（沙盒端自己已經改了狀態，再回呼會繞一圈）。
+   */
+  setMeshDensity(value: number): void {
+    const text = String(value);
+    if (this.meshDensityInput.value !== text) this.meshDensityInput.value = text;
+    if (this.meshDensityOutput.textContent !== text) this.meshDensityOutput.textContent = text;
   }
 
   /**

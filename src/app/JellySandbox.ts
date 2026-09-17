@@ -93,12 +93,13 @@
  * 播放中互斥（`ControlPanel` 依 `setRecordingActive`／`setPlaybackControlsEnabled`
  * 互相鎖住對方的按鈕）。
  *
- * **substep 自動降級 + 網格解析度退路**（issue #16 / T15）：`PerfMonitor`（純
- * 狀態機，見該檔）每幀吃「這幀花了幾毫秒」，持續超標（弱裝置／背景分頁搶資源）
- * 就把 `sim.params.substeps` 從 4 降到 2，讓每步花的運算變少、幀率回穩；持續
- * 回穩又升回 4。降級當下順便點亮一次性的「網格退路」旗標——舊 Jelly 拓撲已凍結
- * 沒法即時減面，只能讓**下一次**拖放匯入改用較低的 `targetParticleCount`（見
- * `REDUCED_TARGET_PARTICLE_COUNT`），新匯入的 Jelly 三角形數變少、負擔跟著降。
+ * **substep 自動降級 + 網格密度退路**（issue #16 / T15；退路改成壓拉霸見
+ * issue #89）：`PerfMonitor`（純狀態機，見該檔）每幀吃「這幀花了幾毫秒」，持續
+ * 超標（弱裝置／背景分頁搶資源）就把 `sim.params.substeps` 從 4 降到 2，讓每步
+ * 花的運算變少、幀率回穩；持續回穩又升回 4。降級當下順便點亮一次性的「網格
+ * 退路」旗標——舊 Jelly 拓撲已凍結沒法即時減面，只能讓**下一次**匯入的三角形
+ * 變少：`frame()` 讀到旗標就把「網格密度」拉霸砍半（`halveMeshDensity`）、面板
+ * 同步、畫面提示一行（`applyMeshDensityFallback`）；使用者之後可以手動拉回去。
  * `frame()` 每幀把目前 substep 數同步到 `ControlPanel.setPerfStatus`，手動用
  * DevTools CPU 節流測試時能直接看到 4→2→4 有沒有真的發生。
  */
@@ -176,6 +177,7 @@ import { clampFanIconRadiusPx, FanOverlay } from './FanOverlay';
 import { FileImportInput } from './FileImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { FormationOverlay, type FormationOverlayGroup } from './FormationOverlay';
+import { DEFAULT_MESH_DENSITY, halveMeshDensity, MESH_DENSITY_RANGE } from './meshDensity';
 import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
 import {
@@ -251,14 +253,6 @@ const DEFAULT_IMPORT_SIZE = 512;
  * `pinModeContext`），這樣判定範圍不會隨縮放忽大忽小。
  */
 const PIN_REMOVE_RADIUS_PX = 16;
-/**
- * 網格解析度退路（issue #16）：substep 降級發生後，下一次拖放匯入改用這個較低的
- * `targetParticleCount`（預設 `DEFAULT_PARAMS.targetParticleCount` 的一半），讓
- * 新匯入的 Jelly 三角形數變少、負擔跟著降下來。舊 Jelly 拓撲已凍結沒法即時降，
- * 這條退路只影響「下一張」匯入的圖（見 `PerfMonitor.consumeMeshFallbackPending`）。
- */
-const REDUCED_TARGET_PARTICLE_COUNT = Math.round(DEFAULT_PARAMS.targetParticleCount / 2);
-
 /**
  * 會被「播放時隱藏提示」（issue #71）蓋到的提示層，每層一個 key——即面板上那五顆
  * 顯示開關。撒 Pin／移除 Pin 的筆刷圓圈刻意不在此列，理由見
@@ -470,8 +464,8 @@ export class JellySandbox {
    */
   private softness = DEFAULT_SOFTNESS;
   /**
-   * 最近一次匯入實際餵給 `buildSimMesh` 的**解析後完整**參數（issue #57）——含可能被
-   * 效能退路砍半的 `targetParticleCount`。存檔時原樣寫進 `ClipState.meshParams`，載入端
+   * 最近一次匯入實際餵給 `buildSimMesh` 的**解析後完整**參數（issue #57）——含匯入當下
+   * 「網格密度」拉霸的 `targetParticleCount`。存檔時原樣寫進 `ClipState.meshParams`，載入端
    * （issue #58）據此決定性重算 mesh。還沒匯入任何圖時 = `DEFAULT_PARAMS`（內建果凍）。
    */
   private lastMeshParams: BuildSimMeshParams = { ...DEFAULT_PARAMS };
@@ -486,6 +480,12 @@ export class JellySandbox {
    * 只是意圖：載入片段不改寫它（那是還原、不是重新匯入），場上的果凍也不跟著變。
    */
   private importSize = DEFAULT_IMPORT_SIZE;
+  /**
+   * 「網格密度」拉霸目前值（issue #89）——**下一次**匯入的 `targetParticleCount`。
+   * 同 `importSize`：只是意圖，載入片段不改寫、場上的果凍不跟著變。效能退路
+   * （`applyMeshDensityFallback`）會直接改它並同步面板。
+   */
+  private meshDensity: number = DEFAULT_MESH_DENSITY;
   /**
    * 最近一次**實際套用**的匯入尺寸（issue #88）——存檔時原樣寫進 `ClipState.importSize`，
    * 載入端據此在 `buildSimMesh` 之後縮放（見 `scaleMeshToLongestEdge`）。跟 `importSize`
@@ -567,8 +567,10 @@ export class JellySandbox {
         eraseRadius: this.eraseRadius,
         hideHintsDuringPlayback: this.hideHintsDuringPlayback,
         importSize: this.importSize,
+        meshDensity: this.meshDensity,
       },
       importSizeRange: IMPORT_SIZE_RANGE,
+      meshDensityRange: MESH_DENSITY_RANGE,
       tapStrengthRange: TAP_STRENGTH_RANGE,
       fanWidthRange: FAN_WIDTH_RANGE,
       fanStrengthRange: FAN_STRENGTH_RANGE,
@@ -597,6 +599,7 @@ export class JellySandbox {
       onEraseRadiusChange: (radius) => this.setEraseRadius(radius),
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onImportSizeChange: (size) => this.setImportSize(size),
+      onMeshDensityChange: (density) => this.setMeshDensity(density),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -1227,12 +1230,31 @@ export class JellySandbox {
     return null;
   }
 
-  /** 「撒 Pin 範圍半徑」滑桿（issue #69）——下一次撒點用，同時是筆刷圓圈的大小。 */
   /** 「匯入尺寸」拉霸（issue #88）——只記下意圖，下一次匯入才套用；場上的果凍不動。 */
   private setImportSize(size: number): void {
     this.importSize = size;
   }
 
+  /** 「網格密度」拉霸（issue #89）——同 `setImportSize`，只記下意圖。 */
+  private setMeshDensity(density: number): void {
+    this.meshDensity = density;
+  }
+
+  /**
+   * 效能退路（issue #89，取代 issue #16 的「下一次匯入暗中砍半」）：`PerfMonitor`
+   * 降級那一幀被 `frame()` 呼叫。把「網格密度」拉霸砍半（對齊步進、不低於下限）、
+   * 面板同步顯示、畫面提示一行——退路變成看得見、也拉得回去的。已在下限時沒東西
+   * 可砍，就不改值也不提示（substep 讀出列仍會顯示「已降級」）。
+   */
+  private applyMeshDensityFallback(): void {
+    const reduced = halveMeshDensity(this.meshDensity, MESH_DENSITY_RANGE);
+    if (reduced === this.meshDensity) return;
+    this.meshDensity = reduced;
+    this.controlPanel.setMeshDensity(reduced);
+    this.showNotice(`效能不足，已把網格密度降到 ${reduced}；下一次匯入生效`);
+  }
+
+  /** 「撒 Pin 範圍半徑」滑桿（issue #69）——下一次撒點用，同時是筆刷圓圈的大小。 */
   private setSprayRadius(radius: number): void {
     this.sprayRadius = radius;
     this.input.setSprayParams({ radius });
@@ -1436,15 +1458,13 @@ export class JellySandbox {
   };
 
   private async importImage(imageBytes: Uint8Array): Promise<void> {
-    // 網格解析度退路（issue #16）：上次 substep 降級以來還沒消化過，這次匯入改用
-    // 較低的 targetParticleCount（見 REDUCED_TARGET_PARTICLE_COUNT、PerfMonitor）。
-    // 這裡就把參數**解析完整**（不只帶 diff），存檔要原樣寫進 `ClipState.meshParams`
-    // 供載入端決定性重算（issue #57）。
+    // 網格密度（issue #89）：拉霸值就是這次的 targetParticleCount，其他網格參數維持
+    // 預設。這裡就把參數**解析完整**（不只帶 diff），存檔要原樣寫進
+    // `ClipState.meshParams` 供載入端決定性重算（issue #57）。效能退路不在這裡——
+    // 它在 `frame()` 直接壓拉霸（`applyMeshDensityFallback`），這裡讀到的已是壓過的值。
     const meshParams: BuildSimMeshParams = {
       ...DEFAULT_PARAMS,
-      ...(this.perfMonitor.consumeMeshFallbackPending()
-        ? { targetParticleCount: REDUCED_TARGET_PARTICLE_COUNT }
-        : {}),
+      targetParticleCount: this.meshDensity,
     };
     // 匯入尺寸（issue #88）：在管線之後、建 `SimCore` 之前把網格縮到拉霸指定的最長邊。
     // 這一步在管線外（不進 `BuildSimMeshParams`／種子雜湊，ADR-0005）。先把拉霸值
@@ -1551,8 +1571,8 @@ export class JellySandbox {
 
   /**
    * 「載入片段」整包取代場景（issue #58）：用存檔的影像位元組 + 完整 mesh 參數
-   * 決定性重算 mesh（繞過 `perfMonitor` 的效能退路——存檔當下已經是實際生效的
-   * 完整參數，不該再被目前裝置的降級狀態動）、貼圖依存的格式重建，走跟「重新
+   * 決定性重算 mesh（不套目前的「網格密度」拉霸——存檔當下已經是實際生效的
+   * 完整參數，不該被目前拉霸或裝置的降級狀態動）、貼圖依存的格式重建，走跟「重新
    * 匯入圖片」相同的收束路徑（`replaceJelly`：中斷播放／錄製、清空 Track／群組／
    * 初始 Pin，換新 `SimCore` + `JellyRenderer`，鏡頭自動框住新果凍——即「剛匯入
    * 一張圖」的鏡位，不保存存檔時的手動平移／縮放）。`replaceJelly` 成功後才把
@@ -1576,7 +1596,7 @@ export class JellySandbox {
 
     this.lastImage = clip.image;
     this.lastMeshParams = clip.meshParams;
-    this.lastImportSize = clip.importSize; // 拉霸 `importSize` 刻意不動：它代表「下一次」
+    this.lastImportSize = clip.importSize; // 拉霸 `importSize`／`meshDensity` 刻意不動：它們代表「下一次」
 
     this.setSoftness(clip.sim.softness);
     this.controlPanel.setSoftness(clip.sim.softness);
@@ -1764,6 +1784,8 @@ export class JellySandbox {
     this.perfMonitor.sample(elapsedMs, clampedElapsed);
     this.sim.params.substeps = this.perfMonitor.substeps;
     this.controlPanel.setPerfStatus(this.perfMonitor.substeps, this.perfMonitor.degraded);
+    // 降級發生的那一幀把「網格密度」拉霸砍半（issue #89）——旗標一次性，不會每幀重砍。
+    if (this.perfMonitor.consumeMeshFallbackPending()) this.applyMeshDensityFallback();
 
     const steps = this.accumulator.advance(elapsed);
     for (let i = 0; i < steps; i++) {

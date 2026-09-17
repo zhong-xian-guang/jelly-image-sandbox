@@ -7,10 +7,10 @@
  * 低於 `recoverThresholdMs` 累計滿 `sustainSeconds` 才升回 4。降級／回穩門檻不同值
  * （hysteresis）+ 累計時間才觸發，兩者都是為了不要在門檻附近每幀來回抖動。
  *
- * 降級發生的那一幀順便點亮 `meshFallbackPending`——網格解析度退路（過重時下次
- * 匯入用較低目標 Particle 數）靠它知道「該用低解析度了」；`consumeMeshFallbackPending()`
- * 讀取後歸零，所以只影響**下一次**匯入，不是永久切換（若之後又再度降級，會再被
- * 點亮一次）。
+ * 降級發生的那一幀順便點亮 `meshFallbackPending`——網格密度退路靠它知道「該把
+ * 『網格密度』拉霸砍半了」（issue #89：`JellySandbox.frame` 每幀
+ * `consumeMeshFallbackPending()`，讀到 `true` 就壓拉霸＋提示）；讀取後歸零，所以
+ * 一次降級只砍一次，不是每幀重砍（若之後又再度降級，會再被點亮一次）。
  */
 
 export interface PerfMonitorOptions {
@@ -90,8 +90,8 @@ export class PerfMonitor {
   }
 
   /**
-   * 讀取「該用網格解析度退路了嗎」並歸零（一次性）。`importImage` 每次匯入呼叫一次；
-   * 只有回傳 `true` 的那一次匯入會用較低的 `targetParticleCount`。
+   * 讀取「該壓網格密度拉霸了嗎」並歸零（一次性）。`JellySandbox.frame` 每幀呼叫；
+   * 只有降級發生的那一幀回傳 `true`。
    */
   consumeMeshFallbackPending(): boolean {
     const pending = this.meshFallbackPending;
