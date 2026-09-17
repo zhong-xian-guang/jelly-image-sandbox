@@ -38,7 +38,7 @@
  *      共用 Particle 的密集 Pin 群仍會被下一 substep 的 shape matching 微擾。
  *      陣風觸發時對已 Pin 住的 Particle 一樣會把衝量烤進 `vel`、預測也照常積分，但
  *      這一步會把位置拉回鎖定點——附著點因此仍不動，力學上不需要另外特例判斷。
- *   6. Boundary（`setBoundary`，可換）：clamp 進 Walled AABB／Infinite no-op。
+ *   6. Boundary（`setBoundary`，可換）：clamp 進 Walled AABB／Floor 地板以上／Infinite no-op。
  *   7. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
  *
  * picking（世界座標 → 三角形 + 重心座標）暫時放在這裡（藍本 jelly-core 也是），
@@ -338,7 +338,7 @@ export class SimCore {
     return { members, q };
   }
 
-  /** 替換碰撞環境（`WalledBoundary` / `InfiniteBoundary`）。執行期可隨時呼叫。 */
+  /** 替換碰撞環境（`WalledBoundary` / `FloorBoundary` / `InfiniteBoundary`）。執行期可隨時呼叫。 */
   setBoundary(boundary: Boundary): void {
     this.boundary = boundary;
   }
@@ -692,7 +692,7 @@ export class SimCore {
       if (this.params.xpbd) this.solveXpbd(h);
       // 5. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
       this.solveConstraints();
-      // 6. Boundary：clamp 進邊界、調 prev 讓回推速度不指向界外（Infinite 為 no-op）。
+      // 6. Boundary：clamp 進邊界（Walled AABB／Floor 地板）、調 prev 讓回推速度不指向界外（Infinite 為 no-op）。
       this.boundary.resolveBoundary(this.pos, this.prev, this.n, h);
       // 7. 回推速度 + 全域阻尼。
       for (let i = 0; i < this.n; i++) {

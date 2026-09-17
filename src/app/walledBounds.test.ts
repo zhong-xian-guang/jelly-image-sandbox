@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeWalledBounds, WALLED_SIZE_FACTOR } from './walledBounds';
+import { computeFloorY, computeWalledBounds, WALLED_SIZE_FACTOR } from './walledBounds';
 
 describe('computeWalledBounds', () => {
   it('以 bbox 中心為中心、正方形邊長 = 較長邊 × sizeFactor', () => {
@@ -30,5 +30,15 @@ describe('computeWalledBounds', () => {
     expect(bounds.minY).toBeLessThanOrEqual(bbox.minY);
     expect(bounds.maxX).toBeGreaterThanOrEqual(bbox.maxX);
     expect(bounds.maxY).toBeGreaterThanOrEqual(bbox.maxY);
+  });
+});
+
+describe('computeFloorY（issue #92 / V3 T2-2）', () => {
+  it('一般 bbox → 地板貼齊底邊（世界 y 向下 → maxY）', () => {
+    expect(computeFloorY({ minX: -12, minY: 3, maxX: 40, maxY: 55 })).toBe(55);
+  });
+
+  it('退化 bbox（單點）也回 maxY——地板就在那一點上，不憑空掉一段、不埋進去', () => {
+    expect(computeFloorY({ minX: 5, minY: 5, maxX: 5, maxY: 5 })).toBe(5);
   });
 });

@@ -6,7 +6,8 @@
  * 指向界外（可選 restitution 反彈）。因為速度是由位置差回推的，所有邊界效果都收在
  * 這一步——不動求解器其他部分。
  *
- * 兩個實作：`WalledBoundary`（有限 AABB）與 `InfiniteBoundary`（無邊界、no-op）。
+ * 三個實作：`WalledBoundary`（有限 AABB）、`InfiniteBoundary`（無邊界、no-op）與
+ * `FloorBoundary`（僅地板：一條水平地板，左右與上方無限延伸；issue #92 / ADR-0012）。
  * 執行期可用 `SimCore.setBoundary` 直接替換，不需重建求解器（見
  * `docs/design/simulation-and-mesh.md` 模組邊界）。
  */
@@ -16,13 +17,13 @@ import type { Bbox } from './types';
 export interface Boundary {
   /**
    * 就地解邊界。`pos` / `prev` 是攤平的 `[x0,y0,x1,y1,...]`，`count` = Particle 數，
-   * `dt` = 當前 substep 的時間步（Walled / Infinite 用不到，但屬於介面契約）。
+   * `dt` = 當前 substep 的時間步（Walled / Floor / Infinite 用不到，但屬於介面契約）。
    */
   resolveBoundary(pos: Float64Array, prev: Float64Array, count: number, dt: number): void;
 }
 
-/** 兩種 `Boundary` 實作的名字——控制面板（issue #14）用它記錄／切換目前模式。 */
-export type BoundaryMode = 'walled' | 'infinite';
+/** 三種 `Boundary` 實作的名字——控制面板（issue #14）用它記錄／切換目前模式。 */
+export type BoundaryMode = 'walled' | 'infinite' | 'floor';
 
 /** 無邊界、無限延伸。no-op——Jelly 可被甩到任意遠。 */
 export class InfiniteBoundary implements Boundary {
@@ -71,8 +72,42 @@ export class WalledBoundary implements Boundary {
   }
 }
 
+/** `FloorBoundary` 的建構選項：地板高度 + 可選反彈係數。 */
+export interface FloorBoundaryOptions {
+  /** 地板的世界 y（世界 y 向下 → 地板在 Jelly **下方**，Particle 的 `y` 不得大於它）。 */
+  floorY: number;
+  /** 撞地板反彈係數，語意同 `WalledBoundaryOptions.restitution`。 */
+  restitution?: number;
+}
+
 /**
- * 把 `pos[idx]` clamp 進 `[lo, hi]`。越界時把 `prev[idx]` 設成 `界 + e·(界 − prev)`，
+ * 僅地板（issue #92 / V3 T2-2；ADR-0012）：一條水平地板 `y = floorY`，左右與上方
+ * 無限延伸。`pos.y > floorY` 的 Particle clamp 到 `floorY`，`prev.y` 比照
+ * `WalledBoundary`（`e = 0` → 回推 y 速度歸零）；x 方向與上方完全不管——Jelly 可以
+ * 往左右甩到任意遠、往上拋任意高。
+ */
+export class FloorBoundary implements Boundary {
+  /** 地板的世界 y。公開唯讀，供算繪畫地板線。 */
+  readonly floorY: number;
+  /** 反彈係數，`0`–`1`。 */
+  readonly restitution: number;
+
+  constructor(options: FloorBoundaryOptions) {
+    this.floorY = options.floorY;
+    this.restitution = options.restitution ?? 0;
+  }
+
+  resolveBoundary(pos: Float64Array, prev: Float64Array, count: number): void {
+    const floorY = this.floorY;
+    const e = this.restitution;
+    for (let i = 0; i < count; i++) {
+      clampAxis(pos, prev, 2 * i + 1, -Infinity, floorY, e);
+    }
+  }
+}
+
+/**
+ * 把 `pos[idx]` clamp 進 `[lo, hi]`（`lo` 可為 `-Infinity` → 只有上界，`FloorBoundary` 用）。越界時把 `prev[idx]` 設成 `界 + e·(界 − prev)`，
  * 其中 `界 − prev` 用 **clamp 前** 的位置差 → 回推速度 = `−e · 入射速度`
  * （含 overshoot 那一段，`e = 1` 才是真彈性）。
  */

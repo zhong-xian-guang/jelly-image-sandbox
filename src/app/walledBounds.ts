@@ -1,9 +1,13 @@
 /**
- * Walled 邊界範圍（issue #14 / T13）——切到「有牆」時，圍著 Jelly 目前 bbox
- * 展開一個正方形範圍當 `WalledBoundary` 的 AABB，給甩動留空間，同時仍然是
- * 有限大小（見 `docs/design/simulation-and-mesh.md`：「Walled：有限大小的桌面，
- * 牆壁會擋住 Jelly」）。純函式、只依賴呼叫端傳入的 bbox，方便單元測試——
- * DOM／求解器接線在 `JellySandbox`。
+ * 邊界範圍換算（issue #14 / T13；issue #92 追加 Floor）——切邊界模式時從 Jelly 目前
+ * bbox 算出該模式的幾何：
+ *
+ * - **Walled**：圍著 bbox 展開一個正方形範圍當 `WalledBoundary` 的 AABB，給甩動留
+ *   空間，同時仍然是有限大小（見 `docs/design/simulation-and-mesh.md`：「Walled：
+ *   有限大小的桌面，牆壁會擋住 Jelly」）。
+ * - **Floor**：地板貼齊 bbox 底邊，切過去 Jelly 就已經站在地板上。
+ *
+ * 純函式、只依賴呼叫端傳入的 bbox，方便單元測試——DOM／求解器接線在 `JellySandbox`。
  */
 
 import type { Bbox } from '../sim';
@@ -22,4 +26,13 @@ export function computeWalledBounds(bbox: Bbox, sizeFactor = WALLED_SIZE_FACTOR)
   const cy = (bbox.minY + bbox.maxY) / 2;
   const half = (Math.max(w, h) * sizeFactor) / 2;
   return { minX: cx - half, minY: cy - half, maxX: cx + half, maxY: cy + half };
+}
+
+/**
+ * Floor 邊界的地板高度（issue #92）：貼齊 `bbox` 底邊（世界 y 向下 → `maxY`），
+ * 切換當下 Jelly 剛好站在地板上——不憑空掉一段、不半截埋進去。退化 bbox
+ * （單點）同樣回 `maxY`，不需要另外處理。
+ */
+export function computeFloorY(bbox: Bbox): number {
+  return bbox.maxY;
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeWireframeEdges,
   containerPosition,
+  floorLineSpan,
   createTextureBuffers,
   type TextureMesh,
   validateTextureMesh,
@@ -115,5 +116,28 @@ describe('containerPosition', () => {
       x: 400 - 200,
       y: 300 - 100,
     });
+  });
+});
+
+describe('floorLineSpan（issue #92：Floor 地板線橫跨可視範圍）', () => {
+  it('camera 在原點、scale 1、寬 800 → 涵蓋螢幕左右緣對應的世界 x（±400）並外擴', () => {
+    const span = floorLineSpan({ x: 0, y: 0, scale: 1 }, 800);
+    expect(span.minX).toBeLessThanOrEqual(-400);
+    expect(span.maxX).toBeGreaterThanOrEqual(400);
+  });
+
+  it('平移＋縮放：以 camera.x 為中心、半寬 = (width / 2) / scale × 外擴倍數', () => {
+    const span = floorLineSpan({ x: 100, y: -50, scale: 2 }, 800);
+    const half = 400 / 2; // 可視半寬 200 世界單位
+    expect((span.minX + span.maxX) / 2).toBeCloseTo(100, 9);
+    expect(span.minX).toBeLessThanOrEqual(100 - half);
+    expect(span.maxX).toBeGreaterThanOrEqual(100 + half);
+    expect(span.maxX - span.minX).toBeLessThan(half * 2 * 10); // 有外擴但不是無限長
+  });
+
+  it('scale 為 0（防呆）不產生 NaN／Infinity', () => {
+    const span = floorLineSpan({ x: 0, y: 0, scale: 0 }, 800);
+    expect(Number.isFinite(span.minX)).toBe(true);
+    expect(Number.isFinite(span.maxX)).toBe(true);
   });
 });

@@ -231,7 +231,7 @@ function parseImportSize(v: unknown): number | null {
 function parseSim(v: unknown): ClipSim {
   const obj = requireObject(v, 'sim');
   const boundary = requireString(obj.boundary, 'sim.boundary');
-  if (boundary !== 'walled' && boundary !== 'infinite') {
+  if (boundary !== 'walled' && boundary !== 'infinite' && boundary !== 'floor') {
     throw new ClipFileError(`欄位「sim.boundary」不是已知值：${boundary}`);
   }
   return {

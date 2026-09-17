@@ -1043,6 +1043,7 @@ export class ControlPanel {
     for (const [value, text] of [
       ['infinite', '無限'],
       ['walled', '有牆'],
+      ['floor', '僅地板'],
     ] as const) {
       const option = document.createElement('option');
       option.value = value;

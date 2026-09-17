@@ -249,6 +249,13 @@ describe('parseClipFile', () => {
     expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
   });
 
+  it("sim.boundary: 'floor' round-trip（issue #92）", () => {
+    const clip = fullClip();
+    clip.sim.boundary = 'floor';
+    const parsed = parseClipFile(serializeClip(clip));
+    expect(parsed.sim.boundary).toBe('floor');
+  });
+
   it('sim.boundary 不是已知值 → ClipFileError', () => {
     const doc = JSON.parse(serializeClip(fullClip())) as { sim: Record<string, unknown> };
     doc.sim.boundary = 'open';
