@@ -873,9 +873,7 @@ export class ControlPanel {
    * ——只動 DOM、不觸發 `input` 事件、不呼叫 `onGravityChange`。
    */
   setGravity(value: number): void {
-    const text = String(value);
-    if (this.gravityInput.value !== text) this.gravityInput.value = text;
-    if (this.gravityOutput.textContent !== text) this.gravityOutput.textContent = text;
+    syncRangeRow(this.gravityInput, this.gravityOutput, value);
   }
 
   /** 載入片段後把邊界模式下拉灌回面板（issue #58）。同 `setSoftness` 的理由。 */
@@ -889,9 +887,7 @@ export class ControlPanel {
    * `onMeshDensityChange`（沙盒端自己已經改了狀態，再回呼會繞一圈）。
    */
   setMeshDensity(value: number): void {
-    const text = String(value);
-    if (this.meshDensityInput.value !== text) this.meshDensityInput.value = text;
-    if (this.meshDensityOutput.textContent !== text) this.meshDensityOutput.textContent = text;
+    syncRangeRow(this.meshDensityInput, this.meshDensityOutput, value);
   }
 
   /**
@@ -1656,4 +1652,15 @@ function formatSeconds(seconds: number): string {
 /** 「片段初始 Pin：N 個」讀出文字（issue #39）——初始渲染與 `setSetupPinCount` 共用，前綴字串只留一份。 */
 function setupPinCountText(count: number): string {
   return `片段初始 Pin：${count} 個`;
+}
+
+/**
+ * 把值灌回一條帶數值顯示的拉霸（`rangeRowWithValue`）：拉霸位置與旁邊的 `<output>`
+ * 一起更新、只在文字真的變了才寫 DOM、不觸發 `input` 事件（所以不會回呼 `onXChange`）。
+ * `setMeshDensity`（issue #89）與 `setGravity`（issue #91）共用。
+ */
+function syncRangeRow(input: HTMLInputElement, output: HTMLOutputElement, value: number): void {
+  const text = String(value);
+  if (input.value !== text) input.value = text;
+  if (output.textContent !== text) output.textContent = text;
 }

@@ -3,8 +3,8 @@
  * （反序列化端），見 spec #53 與 CONTEXT.md「片段」。
  *
  * `ClipState` 是 `JellySandbox` 記憶體狀態的**可序列化投影**：一塊果凍（原始影像
- * 位元組 + 格式）、匯入當下實際餵給 `buildSimMesh` 的完整解析後參數、軟硬度／輕拍
- * 力道／邊界模式、所有 Track（含自訂名、起始、頭尾修剪、分群、相機軌起點快照）、
+ * 位元組 + 格式）、匯入當下實際餵給 `buildSimMesh` 的完整解析後參數、匯入尺寸、
+ * 軟硬度／輕拍力道／邊界模式／重力、所有 Track（含自訂名、起始、頭尾修剪、分群、相機軌起點快照）、
  * 所有群組、片段初始 Pin、流水號。`JellySandbox` 負責把記憶體狀態攤成 `ClipState`
  * （`RecordedTrack.groupIds` 的 `Set` → 陣列、`customLabel ?? label` → `name`），
  * 或反向把 `ClipState` 灌回記憶體狀態（`applyClipState`）。
@@ -12,7 +12,8 @@
  * `serializeClip` 產出帶 `version: 1` 的 JSON 字串，`image.bytes` 走 base64（編碼在
  * 本模組內，用瀏覽器 `btoa`、不依賴 Node `Buffer`）。`parseClipFile` 是反向：解析＋
  * 結構驗證，壞檔（非 JSON／版本不符／必要欄位缺或型別錯）丟具名的 `ClipFileError`，
- * 不做部分還原——呼叫端（`JellySandbox.onLoadClip`）接住後場景完全不動（比照圖片
+ * 不做部分還原；後來才加的**可選欄位**（`importSize`、`sim.gravity`）缺失時補預設值，
+ * 讓舊檔照常載入——呼叫端（`JellySandbox.onLoadClip`）接住後場景完全不動（比照圖片
  * 匯入失敗）。兩者都是純函式、決定性、不碰 DOM。
  */
 
@@ -24,7 +25,8 @@ import type { Track } from './track';
 
 /**
  * 存檔格式版本。`parseClipFile`（issue #58）只認得這個值；日後改結構才 bump，
- * 舊檔載入時據此被擋下。
+ * 舊檔載入時據此被擋下。向後相容的新增欄位（缺失時有明確預設值，如 `importSize`、
+ * `sim.gravity`）**不** bump。
  */
 export const CLIP_FILE_VERSION = 1;
 

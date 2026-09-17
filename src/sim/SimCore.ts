@@ -714,9 +714,9 @@ export class SimCore {
    * 但有重力、Jelly 靜置在無摩擦的地板上時，這段每步都被重力壓縮重新激發、x 方向
    * 又沒有任何東西擋，會累積成一路走不停的滑動（實測 13×13 fixture 在 g = 2000
    * 下以 ~30 單位／秒橫移，關掉 XPBD 就沒有——壓縮狀態下的漏差來自兩層的交互）。
-   * 開啟時把所有 Particle 的位移扣掉全體平均，讓 shape matching 這一步的淨平移
-   * 精確為 0。**只在 `gravity ≠ 0` 時開**：g = 0 走原路徑，每個浮點運算跟以前
-   * 完全一樣，舊片段重播結果不變（issue #91 驗收；要不要全域開啟另議）。
+   * 開啟時把所有有 Region 的 Particle 位移扣掉它們的平均（沒有 Region 的 Particle
+   * 不被拉、也不納入），讓 shape matching 這一步的淨平移精確為 0。**只在 `gravity ≠ 0` 時開**：g = 0 走原路徑，每個浮點運算跟以前
+   * 完全一樣，舊片段重播結果不變（issue #91 驗收；要不要全域開啟見 issue #102）。
    */
   private solveShapeMatching(alphaSm: number, conserveMomentum: boolean): void {
     this.goalX.fill(0);
@@ -780,24 +780,33 @@ export class SimCore {
       return;
     }
 
-    // 動量守恆版（issue #91；見方法說明）：先把每個 Particle 的位移算好暫存回
-    // `goalX/goalY`（沒有 Region 的 Particle 位移 0），扣掉全體平均後才套用。
+    // 動量守恆版（issue #91；見方法說明）：先把每個有 Region 的 Particle 位移算好，
+    // 暫存回 `goalX/goalY`（這一段之後只當位移用，取別名 `dispX/dispY`），扣掉
+    // 這些 Particle 的平均後才套用。沒有 Region 的 Particle 本來就不被 shape
+    // matching 拉，不納入平均、也不扣。
+    const dispX = this.goalX;
+    const dispY = this.goalY;
     let sumDx = 0;
     let sumDy = 0;
+    let moved = 0;
     for (let i = 0; i < this.n; i++) {
       const count = this.goalCount[i]!;
-      const dx = count === 0 ? 0 : alphaSm * (this.goalX[i]! / count - this.pos[2 * i]!);
-      const dy = count === 0 ? 0 : alphaSm * (this.goalY[i]! / count - this.pos[2 * i + 1]!);
-      this.goalX[i] = dx;
-      this.goalY[i] = dy;
+      if (count === 0) continue;
+      const dx = alphaSm * (this.goalX[i]! / count - this.pos[2 * i]!);
+      const dy = alphaSm * (this.goalY[i]! / count - this.pos[2 * i + 1]!);
+      dispX[i] = dx;
+      dispY[i] = dy;
       sumDx += dx;
       sumDy += dy;
+      moved++;
     }
-    const meanDx = sumDx / this.n;
-    const meanDy = sumDy / this.n;
+    if (moved === 0) return;
+    const meanDx = sumDx / moved;
+    const meanDy = sumDy / moved;
     for (let i = 0; i < this.n; i++) {
-      this.pos[2 * i] = this.pos[2 * i]! + this.goalX[i]! - meanDx;
-      this.pos[2 * i + 1] = this.pos[2 * i + 1]! + this.goalY[i]! - meanDy;
+      if (this.goalCount[i] === 0) continue;
+      this.pos[2 * i] = this.pos[2 * i]! + dispX[i]! - meanDx;
+      this.pos[2 * i + 1] = this.pos[2 * i + 1]! + dispY[i]! - meanDy;
     }
   }
 

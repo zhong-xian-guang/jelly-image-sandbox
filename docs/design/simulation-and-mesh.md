@@ -44,7 +44,7 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
    - 每 substep 每 Region：算目前質心與 rest 質心 → 最佳線性變換 → 對旋轉部分做 **2×2 polar decomposition** 取 `R` → 每個成員 Particle 的 goal `g = R(x0 − c0) + c`。
    - Particle 的最終 goal = 所屬各 Region goal 的加權平均。
    - 位置朝 goal 拉：`x += α_sm (g − x)`。`α_sm` 初始 `0.7`，與 cell 邊長一起構成 Softness。
-   - **動量守恆（只在 `gravity ≠ 0` 時開，issue #91）**：單一 Region 的 goal 位移總和為 0，但跨 Region 等權平均後不再守恆，每 substep 漏出一小段淨平移。無重力時只是 Fling 軌跡幾個百分點的差異；有重力、Jelly 靜置在無摩擦地板上時，這段每步被重力壓縮重新激發、x 方向無物可擋，會累積成一路走不停的滑動（實測 ~30 單位／秒）。開啟時把所有 Particle 的位移扣掉全體平均。`gravity = 0` 走原路徑，保住舊片段重播；要不要全域開啟另議。
+   - **動量守恆（只在 `gravity ≠ 0` 時開，issue #91）**：單一 Region 的 goal 位移總和為 0，但跨 Region 等權平均後不再守恆，每 substep 漏出一小段淨平移。無重力時只是 Fling 軌跡幾個百分點的差異；有重力、Jelly 靜置在無摩擦地板上時，這段每步被重力壓縮重新激發、x 方向無物可擋，會累積成一路走不停的滑動（實測 ~30 單位／秒）。開啟時把所有 Particle 的位移扣掉全體平均。`gravity = 0` 走原路徑，保住舊片段重播；要不要全域開啟見 issue #102。
 3. **XPBD 細節層**（疊加，補局部 Q 彈 + 第二道防翻面）：
    - **distance 約束**：每條 Sim mesh 邊一條。compliance 初始偏軟。
    - **signed-area 約束**：每個三角形一條，`C = signedArea(x1,x2,x3) − restArea`。**用有號面積**——翻面時 `C` 變號、梯度把元素翻正。這是關鍵，不可取絕對值。
