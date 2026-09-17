@@ -26,6 +26,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       boundary: 'infinite',
       softness: 0.5,
       tapStrength: 6000,
+      gravity: 0,
       pinMode: false,
       showPins: true,
       followLocked: false,
@@ -48,6 +49,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     importSizeRange: { min: 128, max: 1024, step: 16 },
     meshDensityRange: { min: 100, max: 800, step: 10 },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
+    gravityRange: { min: 0, max: 10000, step: 100 },
     fanWidthRange: { min: 20, max: 400, step: 5 },
     fanStrengthRange: { min: 500, max: 12000, step: 100 },
     fanFalloffRange: { min: 0.2, max: 5, step: 0.1 },
@@ -80,6 +82,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
+    onGravityChange: vi.fn(),
     onPinModeChange: vi.fn(),
     onClearPins: vi.fn(),
     onShowPinsChange: vi.fn(),
@@ -491,6 +494,53 @@ describe('ControlPanel — 載入片段按鈕（issue #58 / V2 T2-5）', () => {
     const selects = [...panel.element.querySelectorAll('select')] as HTMLSelectElement[];
     const boundarySelect = selects.find((s) => s.querySelector('option[value="walled"]'));
     expect(boundarySelect?.value).toBe('walled');
+  });
+});
+
+describe('ControlPanel — 重力拉霸（issue #91 / V3 T2-1；ADR-0012）', () => {
+  it('「重力」拉霸初始值來自 initial.gravity（0），範圍來自 gravityRange', () => {
+    const panel = new ControlPanel(makeOptions());
+    const input = findRangeInputByLabel(panel, '重力');
+    expect(Number(input.value)).toBe(0);
+    expect(Number(input.min)).toBe(0);
+    expect(Number(input.max)).toBe(10000);
+    expect(Number(input.step)).toBe(100);
+  });
+
+  it('拖動 → onGravityChange 收到數值', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '重力');
+    input.value = '850';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onGravityChange).toHaveBeenCalledWith(850);
+  });
+
+  it('拉霸旁顯示目前數值，拖動時跟著更新', () => {
+    const panel = new ControlPanel(makeOptions());
+    const input = findRangeInputByLabel(panel, '重力');
+    const row = input.closest('label')!;
+    expect(row.querySelector('output')?.textContent).toBe('0');
+    input.value = '850';
+    input.dispatchEvent(new Event('input'));
+    expect(row.querySelector('output')?.textContent).toBe('850');
+  });
+
+  it('setGravity 更新拉霸與數值顯示、不回呼 onGravityChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    panel.setGravity(1200);
+    const input = findRangeInputByLabel(panel, '重力');
+    expect(input.value).toBe('1200');
+    expect(input.closest('label')!.querySelector('output')?.textContent).toBe('1200');
+    expect(opts.onGravityChange).not.toHaveBeenCalled();
+  });
+
+  it('「重力」列緊接在「軟硬度」／「輕拍力道」之後（同為全域物理參數）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const tapRow = findRangeInputByLabel(panel, '輕拍力道').closest('label')!;
+    const gravityRow = findRangeInputByLabel(panel, '重力').closest('label')!;
+    expect(tapRow.nextElementSibling).toBe(gravityRow);
   });
 });
 

@@ -38,7 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `/grill-with-docs`（2026-09-02）定案，`/prototype` 修正若干細節（2026-09-03），第二輪 `/grill-with-docs`（2026-09-04）釐清 Pin／相機／素材工具需求。脈絡見 `docs/adr/0001`–`0005`、`docs/research/soft-body-2d-jelly.md`；管線與參數見 `docs/design/simulation-and-mesh.md`；詞彙見 `CONTEXT.md`。
 
 - **建置／語言** — Vite + TypeScript。輸出為靜態包，直接打包 itch.io zip。
-- **柔體物理方法** — 完全手寫的 2D 求解器，**不用物理引擎**。骨幹 = region-based shape matching（重疊方格 lattice）；細節層 = XPBD 的 distance + signed-area 約束。俯視、無重力。固定 60 Hz 幀、每幀 4 substep。
+- **柔體物理方法** — 完全手寫的 2D 求解器，**不用物理引擎**。骨幹 = region-based shape matching（重疊方格 lattice）；細節層 = XPBD 的 distance + signed-area 約束。預設俯視、無重力；「重力」拉霸 > 0 視為側視（ADR-0012）。固定 60 Hz 幀、每幀 4 substep。
 - **網格生成** — PNG 解碼用 `fast-png`（MIT，純 JS、免 canvas，測試可決定性重現）→ 手刻 marching squares 描 Contour → `simplify-js`（BSD-2-Clause）→ `cdt2d`（MIT）CDT + 手刻 Ruppert 細化。**不可**用 Shewchuk Triangle／JIGSAW（禁付費商業散布）、CGAL Mesh_2（GPL）、`MarchingSquares.js`（AGPL）。
 - **算繪** — WebGL 每頂點 UV 三角網格（PixiJS `Mesh` 或自寫 shader）。不用 Canvas 2D 逐三角 `drawImage`。
 

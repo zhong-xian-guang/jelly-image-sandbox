@@ -211,6 +211,16 @@ const TAP_STRENGTH_RANGE = { min: 1000, max: 11000, step: 100 };
 /** Softness 滑桿初始位置（0–1 中點 = `DEFAULT_SIM_PARAMS`，見 `../sim/softness`）。 */
 const DEFAULT_SOFTNESS = 0.5;
 /**
+ * 「重力」拉霸的範圍（issue #91 / V3 T2-1；ADR-0012），世界單位／s²。最左 0 =
+ * `DEFAULT_SIM_PARAMS.gravity` = 俯視無重力（現況）。上限與全域阻尼一起實測
+ * （數據見 `docs/design/simulation-and-mesh.md` 參數表）：阻尼 0.02／substep 不動
+ * （改它舊片段重播就變），落體終端速度 ≈ `g / 4.8`，spec 初訂的上限 2000 中段
+ * 只有 ~200 單位／秒、512 高的果凍要 4 秒才落到 Walled 箱底——糖漿。上限拉到
+ * 10000：中段 5000 約 1 秒落地、終端速度 ≈ 2 倍身高／秒、著地壓扁到 ~0.83；
+ * 拉到底壓扁到 ~0.7、靜置下陷 ~6%，仍穩定、1–2 秒內靜止。
+ */
+const GRAVITY_RANGE = { min: 0, max: 10000, step: 100 };
+/**
  * 電風扇四個滑桿的範圍（issue #67；事後檢視把推力模型從連續力場改成陣風——
  * 見 `SimCore.applyFan`：`strength` 從「每秒加速度」變成「單次陣風的瞬間
  * 速度衝量」，範圍跟著重新校準，不再沿用連續模型時代的量級。`frequency`
@@ -553,6 +563,7 @@ export class JellySandbox {
         boundary: this.boundaryMode,
         softness: DEFAULT_SOFTNESS,
         tapStrength: this.sim.params.tapStrength,
+        gravity: this.sim.params.gravity,
         pinMode: this.pinModeEnabled,
         showPins: this.hintIntent.pins,
         followLocked: !this.cameraState.followEnabled,
@@ -575,6 +586,7 @@ export class JellySandbox {
       importSizeRange: IMPORT_SIZE_RANGE,
       meshDensityRange: MESH_DENSITY_RANGE,
       tapStrengthRange: TAP_STRENGTH_RANGE,
+      gravityRange: GRAVITY_RANGE,
       fanWidthRange: FAN_WIDTH_RANGE,
       fanStrengthRange: FAN_STRENGTH_RANGE,
       fanFalloffRange: FAN_FALLOFF_RANGE,
@@ -607,6 +619,7 @@ export class JellySandbox {
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
+      onGravityChange: (gravity) => this.setGravity(gravity),
       onPinModeChange: (enabled) => this.setPinMode(enabled),
       onClearPins: () => this.clearPins(),
       onShowPinsChange: (visible) => this.setHintVisible('pins', visible),
@@ -1176,6 +1189,15 @@ export class JellySandbox {
   }
 
   /**
+   * 重力拉霸（issue #91 / V3 T2-1；ADR-0012）——直接套進 `sim.params.gravity`，拖動
+   * 立刻生效；是參數不是狀態，「停止／重設」不動它，換果凍時跟 `tapStrength` 一樣
+   * 搬到新 `SimCore`（`replaceJelly`）。
+   */
+  private setGravity(gravity: number): void {
+    this.sim.params.gravity = gravity;
+  }
+
+  /**
    * 「Pin 模式」開關（issue #14）——`attachInputHandlers` 的 `applyInput` 靠
    * `pinModeActive` 轉接；這裡順便切畫布游標（十字）跟 Pin 標記的「可點掉」
    * 視覺（紅色脈動），兩者都是純粹的提示，不影響任何判定邏輯。
@@ -1548,6 +1570,7 @@ export class JellySandbox {
         softness: this.softness,
         tapStrength: this.sim.params.tapStrength,
         boundary: this.boundaryMode,
+        gravity: this.sim.params.gravity,
       },
       tracks: this.tracks.map((t): ClipTrack => ({
         id: t.id,
@@ -1603,7 +1626,7 @@ export class JellySandbox {
    * 初始 Pin，換新 `SimCore` + `JellyRenderer`，鏡頭自動框住新果凍——即「剛匯入
    * 一張圖」的鏡位，不保存存檔時的手動平移／縮放）。`replaceJelly` 成功後才把
    * `ClipState` 其餘欄位灌回：軟硬度／輕拍力道／邊界模式（同時同步面板顯示，
-   * `setSoftness`/`setTapStrength`/`setBoundaryMode` 只動 sim、不動面板 DOM）、
+   * `setSoftness`/`setTapStrength`/`setGravity`/`setBoundaryMode` 只動 sim、不動面板 DOM）、
    * 所有 Track（`hydrateClipTrack`：`groupIds` 陣列 → `Set`，`name` 同時填入
    * `customLabel`／`label`——載入後顯示的就是存檔當下的名字）、所有群組、片段
    * 初始 Pin、流水號。任何一步丟錯（壞影像位元組、mesh 建置失敗）都讓呼叫端
@@ -1628,6 +1651,8 @@ export class JellySandbox {
     this.controlPanel.setSoftness(clip.sim.softness);
     this.setTapStrength(clip.sim.tapStrength);
     this.controlPanel.setTapStrength(clip.sim.tapStrength);
+    this.setGravity(clip.sim.gravity);
+    this.controlPanel.setGravity(clip.sim.gravity);
     this.setBoundaryMode(clip.sim.boundary);
     this.controlPanel.setBoundary(clip.sim.boundary);
 
@@ -1643,7 +1668,7 @@ export class JellySandbox {
   /**
    * 建好新的一套（sim + renderer + camera）成功後才拆舊的——畫面不會有空檔。
    * 新 `SimCore` 一律從 `DEFAULT_SIM_PARAMS` 起家，所以要把控制面板目前設定
-   * （Softness、輕拍力道、Boundary 模式）重新套上去，面板才不會顯示跟實際物理
+   * （Softness、輕拍力道、重力、Boundary 模式）重新套上去，面板才不會顯示跟實際物理
    * 不一致的值（Pin 模式是 `JellySandbox` 層的路由旗標，不受換 `SimCore` 影響，
    * 不用重套）。
    */
@@ -1669,6 +1694,7 @@ export class JellySandbox {
     sim.params.cellFrac = this.sim.params.cellFrac;
     sim.params.alphaSm = this.sim.params.alphaSm;
     sim.params.tapStrength = this.sim.params.tapStrength;
+    sim.params.gravity = this.sim.params.gravity;
     sim.rebuildRegions();
     this.applyBoundaryMode(sim);
 

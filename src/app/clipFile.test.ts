@@ -46,7 +46,7 @@ function fullClip(): ClipState {
       refineMaxPasses: 30,
     },
     importSize: 512,
-    sim: { softness: 0.73, tapStrength: 4200, boundary: 'walled' },
+    sim: { softness: 0.73, tapStrength: 4200, boundary: 'walled', gravity: 0 },
     tracks: [
       {
         id: 't1',
@@ -115,7 +115,12 @@ describe('serializeClip', () => {
 
   it('sim：軟硬度 0–1 值、輕拍力道、邊界模式原樣保留', () => {
     const parsed = JSON.parse(serializeClip(fullClip()));
-    expect(parsed.sim).toEqual({ softness: 0.73, tapStrength: 4200, boundary: 'walled' });
+    expect(parsed.sim).toEqual({
+      softness: 0.73,
+      tapStrength: 4200,
+      boundary: 'walled',
+      gravity: 0,
+    });
   });
 
   it('tracks：含名字、起始、頭尾修剪、steps、相機軌起點快照、groupIds（陣列）', () => {
@@ -314,6 +319,37 @@ describe('importSize（issue #88 / V3 T1-1）', () => {
     for (const bad of ['512', true, {}]) {
       const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
       doc.importSize = bad;
+      expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+    }
+  });
+});
+
+describe('sim.gravity（issue #91 / V3 T2-1）', () => {
+  it('round-trip：正數原樣還原', () => {
+    const clip: ClipState = { ...fullClip(), sim: { ...fullClip().sim, gravity: 1500 } };
+    expect(parseClipFile(serializeClip(clip)).sim.gravity).toBe(1500);
+  });
+
+  it('舊版 v1 字串沒有 sim.gravity 欄位 → 0（俯視無重力，重播結果不變）', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as { sim: Record<string, unknown> };
+    delete doc.sim.gravity;
+    const parsed = parseClipFile(JSON.stringify(doc));
+    expect(parsed.sim.gravity).toBe(0);
+    expect(parsed).toEqual(fullClip());
+  });
+
+  it('負數 → ClipFileError', () => {
+    for (const bad of [-1, -500]) {
+      const doc = JSON.parse(serializeClip(fullClip())) as { sim: Record<string, unknown> };
+      doc.sim.gravity = bad;
+      expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+    }
+  });
+
+  it('非數字（字串／布林／null／物件）→ ClipFileError', () => {
+    for (const bad of ['500', true, null, {}]) {
+      const doc = JSON.parse(serializeClip(fullClip())) as { sim: Record<string, unknown> };
+      doc.sim.gravity = bad;
       expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
     }
   });

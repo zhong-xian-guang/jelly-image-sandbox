@@ -1212,6 +1212,123 @@ describe('SimCore — reset', () => {
   });
 });
 
+describe('SimCore — Gravity（issue #91 / V3 T2-1；ADR-0012）', () => {
+  /** 質心 y（世界座標 +y 向下）。 */
+  const cy = (sim: SimCore) => sim.centroid().y;
+
+  it('gravity = 0（預設）：靜置 step 數百次後動能 0、位置不漂移（與既有俯視行為相同）', () => {
+    const sim = new SimCore(MESH());
+    expect(sim.params.gravity).toBe(0);
+    const before = Float64Array.from(sim.positions);
+    run(sim, 600);
+    expect(sim.kineticEnergy()).toBeLessThan(1e-9);
+    for (let i = 0; i < before.length; i++) expect(sim.positions[i]!).toBeCloseTo(before[i]!, 9);
+  });
+
+  it('gravity = 0 與「沒有重力參數」位元相同：Fling 事件流的結果不受 gravity 欄位存在影響', () => {
+    // 守住舊片段（沒有 gravity 欄位 → 0）重播結果不變：gravity = 0 時 step 的
+    // 每個浮點運算都要跟以前一樣，這裡用同一段事件流對照 `gravity: 0` 顯式設定。
+    const play = (setZero: boolean): number[] => {
+      const sim = new SimCore(MESH());
+      if (setZero) sim.params.gravity = 0;
+      sim.applyInput({ type: 'grab', id: 1, x: 0, y: 0 });
+      sim.applyInput({ type: 'moveGrab', id: 1, x: 60, y: 10 });
+      run(sim, 10);
+      sim.applyInput({ type: 'release', id: 1 });
+      run(sim, 60);
+      return Array.from(sim.positions);
+    };
+    expect(play(true)).toEqual(play(false));
+  });
+
+  it('gravity > 0、damping = 0、Infinite：自由落體 N 步後質心 y 位移 ≈ ½ g t²（容許 symplectic Euler 一階誤差）', () => {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 1000;
+    sim.params.damping = 0;
+    const y0 = cy(sim);
+    const x0 = sim.centroid().x;
+    const frames = 60; // t = 1 s
+    run(sim, frames);
+    const t = frames / 60;
+    const expected = 0.5 * 1000 * t * t; // 500
+    // symplectic Euler：Σ g·h·k（k = 1..N）= ½ g t² (1 + 1/N)，N = 240 substep → 誤差 ≈ 0.4%
+    expect(cy(sim) - y0).toBeGreaterThan(expected * 0.99);
+    expect(cy(sim) - y0).toBeLessThan(expected * 1.01);
+    expect(sim.centroid().x).toBeCloseTo(x0, 6); // 方向固定向下，x 不動
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('gravity > 0 + 有阻尼：整塊一起下落、形狀不散（拉伸比維持 ~1）', () => {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    run(sim, 120);
+    const st = sim.stretchStats();
+    expect(st.avg).toBeGreaterThan(0.95);
+    expect(st.avg).toBeLessThan(1.05);
+    expect(st.max).toBeLessThan(1.2);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('gravity > 0 + Pin 住一點 → 該附著點停在鎖定點、質心往下垂', () => {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    const y0 = cy(sim);
+    sim.applyInput({ type: 'pin', id: 'p', x: 48, y: 0 });
+    const lock = sim.attachPoint('p')!;
+    run(sim, 180);
+    const now = sim.attachPoint('p')!;
+    expect(Math.hypot(now.x - lock.x, now.y - lock.y)).toBeLessThan(0.5);
+    expect(cy(sim)).toBeGreaterThan(y0 + 1); // 其餘往下垂
+    expect(cy(sim)).toBeLessThan(y0 + 200); // 但被 Pin 拉住、不是自由落體（自由落體 4.5 s 會掉 ~2×10⁴）
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('gravity > 0 + Walled：落到箱底後質心收斂、動能歸零、不在無摩擦地板上橫向滑走', () => {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    const floorY = 300;
+    sim.setBoundary(new WalledBoundary({ minX: -500, minY: -500, maxX: 500, maxY: floorY }));
+    run(sim, 300); // 5 s
+    const a = sim.centroid();
+    run(sim, 60);
+    const b = sim.centroid();
+    expect(Math.abs(a.y - b.y)).toBeLessThan(0.5);
+    // shape matching 跨 Region 等權平均會漏動量，沒修正的話靜置的 Jelly 會在
+    // 無摩擦地板上以 ~30 單位／秒一路橫移（見 `solveShapeMatching` 說明）。
+    expect(Math.abs(a.x - b.x)).toBeLessThan(0.1);
+    expect(sim.bbox().maxY).toBeLessThanOrEqual(floorY + 1e-9);
+    expect(sim.bbox().maxY).toBeGreaterThan(floorY - 1);
+    expect(sim.kineticEnergy()).toBeLessThan(1);
+  });
+
+  it('決定性：gravity > 0 同一段事件流兩次跑結果位元相同', () => {
+    const play = (): number[] => {
+      const sim = new SimCore(MESH());
+      sim.params.gravity = 1500;
+      sim.applyInput({ type: 'grab', id: 1, x: 0, y: 0 });
+      sim.applyInput({ type: 'moveGrab', id: 1, x: 60, y: -40 });
+      run(sim, 20);
+      sim.applyInput({ type: 'release', id: 1 });
+      run(sim, 40);
+      return Array.from(sim.positions);
+    };
+    expect(play()).toEqual(play());
+  });
+
+  it('reset() 不動 params.gravity（它是參數不是狀態）', () => {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 1200;
+    run(sim, 30);
+    sim.reset();
+    expect(sim.params.gravity).toBe(1200);
+    expect(sim.kineticEnergy()).toBe(0);
+    // reset 後再 step：重力仍在作用（位置回 rest 後重新落下）
+    const y0 = cy(sim);
+    run(sim, 30);
+    expect(cy(sim)).toBeGreaterThan(y0);
+  });
+});
+
 describe('SimCore — Region 依網格拓撲分組（issue #83）', () => {
   /**
    * 音叉形：13×13 頂點網格（間距 8）挖掉第 6 欄、第 0–9 列的 cell → 兩根叉齒
