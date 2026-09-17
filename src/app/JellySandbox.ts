@@ -1442,11 +1442,8 @@ export class JellySandbox {
   }
 
   /**
-   * `DropImportInput` 挑到影像位元組後的回呼：`buildSimMesh` → 解碼貼圖 →
-   * 換掉整套 `SimCore` + `JellyRenderer`。任何一步失敗（非圖片、不支援格式、
-   * 壞檔、貼圖解碼失敗）都在這個共用 try/catch 裡 `console.warn` 後放棄，原本的
-   * Jelly 不受影響（issue #12 / #55 驗收條件：「提示後略過、不崩」）。
-   * `importing` 擋掉重疊呼叫。
+   * `DropImportInput`／`FileImportInput` 挑到影像位元組後的回呼——交給 `runImport`，
+   * 只決定失敗時的提示文案（issue #12 / #55 驗收條件：「提示後略過、不崩」）。
    */
   private onDropImport = (imageBytes: Uint8Array): void => {
     this.runImport(imageBytes, '這張圖片沒辦法變成果凍，已略過');
@@ -1454,16 +1451,23 @@ export class JellySandbox {
 
   /**
    * 「重建」按鈕（issue #90 / V3 T1-3，見 CONTEXT.md「重建」）：用最近一次匯入的
-   * 來源影像位元組（還沒匯入過就是內建預設果凍此刻拍成的 PNG——跟存檔用的是同
-   * 一張）＋目前兩條拉霸，走跟拖放／按鈕匯入**完全相同**的 `runImport` 路徑：同一套
-   * 換網格收束、同一個 `importing` 互斥、失敗時同樣保留舊果凍並提示。重建後
-   * `lastImage`／`lastMeshParams`／`lastImportSize` 都由 `importImage` 更新，存檔自然
-   * 反映重建後的實際值。面板在錄製中／播放中把按鈕鎖住，但就算按到了，
-   * `replaceJelly` 也會先把播放／錄製收束掉。
+   * 來源影像（`sourceImage`，跟存檔用的是同一張）＋目前兩條拉霸，走跟拖放／按鈕
+   * 匯入**完全相同**的 `runImport` 路徑：同一套換網格收束、同一個 `importing` 互斥、
+   * 失敗時同樣保留舊果凍並提示。重建後 `lastImage`／`lastMeshParams`／`lastImportSize`
+   * 都由 `importImage` 更新，存檔自然反映重建後的實際值。面板在錄製中／播放中把
+   * 按鈕鎖住，但就算按到了，`replaceJelly` 也會先把播放／錄製收束掉。
    */
   private rebuildJelly(): void {
-    const imageBytes = this.lastImage?.bytes ?? canvasToPng(this.defaultTexture);
-    this.runImport(imageBytes, '重建失敗，場上的果凍維持不變');
+    this.runImport(this.sourceImage().bytes, '重建失敗，場上的果凍維持不變');
+  }
+
+  /**
+   * 場上這塊果凍的來源影像——最近一次成功匯入的那張；還沒匯入任何圖時，內建預設
+   * 果凍在此刻用 `canvasToPng` 拍成 `format: 'png'`（載入端零特例）。存檔
+   * （`buildClipState`）與重建（`rebuildJelly`）共用同一條規則。
+   */
+  private sourceImage(): ClipImage {
+    return this.lastImage ?? { format: 'png', bytes: canvasToPng(this.defaultTexture) };
   }
 
   /**
@@ -1533,16 +1537,11 @@ export class JellySandbox {
   /**
    * 蒐集目前記憶體狀態成 `ClipState`（issue #57）——`RecordedTrack` 攤成 `ClipTrack`
    * （`groupIds` 的 `Set` → 陣列、`customLabel ?? label` → `name`）、`setupPins`
-   * 拷成純 `{ x, y }`、`sim` 帶滑桿原始值。還沒匯入任何圖時 `image` 用內建預設
-   * 果凍此刻拍下的 PNG。
+   * 拷成純 `{ x, y }`、`sim` 帶滑桿原始值。`image` 見 `sourceImage`。
    */
   private buildClipState(): ClipState {
-    const image: ClipImage = this.lastImage ?? {
-      format: 'png',
-      bytes: canvasToPng(this.defaultTexture),
-    };
     return {
-      image,
+      image: this.sourceImage(),
       meshParams: this.lastMeshParams,
       importSize: this.lastImportSize,
       sim: {

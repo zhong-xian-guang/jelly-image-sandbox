@@ -276,7 +276,8 @@ export interface ControlPanelOptions {
    * 「重建」按鈕被按（issue #90 / V3 T1-3，見 CONTEXT.md「重建」）——用最近一次匯入
    * 的來源圖＋目前兩條拉霸，重新生成場上的果凍（走跟匯入完全相同的換網格路徑）。
    * 跟兩條拉霸不同，這顆**會**被 `setPlaybackControlsEnabled`／`setRecordingActive`
-   * 鎖住（比照片段初始 Pin 兩顆鈕）：換網格會清空 Track，錄製中／播放中按下沒意義。
+   * 鎖住（比照片段初始 Pin 兩顆鈕）：換網格會清空 Track（v3 Scene／issue #87 落地前
+   * 的暫行規則），錄製中／播放中按下沒意義。
    */
   onRebuild: () => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
@@ -1089,14 +1090,15 @@ export class ControlPanel {
   }
 
   /**
-   * 「重建」按鈕列（issue #90）——同 `buttonRow`，但回傳按鈕本身讓建構子記進
-   * `rebuildButton`，`updateTrackControlsState` 才管得到它的 `disabled`。
+   * 「重建」按鈕列（issue #90）——回傳按鈕本身讓建構子記進 `rebuildButton`，
+   * `updateTrackControlsState` 才管得到它的 `disabled`。tooltip 裡的「會清空 Track」
+   * 是 v3 Scene（issue #87）落地前沿用「換網格 = 清空片段」的暫行行為。
    */
   private rebuildRow(onRebuild: () => void): { row: HTMLElement; button: HTMLButtonElement } {
-    const row = this.buttonRow('重建', onRebuild);
-    const button = row.querySelector('button') as HTMLButtonElement;
-    button.title = '用最近匯入的圖＋目前的匯入尺寸／網格密度，重新生成場上的果凍（會清空 Track）';
-    return { row, button };
+    const result = this.buttonRowEl('重建', onRebuild);
+    result.button.title =
+      '用最近匯入的圖＋目前的匯入尺寸／網格密度，重新生成場上的果凍（會清空 Track）';
+    return result;
   }
 
   /**
@@ -1584,6 +1586,17 @@ export class ControlPanel {
   }
 
   private buttonRow(labelText: string, onClick: () => void): HTMLElement {
+    return this.buttonRowEl(labelText, onClick).row;
+  }
+
+  /**
+   * `buttonRow` 的底層：一列一顆鈕，同時回傳按鈕本身給需要之後再管它狀態的呼叫端
+   * （Demo 鈕、「重建」鈕）——不必事後用 `querySelector` 反查。
+   */
+  private buttonRowEl(
+    labelText: string,
+    onClick: () => void,
+  ): { row: HTMLElement; button: HTMLButtonElement } {
     const row = document.createElement('div');
     row.className = 'jelly-control-row';
 
@@ -1593,20 +1606,12 @@ export class ControlPanel {
     button.addEventListener('click', onClick);
 
     row.appendChild(button);
-    return row;
+    return { row, button };
   }
 
   /** 同 `buttonRow`，另外把按鈕記進 `demoButtons`，讓 `setDemoButtonsEnabled` 管得到。 */
   private demoButtonRow(labelText: string, onClick: () => void): HTMLElement {
-    const row = document.createElement('div');
-    row.className = 'jelly-control-row';
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = labelText;
-    button.addEventListener('click', onClick);
-
-    row.appendChild(button);
+    const { row, button } = this.buttonRowEl(labelText, onClick);
     this.demoButtons.push(button);
     return row;
   }
