@@ -43,8 +43,10 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       eraseRadius: 100,
       hideHintsDuringPlayback: false,
       importSize: 512,
+      meshDensity: 350,
     },
     importSizeRange: { min: 128, max: 1024, step: 16 },
+    meshDensityRange: { min: 100, max: 800, step: 10 },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     fanWidthRange: { min: 20, max: 400, step: 5 },
     fanStrengthRange: { min: 500, max: 12000, step: 100 },
@@ -73,6 +75,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onEraseRadiusChange: vi.fn(),
     onHideHintsDuringPlaybackChange: vi.fn(),
     onImportSizeChange: vi.fn(),
+    onMeshDensityChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -1128,6 +1131,65 @@ describe('ControlPanel — 匯入區塊：匯入尺寸拉霸（issue #88 / V3 T1
   it('不受播放／錄製鎖定影響（拉霸只管「下一次」匯入）', () => {
     const panel = new ControlPanel(makeOptions());
     const input = findRangeInputByLabel(panel, '匯入尺寸');
+    panel.setRecordingActive(true);
+    expect(input.disabled).toBe(false);
+    panel.setRecordingActive(false);
+    panel.setPlaybackControlsEnabled(false);
+    expect(input.disabled).toBe(false);
+  });
+});
+
+describe('ControlPanel — 匯入區塊：網格密度拉霸（issue #89 / V3 T1-2）', () => {
+  it('「網格密度」拉霸初始值來自 initial.meshDensity（350），範圍來自 meshDensityRange', () => {
+    const panel = new ControlPanel(makeOptions());
+    const input = findRangeInputByLabel(panel, '網格密度');
+    expect(Number(input.value)).toBe(350);
+    expect(Number(input.min)).toBe(100);
+    expect(Number(input.max)).toBe(800);
+    expect(Number(input.step)).toBe(10);
+  });
+
+  it('拖動 → onMeshDensityChange 收到數值，旁邊的數值跟著更新', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '網格密度');
+    const row = input.closest('label')!;
+    expect(row.textContent).toContain('350');
+    input.value = '800';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onMeshDensityChange).toHaveBeenCalledWith(800);
+    expect(row.textContent).toContain('800');
+    expect(row.textContent).not.toContain('350');
+  });
+
+  it('setMeshDensity(value) 更新拉霸與數值顯示，但不觸發 onMeshDensityChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '網格密度');
+    const row = input.closest('label')!;
+    panel.setMeshDensity(170);
+    expect(Number(input.value)).toBe(170);
+    expect(row.textContent).toContain('170');
+    expect(row.textContent).not.toContain('350');
+    expect(opts.onMeshDensityChange).not.toHaveBeenCalled();
+  });
+
+  it('「網格密度」列在「匯入」小標題底下、跟「匯入尺寸」同區', () => {
+    const panel = new ControlPanel(makeOptions());
+    const heading = [...panel.element.querySelectorAll('.jelly-control-heading')].find(
+      (h) => h.textContent === '匯入',
+    )!;
+    const importSizeRow = findRangeInputByLabel(panel, '匯入尺寸').closest('label')!;
+    const densityRow = findRangeInputByLabel(panel, '網格密度').closest('label')!;
+    // 三者在同一個父節點下、且順序為 小標題 → 匯入尺寸 → 網格密度。
+    const siblings = [...heading.parentElement!.children];
+    expect(siblings.indexOf(heading)).toBeLessThan(siblings.indexOf(importSizeRow));
+    expect(siblings.indexOf(importSizeRow)).toBeLessThan(siblings.indexOf(densityRow));
+  });
+
+  it('不受播放／錄製鎖定影響（拉霸只管「下一次」匯入）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const input = findRangeInputByLabel(panel, '網格密度');
     panel.setRecordingActive(true);
     expect(input.disabled).toBe(false);
     panel.setRecordingActive(false);
