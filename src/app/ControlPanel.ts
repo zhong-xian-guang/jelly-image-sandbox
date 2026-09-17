@@ -121,6 +121,8 @@ export interface ControlPanelInitial {
   /** Softness 滑桿目前值，0–1（見 `../sim/softness`）。 */
   softness: number;
   tapStrength: number;
+  /** 「重力」拉霸的初始值（issue #91 / V3 T2-1；ADR-0012），世界單位／s²，0 = 俯視無重力。 */
+  gravity: number;
   pinMode: boolean;
   /** Pin 標記顯示開關；關閉時 Pin 模式／清除所有 Pin 一併鎖住。 */
   showPins: boolean;
@@ -166,6 +168,8 @@ export interface RangeSpec {
 export interface ControlPanelOptions {
   initial: ControlPanelInitial;
   tapStrengthRange: RangeSpec;
+  /** 「重力」拉霸的範圍（issue #91）。 */
+  gravityRange: RangeSpec;
   /** 電風扇「寬度」／「強度」／「衰減程度」／「頻率」四個滑桿各自的範圍（issue #67）。 */
   fanWidthRange: RangeSpec;
   fanStrengthRange: RangeSpec;
@@ -283,6 +287,11 @@ export interface ControlPanelOptions {
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
+  /**
+   * 「重力」拉霸變更（issue #91 / V3 T2-1；ADR-0012）——拖動立刻套進 `sim.params.gravity`。
+   * 載入片段走 `setGravity`（只動顯示），不會回到這裡。
+   */
+  onGravityChange: (gravity: number) => void;
   onPinModeChange: (enabled: boolean) => void;
   onClearPins: () => void;
   onShowPinsChange: (visible: boolean) => void;
@@ -403,12 +412,15 @@ export class ControlPanel {
   /** `setPerfStatus` 比對用；避免值沒變時每幀重寫 DOM。 */
   private lastPerfText: string | null = null;
   /**
-   * Softness／輕拍力道滑桿與邊界模式下拉——`JellySandbox.applyClipState`（issue #58）
-   * 載入片段後靠 `setSoftness`／`setTapStrength`／`setBoundary` 把存檔值灌回面板，
-   * 不然面板顯示的滑桿位置會跟載入後實際生效的物理參數不一致。
+   * Softness／輕拍力道／重力滑桿與邊界模式下拉——`JellySandbox.applyClipState`（issue #58）
+   * 載入片段後靠 `setSoftness`／`setTapStrength`／`setGravity`／`setBoundary` 把存檔值
+   * 灌回面板，不然面板顯示的滑桿位置會跟載入後實際生效的物理參數不一致。
    */
   private readonly softnessInput: HTMLInputElement;
   private readonly tapStrengthInput: HTMLInputElement;
+  /** 「重力」拉霸與旁邊的數值（issue #91）——`setGravity` 兩個都要更新。 */
+  private readonly gravityInput: HTMLInputElement;
+  private readonly gravityOutput: HTMLOutputElement;
   private readonly boundarySelect: HTMLSelectElement;
   /** 「網格密度」拉霸與旁邊的數值——效能退路 `setMeshDensity` 兩個都要更新（issue #89）。 */
   private readonly meshDensityInput: HTMLInputElement;
@@ -468,6 +480,14 @@ export class ControlPanel {
       opts.onTapStrengthChange,
     );
     this.tapStrengthInput = tapStrength.input;
+    const gravity = this.rangeRowWithValue(
+      '重力',
+      opts.gravityRange,
+      opts.initial.gravity,
+      opts.onGravityChange,
+    );
+    this.gravityInput = gravity.input;
+    this.gravityOutput = gravity.output;
     const importSize = this.rangeRowWithValue(
       '匯入尺寸',
       opts.importSizeRange,
@@ -607,6 +627,7 @@ export class ControlPanel {
       ),
       softness.row,
       tapStrength.row,
+      gravity.row,
       // 「匯入」區塊（issue #88）：管「下一次」匯入的全域參數，跟軟硬度這類全域
       // 物理參數放一起、用小標題隔開；場上的果凍不受影響。
       this.importHeading(),
@@ -847,6 +868,16 @@ export class ControlPanel {
     if (this.tapStrengthInput.value !== text) this.tapStrengthInput.value = text;
   }
 
+  /**
+   * 載入片段後把重力拉霸位置與數值顯示灌回面板（issue #91）。同 `setSoftness` 的理由
+   * ——只動 DOM、不觸發 `input` 事件、不呼叫 `onGravityChange`。
+   */
+  setGravity(value: number): void {
+    const text = String(value);
+    if (this.gravityInput.value !== text) this.gravityInput.value = text;
+    if (this.gravityOutput.textContent !== text) this.gravityOutput.textContent = text;
+  }
+
   /** 載入片段後把邊界模式下拉灌回面板（issue #58）。同 `setSoftness` 的理由。 */
   setBoundary(mode: BoundaryMode): void {
     if (this.boundarySelect.value !== mode) this.boundarySelect.value = mode;
@@ -1054,8 +1085,8 @@ export class ControlPanel {
 
   /**
    * 帶數值顯示的滑桿列（issue #88）——`rangeRow` 旁再掛一個 `<output>`，拖動時同步
-   * 顯示目前值。匯入尺寸這種「拉到多少就是多少世界單位」的絕對量，使用者需要看到
-   * 數字才知道自己設了多少；軟硬度那種 0–1 的相對量就不需要。
+   * 顯示目前值。匯入尺寸、重力這種「拉到多少就是多少世界單位」的絕對量，使用者需要
+   * 看到數字才知道自己設了多少；軟硬度那種 0–1 的相對量就不需要。
    */
   private rangeRowWithValue(
     labelText: string,

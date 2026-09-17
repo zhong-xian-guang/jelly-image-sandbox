@@ -4,7 +4,7 @@
 
 ## 情境前提
 
-- **俯視、無重力。** Jelly 靜置即靜止；Fling 給初速，靠阻尼收斂。
+- **預設俯視、無重力；重力 > 0 視為側視**（[ADR-0012](../adr/0012-gravity-is-a-slider-not-a-mode.md)、issue #91）。重力 = 0 時 Jelly 靜置即靜止，Fling 給初速、靠阻尼收斂；重力 > 0 時所有 Particle 持續被往 +y（畫面下方）拉，落到邊界的地板上壓扁、回彈、靜止。
 - 桌上永遠一塊 Jelly。Multi-grab 是同一塊上的多個 Grab。
 - 目標裝置：2020 後中階手機 60fps；更弱裝置降 substep。
 
@@ -37,13 +37,14 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 
 ### 每個 substep
 
-1. 套用外力（v1 只有無）與既有速度，symplectic Euler 預測新位置。**所有 Particle 一視同仁**——被抓的 Particle 不設 `invMass = 0`，也不直接搬位置（見 [ADR-0003](../adr/0003-grab-attaches-at-a-barycentric-surface-point.md)）。
+1. 套用外力與既有速度，symplectic Euler 預測新位置。外力都在**預測之前**烤進 `vel`（預測之後改 `vel` 會在步驟 6 回推時被蓋掉）：電風扇陣風（issue #66／#67）與**重力** `vel.y += gravity × h`（issue #91；`gravity = 0` 時整段跳過，每個浮點運算跟沒有重力時完全一樣，舊片段重播不變）。**所有 Particle 一視同仁**——被抓／被 Pin 的 Particle 也照加重力、不設 `invMass = 0`，也不直接搬位置（見 [ADR-0003](../adr/0003-grab-attaches-at-a-barycentric-surface-point.md)）；約束在步驟 4 把它們拉回。
 2. **shape-matching 脊椎**（骨幹）：
    - Region = 在 Sim mesh bounding box 上鋪的**重疊方格 lattice**。cell 邊長初始 = Jelly 對角線 × `0.15`（prototype 實測；越大越硬），是 **Softness** 的主旋鈕。
    - 每個 cell 內的 Particle 先依 Sim mesh 的邊切成**連通分量**（BFS 限制在該 cell 的成員內），每個含 ≥ `4` 個 Particle 的分量是一個 Region（issue #83）。不切的話，凹形物件上兩塊只隔著透明縫、網格上不相連的部位會被同一個方格當成一塊剛體擬合——拉一邊另一邊跟著走。
    - 每 substep 每 Region：算目前質心與 rest 質心 → 最佳線性變換 → 對旋轉部分做 **2×2 polar decomposition** 取 `R` → 每個成員 Particle 的 goal `g = R(x0 − c0) + c`。
    - Particle 的最終 goal = 所屬各 Region goal 的加權平均。
    - 位置朝 goal 拉：`x += α_sm (g − x)`。`α_sm` 初始 `0.7`，與 cell 邊長一起構成 Softness。
+   - **動量守恆（只在 `gravity ≠ 0` 時開，issue #91）**：單一 Region 的 goal 位移總和為 0，但跨 Region 等權平均後不再守恆，每 substep 漏出一小段淨平移。無重力時只是 Fling 軌跡幾個百分點的差異；有重力、Jelly 靜置在無摩擦地板上時，這段每步被重力壓縮重新激發、x 方向無物可擋，會累積成一路走不停的滑動（實測 ~30 單位／秒）。開啟時把所有 Particle 的位移扣掉全體平均。`gravity = 0` 走原路徑，保住舊片段重播；要不要全域開啟另議。
 3. **XPBD 細節層**（疊加，補局部 Q 彈 + 第二道防翻面）：
    - **distance 約束**：每條 Sim mesh 邊一條。compliance 初始偏軟。
    - **signed-area 約束**：每個三角形一條，`C = signedArea(x1,x2,x3) − restArea`。**用有號面積**——翻面時 `C` 變號、梯度把元素翻正。這是關鍵，不可取絕對值。
@@ -59,7 +60,7 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
    - **Infinite**：no-op。
    - 執行期可切換。
 6. **回推速度**：`v = (x − x_prev) / dt_substep`。**被抓的三頂點也照推** → 它們帶著拖曳速度，放開時直接就是 Fling，不需另外賦速。
-7. **阻尼**：全域速度阻尼 `v *= (1 − k_damp)`。`k_damp` 調到放手後約 **1–2 秒**靜止。
+7. **阻尼**：全域速度阻尼 `v *= (1 − k_damp)`。`k_damp` 調到放手後約 **1–2 秒**靜止。有重力時它同時給落體一個終端速度 `≈ g·h/k_damp`（`k_damp = 0.02`、240 Hz → `g / 4.8`）；issue #91 實測決定**不動阻尼**（改它舊片段重播就變），改把重力拉霸上限拉高（見參數表）。
 
 ### 模組邊界
 
@@ -131,10 +132,11 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 | shape-matching α_sm | 0.7 |
 | Grab 硬度 β | 1.0（精準貼游標；調低＝彈性把手） |
 | Tap 脈衝 strength | 6000（向內；prototype 實測） |
+| 重力 `gravity` | **使用者可調**（「重力」拉霸 0–10000、步進 100，預設 0 = 俯視無重力；issue #91）。實測（阻尼 0.02、512 高的平底果凍落 ~830 單位到 Walled 箱底）：spec 初訂上限 2000 中段只有 ~200 單位／秒、4 秒才落地，像糖漿；5000 → 1.2 s 落地、終端速度 ≈ 1000（約 2 倍身高／秒）、著地壓扁到 0.83、靜置下陷 3%；10000 → 0.6 s、壓扁到 0.7、下陷 6%；任何值落地後 ≤ 2 s 靜止。圓形果凍（預設 Pac-Man）在無摩擦地板上會慢慢滾到重心最低的姿態，是正確物理、不是抖動 |
 | Tap 影響半徑 | Jelly bbox 對角線 × 0.2 |
 | Tap 判定 | pointerdown→up ≤ 250ms 且位移 < 6px |
 | Pin 硬度 β | 1.0（絕對硬鎖，不可調） |
 | 相機手動→自動回歸閒置 | ~2 s |
 | 相機跟隨平滑 | 指數平滑，鬆緊待調 |
-| 全域速度阻尼 | 調到 1–2 秒靜止 |
+| 全域速度阻尼 | 0.02／substep（調到 1–2 秒靜止；有重力時決定終端速度 `g / 4.8`，issue #91 不動它） |
 | accumulator clamp | 250 ms |

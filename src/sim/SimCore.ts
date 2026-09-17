@@ -20,8 +20,12 @@
  *      矩形外無感（見 `applyFan`）。**必須排在預測之前**——`vel` 在步驟 7 會
  *      整個依位置差重算，排在預測之後改的話，這股力那個 substep 不會移動任何
  *      位置，馬上就被蓋掉。
- *   2. 預測：symplectic Euler、無重力（所有 Particle 一視同仁；已烤進步驟 1 的
- *      電風扇加速度會在這裡被積分進位置）。
+ *      重力（`params.gravity`，issue #91；ADR-0012，`0` 時 no-op）也在這一步：
+ *      對所有 Particle 做 `vel.y += gravity × h`（+y = 畫面下方），同樣**必須在
+ *      預測之前**，理由同上。被抓／被 Pin 的 Particle 一樣照加——步驟 5 的約束
+ *      會把它們拉回，不需另外特例。
+ *   2. 預測：symplectic Euler（所有 Particle 一視同仁；已烤進步驟 1 的電風扇
+ *      加速度與重力會在這裡被積分進位置）。
  *   3. shape-matching 脊椎：重疊方格 lattice（每格再依網格拓撲切連通分量，
  *      issue #83）的每個 Region 做 2×2 polar decomposition 取旋轉 → goal →
  *      `x += α_sm·(g − x)`。
@@ -660,6 +664,7 @@ export class SimCore {
     const h = dt / subs;
     const alphaSm = this.params.alphaSm;
     const keep = 1 - this.params.damping;
+    const gravity = this.params.gravity;
 
     for (let s = 0; s < subs; s++) {
       // 1. 電風扇（沒有時 no-op）：對目前位置落在矩形內的 Particle 把它的加速度
@@ -667,7 +672,13 @@ export class SimCore {
       //    依位置差重算，這裡若排在預測之後才改 vel，這股力這一 substep 完全不會
       //    移動任何位置、下一行就被蓋掉，等於沒發生過。
       if (this.fan) this.applyFan(this.fan, h);
-      // 2. 預測（無重力）：symplectic Euler，把（可能已含電風扇）的 vel 積分進
+      //    重力同一步驟、同一理由（issue #91）：`gravity = 0` 時整段跳過，讓沒有
+      //    重力的 step 每個浮點運算跟以前完全一樣（舊片段重播結果不變）。
+      if (gravity !== 0) {
+        const dv = gravity * h;
+        for (let i = 0; i < this.n; i++) this.vel[2 * i + 1] = this.vel[2 * i + 1]! + dv;
+      }
+      // 2. 預測：symplectic Euler，把（可能已含電風扇／重力）的 vel 積分進
       //    pos——被抓 Particle 也照常積分。
       for (let i = 0; i < this.n; i++) {
         this.prev[2 * i] = this.pos[2 * i]!;
@@ -675,8 +686,8 @@ export class SimCore {
         this.pos[2 * i] = this.pos[2 * i]! + this.vel[2 * i]! * h;
         this.pos[2 * i + 1] = this.pos[2 * i + 1]! + this.vel[2 * i + 1]! * h;
       }
-      // 3. shape-matching 脊椎。
-      this.solveShapeMatching(alphaSm);
+      // 3. shape-matching 脊椎（有重力時開動量守恆，見方法說明）。
+      this.solveShapeMatching(alphaSm, gravity !== 0);
       // 4. XPBD 細節層（疊加；補局部拉伸擠壓的彈性 + 第二道防翻面）。
       if (this.params.xpbd) this.solveXpbd(h);
       // 5. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
@@ -696,8 +707,18 @@ export class SimCore {
    * decomposition 取旋轉 `R` → 成員 goal `g = R·q + c`。Particle 最終 goal =
    * 所屬各 Region goal 的等權平均（藍本 jelly-core 即如此；設計文件寫「加權」但
    * 未定義權重，待實測有需要再加）。位置朝 goal 拉 `x += α_sm·(g − x)`。
+   *
+   * `conserveMomentum`（issue #91）：單一 Region 的 goal 位移總和為 0（內力不改
+   * 質心），但「等權平均」跨 Region 後不再守恆——每個 substep 會漏出一小段淨平移
+   * （幽靈力）。俯視無重力時它只是 Fling 軌跡上幾個百分點的差異，沒人看得出來；
+   * 但有重力、Jelly 靜置在無摩擦的地板上時，這段每步都被重力壓縮重新激發、x 方向
+   * 又沒有任何東西擋，會累積成一路走不停的滑動（實測 13×13 fixture 在 g = 2000
+   * 下以 ~30 單位／秒橫移，關掉 XPBD 就沒有——壓縮狀態下的漏差來自兩層的交互）。
+   * 開啟時把所有 Particle 的位移扣掉全體平均，讓 shape matching 這一步的淨平移
+   * 精確為 0。**只在 `gravity ≠ 0` 時開**：g = 0 走原路徑，每個浮點運算跟以前
+   * 完全一樣，舊片段重播結果不變（issue #91 驗收；要不要全域開啟另議）。
    */
-  private solveShapeMatching(alphaSm: number): void {
+  private solveShapeMatching(alphaSm: number, conserveMomentum: boolean): void {
     this.goalX.fill(0);
     this.goalY.fill(0);
     this.goalCount.fill(0);
@@ -748,12 +769,35 @@ export class SimCore {
       }
     }
 
+    if (!conserveMomentum) {
+      for (let i = 0; i < this.n; i++) {
+        const count = this.goalCount[i]!;
+        if (count === 0) continue;
+        this.pos[2 * i] = this.pos[2 * i]! + alphaSm * (this.goalX[i]! / count - this.pos[2 * i]!);
+        this.pos[2 * i + 1] =
+          this.pos[2 * i + 1]! + alphaSm * (this.goalY[i]! / count - this.pos[2 * i + 1]!);
+      }
+      return;
+    }
+
+    // 動量守恆版（issue #91；見方法說明）：先把每個 Particle 的位移算好暫存回
+    // `goalX/goalY`（沒有 Region 的 Particle 位移 0），扣掉全體平均後才套用。
+    let sumDx = 0;
+    let sumDy = 0;
     for (let i = 0; i < this.n; i++) {
       const count = this.goalCount[i]!;
-      if (count === 0) continue;
-      this.pos[2 * i] = this.pos[2 * i]! + alphaSm * (this.goalX[i]! / count - this.pos[2 * i]!);
-      this.pos[2 * i + 1] =
-        this.pos[2 * i + 1]! + alphaSm * (this.goalY[i]! / count - this.pos[2 * i + 1]!);
+      const dx = count === 0 ? 0 : alphaSm * (this.goalX[i]! / count - this.pos[2 * i]!);
+      const dy = count === 0 ? 0 : alphaSm * (this.goalY[i]! / count - this.pos[2 * i + 1]!);
+      this.goalX[i] = dx;
+      this.goalY[i] = dy;
+      sumDx += dx;
+      sumDy += dy;
+    }
+    const meanDx = sumDx / this.n;
+    const meanDy = sumDy / this.n;
+    for (let i = 0; i < this.n; i++) {
+      this.pos[2 * i] = this.pos[2 * i]! + this.goalX[i]! - meanDx;
+      this.pos[2 * i + 1] = this.pos[2 * i + 1]! + this.goalY[i]! - meanDy;
     }
   }
 

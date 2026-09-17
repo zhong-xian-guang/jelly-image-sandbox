@@ -35,11 +35,16 @@ export interface ClipImage {
   bytes: Uint8Array;
 }
 
-/** 軟硬度滑桿值本身（0–1，非衍生的 cellFrac/alphaSm）＋輕拍力道＋邊界模式。 */
+/** 軟硬度滑桿值本身（0–1，非衍生的 cellFrac/alphaSm）＋輕拍力道＋邊界模式＋重力。 */
 export interface ClipSim {
   softness: number;
   tapStrength: number;
   boundary: BoundaryMode;
+  /**
+   * 重力拉霸值（issue #91 / V3 T2-1；ADR-0012），世界單位／s²、≥ 0。加此欄位之前存的
+   * 舊檔沒有它，解析時 → 0（俯視無重力，重播結果不變）；`version` 維持 1。
+   */
+  gravity: number;
 }
 
 /** `RecordedTrack` 去掉衍生欄位後的可序列化形狀（`groupIds` 攤成陣列）。 */
@@ -231,7 +236,16 @@ function parseSim(v: unknown): ClipSim {
     softness: requireNumber(obj.softness, 'sim.softness'),
     tapStrength: requireNumber(obj.tapStrength, 'sim.tapStrength'),
     boundary,
+    gravity: parseGravity(obj.gravity),
   };
+}
+
+/** 欄位缺失（舊檔）→ 0；存在則必須是 ≥ 0 的數字（`null` 也算型別錯）。 */
+function parseGravity(v: unknown): number {
+  if (v === undefined) return 0;
+  const n = requireNumber(v, 'sim.gravity');
+  if (n < 0) throw new ClipFileError('欄位「sim.gravity」不可為負數');
+  return n;
 }
 
 function parseCameraState(v: unknown, field: string): CameraState {

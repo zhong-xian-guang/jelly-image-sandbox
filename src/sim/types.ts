@@ -98,6 +98,15 @@ export interface SimParams {
   areaCompliance: number;
   /** `tap` 事件未帶 `strength` 時的預設脈衝強度。預設 6000（prototype 實測）。 */
   tapStrength: number;
+  /**
+   * 重力加速度（issue #91 / V3 T2-1；ADR-0012），世界單位／s²，方向固定 +y（畫面
+   * 下方）。每個 substep 在預測位置**之前**對所有 Particle 做 `vel.y += gravity × h`
+   * （與電風扇同一步驟、同一理由，見 `SimCore.step`）；被抓／被 Pin 的 Particle 也
+   * 照加，約束在之後解——Pin 住的點絕對不動、其餘垂下。`0`（預設）= 俯視無重力，
+   * 且 step 的每個浮點運算跟加此欄位前完全一樣（舊片段重播結果不變）。是參數不是
+   * 狀態：`reset()` 不動它。
+   */
+  gravity: number;
 }
 
 export const DEFAULT_SIM_PARAMS: SimParams = {
@@ -110,6 +119,7 @@ export const DEFAULT_SIM_PARAMS: SimParams = {
   distCompliance: 1.5e-4,
   areaCompliance: 3e-3,
   tapStrength: 6000,
+  gravity: 0,
 };
 
 /**
