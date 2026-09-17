@@ -42,7 +42,9 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       spraySpacing: 36,
       eraseRadius: 100,
       hideHintsDuringPlayback: false,
+      importSize: 512,
     },
+    importSizeRange: { min: 128, max: 1024, step: 16 },
     tapStrengthRange: { min: 1000, max: 11000, step: 100 },
     fanWidthRange: { min: 20, max: 400, step: 5 },
     fanStrengthRange: { min: 500, max: 12000, step: 100 },
@@ -70,6 +72,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onSpraySpacingChange: vi.fn(),
     onEraseRadiusChange: vi.fn(),
     onHideHintsDuringPlaybackChange: vi.fn(),
+    onImportSizeChange: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -1080,5 +1083,55 @@ describe('ControlPanel — 播放時隱藏提示（issue #71 / V2 T3-7）', () =
     const panel = new ControlPanel(makeOptions());
     const checkbox = findHideHintsCheckbox(panel);
     expect(checkbox.closest('.jelly-tool-params')).toBeNull();
+  });
+});
+
+describe('ControlPanel — 匯入區塊：匯入尺寸拉霸（issue #88 / V3 T1-1）', () => {
+  it('面板有「匯入」小標題', () => {
+    const panel = new ControlPanel(makeOptions());
+    const headings = [...panel.element.querySelectorAll('.jelly-control-heading')].map(
+      (h) => h.textContent,
+    );
+    expect(headings).toContain('匯入');
+  });
+
+  it('「匯入尺寸」拉霸初始值來自 initial.importSize（512），範圍來自 importSizeRange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '匯入尺寸');
+    expect(Number(input.value)).toBe(512);
+    expect(Number(input.min)).toBe(128);
+    expect(Number(input.max)).toBe(1024);
+    expect(Number(input.step)).toBe(16);
+  });
+
+  it('拖動 → onImportSizeChange 收到數值', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '匯入尺寸');
+    input.value = '256';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onImportSizeChange).toHaveBeenCalledWith(256);
+  });
+
+  it('拉霸旁顯示目前數值，拖動時跟著更新', () => {
+    const panel = new ControlPanel(makeOptions());
+    const input = findRangeInputByLabel(panel, '匯入尺寸');
+    const row = input.closest('label')!;
+    expect(row.textContent).toContain('512');
+    input.value = '256';
+    input.dispatchEvent(new Event('input'));
+    expect(row.textContent).toContain('256');
+    expect(row.textContent).not.toContain('512');
+  });
+
+  it('不受播放／錄製鎖定影響（拉霸只管「下一次」匯入）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const input = findRangeInputByLabel(panel, '匯入尺寸');
+    panel.setRecordingActive(true);
+    expect(input.disabled).toBe(false);
+    panel.setRecordingActive(false);
+    panel.setPlaybackControlsEnabled(false);
+    expect(input.disabled).toBe(false);
   });
 });
