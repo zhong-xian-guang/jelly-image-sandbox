@@ -485,7 +485,7 @@ export class JellySandbox {
    * 同 `importSize`：只是意圖，載入片段不改寫、場上的果凍不跟著變。效能退路
    * （`applyMeshDensityFallback`）會直接改它並同步面板。
    */
-  private meshDensity: number = DEFAULT_MESH_DENSITY;
+  private meshDensity = DEFAULT_MESH_DENSITY;
   /**
    * 最近一次**實際套用**的匯入尺寸（issue #88）——存檔時原樣寫進 `ClipState.importSize`，
    * 載入端據此在 `buildSimMesh` 之後縮放（見 `scaleMeshToLongestEdge`）。跟 `importSize`
