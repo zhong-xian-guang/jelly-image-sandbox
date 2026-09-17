@@ -21,7 +21,7 @@
 9. **Sliver 清理**：細化後仍面積 `< ε_area` 或最小角 `< 15°` 的三角形，丟棄或與鄰邊合併（保護 signed-area 約束的梯度）。
 10. **指定 UV**：每個頂點 UV = 它在原圖的正規化座標。
 11. **凍結拓撲**：之後模擬只更新頂點位置，`indices` 與 `uv` 不變。
-12. **套用匯入尺寸**（`src/mesh/scaleMesh.ts`，issue #88）：管線**之外**的獨立純函式，把 `buildSimMesh` 輸出的 mask 像素座標網格等比放大／縮小到「bbox 最長邊 = 匯入尺寸拉霸值」（預設 512 世界單位）：`positions × s`、`restAreas × s²`，`indices`／`uv` 不動，以原點為錨不置中。刻意不進 `BuildSimMeshParams`——那些參數全部進種子雜湊（ADR-0005），加欄位會讓舊片段檔的網格不再重現。匯入層在這一步之後才建求解器；片段檔記下實際套用的值（`importSize`，`null` = 舊檔未縮放），載入時依檔案值縮放、不套目前拉霸。
+12. **套用匯入尺寸**（`src/mesh/scaleMesh.ts`，issue #88）：管線**之外**的獨立純函式，把 `buildSimMesh` 輸出的 mask 像素座標網格等比放大／縮小到「bbox 最長邊 = 匯入尺寸拉霸值」（預設 512 世界單位）：`positions × s`、`restAreas × s²`，`indices`／`uv` 不動，以原點為錨不置中。刻意不進 `BuildSimMeshParams`——那些參數全部進種子雜湊（ADR-0005），加欄位會讓舊片段檔的網格不再重現。匯入層在這一步之後才建求解器；片段檔記下實際套用的值（`importSize`，`null` = 舊檔未縮放），載入時依檔案值縮放、不套目前拉霸。「重建」鈕（issue #90）拿最近匯入的來源位元組（未匯入過＝內建預設果凍拍的 PNG）＋當下兩條拉霸，重跑整條管線含這一步，走跟匯入完全相同的換網格路徑。
 
 v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升級為「粗 Sim mesh + 細 Texture mesh，重心座標 skin」。
 

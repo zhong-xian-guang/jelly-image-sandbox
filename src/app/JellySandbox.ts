@@ -19,7 +19,9 @@
  * 先建好、確定成功了才拆舊的，畫面不會有空檔；解碼／建網格失敗（非圖片、不支援
  * 格式、壞檔）一律 `console.warn` ＋ 畫面上閃一行 `notice` 後放棄，不影響原本的
  * Jelly。匯入時把控制面板目前設定（Softness、輕拍力道、Boundary 模式）重新套到
- * 新的 `SimCore`，面板不會顯示跟實際物理不一致的值。`importHint`（issue #12 追加）
+ * 新的 `SimCore`，面板不會顯示跟實際物理不一致的值。「重建」鈕（issue #90）拿最近
+ * 匯入的位元組（沒匯入過就是預設果凍拍的 PNG）再走一次同一條路，讓拉霸改動不必
+ * 重拖圖就能看到。`importHint`（issue #12 追加）
  * 是常駐在角落的低調小字，提示「可以拖圖片進來」——`dropHint` 只在拖曳中才出現，
  * 沒有這個常駐提示的話使用者無從發現這個功能本身存在。
  *
@@ -476,12 +478,13 @@ export class JellySandbox {
    */
   private lastImage: ClipImage | null = null;
   /**
-   * 「匯入尺寸」拉霸目前值（issue #88）——**下一次**匯入的果凍最長邊有多少世界單位。
-   * 只是意圖：載入片段不改寫它（那是還原、不是重新匯入），場上的果凍也不跟著變。
+   * 「匯入尺寸」拉霸目前值（issue #88）——**下一次**匯入（或「重建」，issue #90）的
+   * 果凍最長邊有多少世界單位。只是意圖：載入片段不改寫它（那是還原、不是重新
+   * 匯入），場上的果凍也不跟著變。
    */
   private importSize = DEFAULT_IMPORT_SIZE;
   /**
-   * 「網格密度」拉霸目前值（issue #89）——**下一次**匯入的 `targetParticleCount`。
+   * 「網格密度」拉霸目前值（issue #89）——**下一次**匯入／重建的 `targetParticleCount`。
    * 同 `importSize`：只是意圖，載入片段不改寫、場上的果凍不跟著變。效能退路
    * （`applyMeshDensityFallback`）會直接改它並同步面板。
    */
@@ -600,6 +603,7 @@ export class JellySandbox {
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onImportSizeChange: (size) => this.setImportSize(size),
       onMeshDensityChange: (density) => this.setMeshDensity(density),
+      onRebuild: () => this.rebuildJelly(),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -1251,7 +1255,7 @@ export class JellySandbox {
     if (reduced === this.meshDensity) return;
     this.meshDensity = reduced;
     this.controlPanel.setMeshDensity(reduced);
-    this.showNotice(`效能不足，已把網格密度降到 ${reduced}；下一次匯入生效`);
+    this.showNotice(`效能不足，已把網格密度降到 ${reduced}；下一次匯入／重建生效`);
   }
 
   /** 「撒 Pin 範圍半徑」滑桿（issue #69）——下一次撒點用，同時是筆刷圓圈的大小。 */
@@ -1445,17 +1449,40 @@ export class JellySandbox {
    * `importing` 擋掉重疊呼叫。
    */
   private onDropImport = (imageBytes: Uint8Array): void => {
+    this.runImport(imageBytes, '這張圖片沒辦法變成果凍，已略過');
+  };
+
+  /**
+   * 「重建」按鈕（issue #90 / V3 T1-3，見 CONTEXT.md「重建」）：用最近一次匯入的
+   * 來源影像位元組（還沒匯入過就是內建預設果凍此刻拍成的 PNG——跟存檔用的是同
+   * 一張）＋目前兩條拉霸，走跟拖放／按鈕匯入**完全相同**的 `runImport` 路徑：同一套
+   * 換網格收束、同一個 `importing` 互斥、失敗時同樣保留舊果凍並提示。重建後
+   * `lastImage`／`lastMeshParams`／`lastImportSize` 都由 `importImage` 更新，存檔自然
+   * 反映重建後的實際值。面板在錄製中／播放中把按鈕鎖住，但就算按到了，
+   * `replaceJelly` 也會先把播放／錄製收束掉。
+   */
+  private rebuildJelly(): void {
+    const imageBytes = this.lastImage?.bytes ?? canvasToPng(this.defaultTexture);
+    this.runImport(imageBytes, '重建失敗，場上的果凍維持不變');
+  }
+
+  /**
+   * 拖放／按鈕匯入與「重建」共用的外殼：`importing` 擋掉重疊呼叫（含跟載入片段
+   * 互斥），`importImage` 任何一步丟錯都 `console.warn` ＋ 閃一行 `notice` 後放棄，
+   * 原本的果凍不受影響。
+   */
+  private runImport(imageBytes: Uint8Array, failureNotice: string): void {
     if (this.importing) return;
     this.importing = true;
     this.importImage(imageBytes)
       .catch((err: unknown) => {
         console.warn('[jelly] 影像匯入失敗，已略過', err);
-        this.showNotice('這張圖片沒辦法變成果凍，已略過');
+        this.showNotice(failureNotice);
       })
       .finally(() => {
         this.importing = false;
       });
-  };
+  }
 
   private async importImage(imageBytes: Uint8Array): Promise<void> {
     // 網格密度（issue #89）：拉霸值就是這次的 targetParticleCount，其他網格參數維持

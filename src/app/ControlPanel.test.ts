@@ -76,6 +76,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onHideHintsDuringPlaybackChange: vi.fn(),
     onImportSizeChange: vi.fn(),
     onMeshDensityChange: vi.fn(),
+    onRebuild: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -1195,5 +1196,58 @@ describe('ControlPanel — 匯入區塊：網格密度拉霸（issue #89 / V3 T1
     panel.setRecordingActive(false);
     panel.setPlaybackControlsEnabled(false);
     expect(input.disabled).toBe(false);
+  });
+});
+
+describe('ControlPanel — 匯入區塊：「重建」按鈕（issue #90 / V3 T1-3）', () => {
+  function rebuildButton(panel: ControlPanel): HTMLButtonElement {
+    const button = [...panel.element.querySelectorAll('button')].find(
+      (b) => b.textContent === '重建',
+    );
+    expect(button).toBeDefined();
+    return button!;
+  }
+
+  it('面板有一顆「重建」按鈕，點擊呼叫 onRebuild', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    rebuildButton(panel).click();
+    expect(opts.onRebuild).toHaveBeenCalledTimes(1);
+  });
+
+  it('「重建」列在「匯入」區塊最後（小標題 → 匯入尺寸 → 網格密度 → 重建）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const heading = [...panel.element.querySelectorAll('.jelly-control-heading')].find(
+      (h) => h.textContent === '匯入',
+    )!;
+    const densityRow = findRangeInputByLabel(panel, '網格密度').closest('label')!;
+    const rebuildRow = rebuildButton(panel).closest('.jelly-control-row')!;
+    const siblings = [...heading.parentElement!.children];
+    expect(siblings.indexOf(heading)).toBeLessThan(siblings.indexOf(densityRow));
+    expect(siblings.indexOf(densityRow) + 1).toBe(siblings.indexOf(rebuildRow));
+  });
+
+  it('錄製中／播放中 → 按鈕變灰，結束後解鎖（不受 Track 數量影響）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const button = rebuildButton(panel);
+    expect(button.disabled).toBe(false);
+
+    panel.setRecordingActive(true);
+    expect(button.disabled).toBe(true);
+    panel.setRecordingActive(false);
+    expect(button.disabled).toBe(false);
+
+    panel.setPlaybackControlsEnabled(false);
+    expect(button.disabled).toBe(true);
+    panel.setPlaybackControlsEnabled(true);
+    expect(button.disabled).toBe(false);
+
+    // 有 Track 也一樣：鎖與解鎖只看錄製／播放狀態。
+    panel.setGroups(groupRows());
+    panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    panel.setPlaybackControlsEnabled(false);
+    expect(button.disabled).toBe(true);
+    panel.setPlaybackControlsEnabled(true);
+    expect(button.disabled).toBe(false);
   });
 });
