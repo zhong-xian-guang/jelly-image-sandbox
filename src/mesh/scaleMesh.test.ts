@@ -85,7 +85,7 @@ describe('scaleMeshToLongestEdge', () => {
     expect(out.restAreas).not.toBe(input.restAreas);
   });
 
-  it('退化 bbox（最長邊為 0）→ 回傳原樣', () => {
+  it('退化 bbox（最長邊為 0）→ 內容原樣（仍是拷貝）', () => {
     const input: SimMesh = {
       positions: new Float32Array([5, 5, 5, 5, 5, 5]),
       indices: new Uint32Array([0, 1, 2]),
@@ -94,6 +94,7 @@ describe('scaleMeshToLongestEdge', () => {
     };
     const out = scaleMeshToLongestEdge(input, 512);
     expect(out).toEqual(input);
+    expect(out.positions).not.toBe(input.positions);
   });
 
   it('目標等於原尺寸 → positions 相等', () => {

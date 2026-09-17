@@ -52,8 +52,9 @@ export const DEFAULT_PARAMS: BuildSimMeshParams = {
 };
 
 /**
- * 凍結拓撲的模擬網格。座標系為降採樣後的 mask 像素（原點左上、y 向下）；
- * 呼叫端（匯入模組）負責置中／縮放到世界座標。
+ * 凍結拓撲的模擬網格。座標系為降採樣後的 mask 像素（原點左上、y 向下）。
+ * 套用匯入尺寸是管線之後的獨立一步（`scaleMeshToLongestEdge`，issue #88），由匯入層
+ * 呼叫；以原點為錨、不置中。
  */
 export interface SimMesh {
   /** 頂點座標，`[x0, y0, x1, y1, ...]`，長度 = 2 × 頂點數。 */

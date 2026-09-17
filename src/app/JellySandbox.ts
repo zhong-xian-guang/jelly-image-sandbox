@@ -596,9 +596,7 @@ export class JellySandbox {
       onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
       onEraseRadiusChange: (radius) => this.setEraseRadius(radius),
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
-      onImportSizeChange: (size) => {
-        this.importSize = size;
-      },
+      onImportSizeChange: (size) => this.setImportSize(size),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -1230,6 +1228,11 @@ export class JellySandbox {
   }
 
   /** 「撒 Pin 範圍半徑」滑桿（issue #69）——下一次撒點用，同時是筆刷圓圈的大小。 */
+  /** 「匯入尺寸」拉霸（issue #88）——只記下意圖，下一次匯入才套用；場上的果凍不動。 */
+  private setImportSize(size: number): void {
+    this.importSize = size;
+  }
+
   private setSprayRadius(radius: number): void {
     this.sprayRadius = radius;
     this.input.setSprayParams({ radius });

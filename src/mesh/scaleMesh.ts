@@ -16,12 +16,12 @@ import type { SimMesh } from './types';
 /**
  * 純函式：回傳新的 `SimMesh`，`positions` × s、`restAreas` × s²，`indices` 與 `uv`
  * 原樣拷貝；不就地修改輸入。s = `targetLongestEdge ÷ bbox 最長邊`（寬高相等時任一
- * 邊）。退化 bbox（最長邊為 0，例如所有頂點重合）沒有可縮放的尺度，原樣回傳。
+ * 邊）。退化 bbox（最長邊為 0，例如所有頂點重合）沒有可縮放的尺度，s = 1——仍回傳
+ * 拷貝，呼叫端不必分辨「有沒有真的縮」。
  */
 export function scaleMeshToLongestEdge(mesh: SimMesh, targetLongestEdge: number): SimMesh {
   const longest = longestBBoxEdge(mesh.positions);
-  if (!(longest > 0)) return mesh;
-  const s = targetLongestEdge / longest;
+  const s = longest > 0 ? targetLongestEdge / longest : 1;
 
   const positions = new Float32Array(mesh.positions.length);
   for (let i = 0; i < positions.length; i++) positions[i] = mesh.positions[i]! * s;

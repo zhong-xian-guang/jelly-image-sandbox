@@ -16,12 +16,12 @@
 4. **描 Contour**：手刻 marching squares，alpha 當 scalar field。輸出封閉多邊形路徑（外環 + 洞環）。
 5. **簡化**：`simplify-js`（BSD-2-Clause）Douglas–Peucker。初始容差：mask 像素座標下 `1.5`px，之後調。
 6. **三角化**：`cdt2d`（MIT）做 constrained Delaunay，約束邊 = 簡化後的 Contour 邊。
-7. **內部點**：在 Contour 內撒 jittered grid（或 blue-noise）當 Steiner points 一併餵入。初始間距：讓整塊 Jelly 約 200–500 個 Particle——**目標 Particle 數由使用者可調**（「網格密度」拉霸，見 CONTEXT.md；預設 350）。**抖動用有種子的 PRNG**（種子 = hash(降採樣後 alpha mask 位元組 + 所有網格參數)），同一張圖 + 同參數永遠得到同一個 Sim mesh（見 [ADR-0005](../adr/0005-v1-keeps-sim-deterministic-and-input-recordable.md)）。整個管線不得用 `Math.random` 或 wall-clock。
+7. **內部點**：在 Contour 內撒 jittered grid（或 blue-noise）當 Steiner points 一併餵入。初始間距：讓整塊 Jelly 約 200–500 個 Particle——**目標 Particle 數預定開放給使用者調整**（「網格密度」拉霸，見 CONTEXT.md、issue #89；預設 350）。**抖動用有種子的 PRNG**（種子 = hash(降採樣後 alpha mask 位元組 + 所有網格參數)），同一張圖 + 同參數永遠得到同一個 Sim mesh（見 [ADR-0005](../adr/0005-v1-keeps-sim-deterministic-and-input-recordable.md)）。整個管線不得用 `Math.random` 或 wall-clock。
 8. **Ruppert 品質細化**（自寫，`src/mesh/refine.ts`，見 ADR-0002）：最小角下界初始 `25°`、最大面積上界 = `2 × 目標間距²`；壞三角形補 circumcenter；constrained segment 被既有頂點或待插入 circumcenter encroach（落在直徑圓內）改分裂中點。每回合以固定點序重跑 `cdt2d`（批次細化）→ 決定性。批次插入時，同回合兩個相距小於「較小外接半徑的一半」的 circumcenter 只取一個，避免補點互相生 sliver 而發散。兩道終止保險：回合數上限 `30`、頂點數上限 = `目標 Particle 數 × 4`；尖銳凹形輸入角可能撞到上限，殘餘壞三角形交給下一步。
 9. **Sliver 清理**：細化後仍面積 `< ε_area` 或最小角 `< 15°` 的三角形，丟棄或與鄰邊合併（保護 signed-area 約束的梯度）。
 10. **指定 UV**：每個頂點 UV = 它在原圖的正規化座標。
 11. **凍結拓撲**：之後模擬只更新頂點位置，`indices` 與 `uv` 不變。
-12. **縮放到匯入尺寸**（`src/mesh/scaleMesh.ts`，issue #88）：管線**之外**的獨立純函式，把 `buildSimMesh` 輸出的 mask 像素座標網格等比縮放到「bbox 最長邊 = 匯入尺寸拉霸值」（預設 512 世界單位）：`positions × s`、`restAreas × s²`，`indices`／`uv` 不動，以原點為錨不置中。刻意不進 `BuildSimMeshParams`——那些參數全部進種子雜湊（ADR-0005），加欄位會讓舊片段檔的網格不再重現。匯入層在這一步之後才建求解器；片段檔記下實際套用的值（`importSize`，`null` = 舊檔未縮放），載入時依檔案值縮放、不套目前拉霸。
+12. **套用匯入尺寸**（`src/mesh/scaleMesh.ts`，issue #88）：管線**之外**的獨立純函式，把 `buildSimMesh` 輸出的 mask 像素座標網格等比放大／縮小到「bbox 最長邊 = 匯入尺寸拉霸值」（預設 512 世界單位）：`positions × s`、`restAreas × s²`，`indices`／`uv` 不動，以原點為錨不置中。刻意不進 `BuildSimMeshParams`——那些參數全部進種子雜湊（ADR-0005），加欄位會讓舊片段檔的網格不再重現。匯入層在這一步之後才建求解器；片段檔記下實際套用的值（`importSize`，`null` = 舊檔未縮放），載入時依檔案值縮放、不套目前拉霸。
 
 v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升級為「粗 Sim mesh + 細 Texture mesh，重心座標 skin」。
 
