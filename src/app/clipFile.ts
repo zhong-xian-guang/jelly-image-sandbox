@@ -78,6 +78,13 @@ export interface ClipState {
   image: ClipImage;
   /** 匯入當下實際餵給 `buildSimMesh` 的**解析後完整**參數（含可能被效能退路砍半的 `targetParticleCount`）。 */
   meshParams: BuildSimMeshParams;
+  /**
+   * 實際套用的匯入尺寸（issue #88 / V3 T1-1）——`buildSimMesh` 之後把網格 bbox 最長邊
+   * 縮到多少世界單位（見 `scaleMeshToLongestEdge`）。`null` = 未縮放：加此欄位之前存
+   * 的舊檔沒有它，載入時網格維持 mask 像素座標，Track 座標才對得上；從舊檔載入而
+   * 未重建就存回去仍是 `null`。序列化時 `null` 也照寫（欄位永遠存在，方便人工檢視）。
+   */
+  importSize: number | null;
   sim: ClipSim;
   tracks: readonly ClipTrack[];
   groups: readonly ClipGroup[];
@@ -149,6 +156,7 @@ export function parseClipFile(text: string): ClipState {
   return {
     image: parseImage(root.image),
     meshParams: parseMeshParams(root.meshParams),
+    importSize: parseImportSize(root.importSize),
     sim: parseSim(root.sim),
     tracks: parseTracks(root.tracks),
     groups: parseGroups(root.groups),
@@ -203,6 +211,14 @@ function parseMeshParams(v: unknown): BuildSimMeshParams {
   const out = {} as Record<(typeof MESH_PARAM_KEYS)[number], number>;
   for (const key of MESH_PARAM_KEYS) out[key] = requireNumber(obj[key], `meshParams.${key}`);
   return out;
+}
+
+/** 欄位缺失（舊檔）或 `null` → `null`（未縮放）；存在則必須是正數。 */
+function parseImportSize(v: unknown): number | null {
+  if (v === undefined || v === null) return null;
+  const n = requireNumber(v, 'importSize');
+  if (n <= 0) throw new ClipFileError('欄位「importSize」必須是正數');
+  return n;
 }
 
 function parseSim(v: unknown): ClipSim {

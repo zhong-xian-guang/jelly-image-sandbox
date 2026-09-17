@@ -150,6 +150,8 @@ export interface ControlPanelInitial {
   eraseRadius: number;
   /** 「播放時隱藏提示」全域開關的初始值（issue #71）——見 `onHideHintsDuringPlaybackChange`。 */
   hideHintsDuringPlayback: boolean;
+  /** 「匯入尺寸」拉霸的初始值（issue #88 / V3 T1-1），世界單位——見 `onImportSizeChange`。 */
+  importSize: number;
 }
 
 /** 一個數值滑桿的範圍（issue #67 抽出——`tapStrengthRange` 與三個電風扇範圍共用同一形狀）。 */
@@ -172,6 +174,8 @@ export interface ControlPanelOptions {
   spraySpacingRange: RangeSpec;
   /** 移除 Pin「範圍半徑」滑桿的範圍（issue #70）。 */
   eraseRadiusRange: RangeSpec;
+  /** 「匯入尺寸」拉霸的範圍（issue #88）。 */
+  importSizeRange: RangeSpec;
   /** 「Demo」按鈕列表（issue #15），依序顯示；點下呼叫 `onRunDemo(id)`。 */
   demos: readonly DemoMenuItem[];
   /**
@@ -251,6 +255,13 @@ export interface ControlPanelOptions {
    * ——播放中臨時想看一眼提示（或反過來）隨時都能切。
    */
   onHideHintsDuringPlaybackChange: (enabled: boolean) => void;
+  /**
+   * 「匯入尺寸」拉霸變更（issue #88 / V3 T1-1，見 CONTEXT.md「匯入尺寸」）——
+   * 只影響**下一次**匯入的果凍最長邊有多少世界單位，場上的果凍不跟著變，所以
+   * 這條拉霸刻意不被 `setPlaybackControlsEnabled`／`setRecordingActive` 鎖住，
+   * 也不因載入片段而被改寫（拉霸永遠代表「下一次」的意圖）。
+   */
+  onImportSizeChange: (size: number) => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -434,6 +445,12 @@ export class ControlPanel {
       opts.onTapStrengthChange,
     );
     this.tapStrengthInput = tapStrength.input;
+    const importSize = this.rangeRowWithValue(
+      '匯入尺寸',
+      opts.importSizeRange,
+      opts.initial.importSize,
+      opts.onImportSizeChange,
+    );
 
     const fanWidth = this.rangeRow(
       '風扇寬度',
@@ -555,6 +572,10 @@ export class ControlPanel {
       ),
       softness.row,
       tapStrength.row,
+      // 「匯入」區塊（issue #88）：管「下一次」匯入的全域參數，跟軟硬度這類全域
+      // 物理參數放一起、用小標題隔開；場上的果凍不受影響。
+      this.importHeading(),
+      importSize.row,
       ...pins.rows,
       followLock.row,
       this.buttonRow('框住果凍', opts.onFrameJelly),
@@ -979,6 +1000,43 @@ export class ControlPanel {
 
     row.append(labelText, input);
     return { row, input };
+  }
+
+  /**
+   * 帶數值顯示的滑桿列（issue #88）——`rangeRow` 旁再掛一個 `<output>`，拖動時同步
+   * 顯示目前值。匯入尺寸這種「拉到多少就是多少世界單位」的絕對量，使用者需要看到
+   * 數字才知道自己設了多少；軟硬度那種 0–1 的相對量就不需要。
+   */
+  private rangeRowWithValue(
+    labelText: string,
+    range: RangeSpec,
+    value: number,
+    onChange: (n: number) => void,
+  ): { row: HTMLElement; input: HTMLInputElement; output: HTMLOutputElement } {
+    const { row, input } = this.rangeRow(
+      labelText,
+      range.min,
+      range.max,
+      range.step,
+      value,
+      onChange,
+    );
+    const output = document.createElement('output');
+    output.className = 'jelly-range-value';
+    output.textContent = String(value);
+    input.addEventListener('input', () => {
+      output.textContent = input.value;
+    });
+    row.appendChild(output);
+    return { row, input, output };
+  }
+
+  /** 「匯入」區塊小標題（issue #88）——底下是管「下一次」匯入的全域拉霸。 */
+  private importHeading(): HTMLElement {
+    const heading = document.createElement('div');
+    heading.className = 'jelly-control-heading';
+    heading.textContent = '匯入';
+    return heading;
   }
 
   /**

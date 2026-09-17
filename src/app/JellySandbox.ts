@@ -13,7 +13,8 @@
  * picking／算繪都吃 `cameraState.transform`——相機平移／縮放後仍命中正確的表面點。
  *
  * **拖放匯入**：`DropImportInput`（薄的接線層，對照 `PointerInput`/`CameraInput`）
- * 挑出拖放的影像檔（png/jpeg/gif）、讀成位元組後回呼 `importImage` → `buildSimMesh` → 換一套新的
+ * 挑出拖放的影像檔（png/jpeg/gif）、讀成位元組後回呼 `importImage` → `buildSimMesh` →
+ * `scaleMeshToLongestEdge`（匯入尺寸拉霸，issue #88）→ 換一套新的
  * `SimCore` + `JellyRenderer`（拓撲變了、舊 Mesh geometry 沒法沿用）。新 Renderer
  * 先建好、確定成功了才拆舊的，畫面不會有空檔；解碼／建網格失敗（非圖片、不支援
  * 格式、壞檔）一律 `console.warn` ＋ 畫面上閃一行 `notice` 後放棄，不影響原本的
@@ -129,6 +130,7 @@ import {
   buildSimMesh,
   DEFAULT_PARAMS,
   imageFormatToMime,
+  scaleMeshToLongestEdge,
   sniffImageFormat,
   type BuildSimMeshParams,
   type SimMesh,
@@ -235,6 +237,14 @@ const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
  * 擦的時候多半想擦得精準一點，共用一個值會逼使用者每次切工具都重調。
  */
 const ERASE_RADIUS_RANGE = { min: 20, max: 400, step: 10 };
+/**
+ * 「匯入尺寸」拉霸的範圍與預設（issue #88 / V3 T1-1，見 CONTEXT.md「匯入尺寸」），
+ * 世界單位 = 未縮放時的 mask 像素。預設 512：一般解析度的圖進場大小跟以前差不多
+ * （以前是降採樣後的像素尺寸、最長邊 ≤ 1024），超大圖不會撐滿桌面。下限 128 還
+ * 看得見、上限 1024 = 以前的最大值。
+ */
+const IMPORT_SIZE_RANGE = { min: 128, max: 1024, step: 16 };
+const DEFAULT_IMPORT_SIZE = 512;
 /**
  * Pin 模式下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
  * CSS 直徑（16px）同數量級，換算回世界座標時要除以目前相機縮放（見
@@ -471,6 +481,19 @@ export class JellySandbox {
    * `canvasToPng(defaultTexture)` 拍成 `format: 'png'`（見 `buildClipState`）。
    */
   private lastImage: ClipImage | null = null;
+  /**
+   * 「匯入尺寸」拉霸目前值（issue #88）——**下一次**匯入的果凍最長邊有多少世界單位。
+   * 只是意圖：載入片段不改寫它（那是還原、不是重新匯入），場上的果凍也不跟著變。
+   */
+  private importSize = DEFAULT_IMPORT_SIZE;
+  /**
+   * 最近一次**實際套用**的匯入尺寸（issue #88）——存檔時原樣寫進 `ClipState.importSize`，
+   * 載入端據此在 `buildSimMesh` 之後縮放（見 `scaleMeshToLongestEdge`）。跟 `importSize`
+   * 分開：拉霸是「下一次」的意圖，這個是「場上這塊」的事實。`null` = 未縮放——只有
+   * 從沒有此欄位的舊片段檔載入、又還沒重新匯入時才會是 `null`（存回去仍是 `null`，
+   * 舊檔 round-trip 不變）。內建預設果凍啟動時也走同一條縮放，所以初值是數字。
+   */
+  private lastImportSize: number | null = DEFAULT_IMPORT_SIZE;
 
   private rafId = 0;
   private lastFrameMs = 0;
@@ -543,7 +566,9 @@ export class JellySandbox {
         spraySpacing: this.spraySpacing,
         eraseRadius: this.eraseRadius,
         hideHintsDuringPlayback: this.hideHintsDuringPlayback,
+        importSize: this.importSize,
       },
+      importSizeRange: IMPORT_SIZE_RANGE,
       tapStrengthRange: TAP_STRENGTH_RANGE,
       fanWidthRange: FAN_WIDTH_RANGE,
       fanStrengthRange: FAN_STRENGTH_RANGE,
@@ -571,6 +596,9 @@ export class JellySandbox {
       onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
       onEraseRadiusChange: (radius) => this.setEraseRadius(radius),
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
+      onImportSizeChange: (size) => {
+        this.importSize = size;
+      },
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -626,7 +654,10 @@ export class JellySandbox {
 
   /** 建立預設 Jelly 並組裝好；呼叫 `start()` 開始跑。 */
   static async create(root: HTMLElement): Promise<JellySandbox> {
-    const { mesh, texture } = createDefaultJelly();
+    const { mesh: rawMesh, texture } = createDefaultJelly();
+    // 內建預設果凍也走同一條匯入尺寸縮放（issue #88）：跟匯入的圖大小一致；Demo
+    // 幾何以 bbox 對角線為基準，手感不受影響。
+    const mesh = scaleMeshToLongestEdge(rawMesh, DEFAULT_IMPORT_SIZE);
     const sim = new SimCore(mesh);
 
     const renderer = await JellyRenderer.create({
@@ -1412,13 +1443,18 @@ export class JellySandbox {
         ? { targetParticleCount: REDUCED_TARGET_PARTICLE_COUNT }
         : {}),
     };
-    const mesh: SimMesh = buildSimMesh(imageBytes, meshParams);
+    // 匯入尺寸（issue #88）：在管線之後、建 `SimCore` 之前把網格縮到拉霸指定的最長邊。
+    // 這一步在管線外（不進 `BuildSimMeshParams`／種子雜湊，ADR-0005）。先把拉霸值
+    // 抄下來，`await` 期間使用者再拉也不會讓「實際套用的值」跟存檔對不上。
+    const importSize = this.importSize;
+    const mesh: SimMesh = scaleMeshToLongestEdge(buildSimMesh(imageBytes, meshParams), importSize);
     const texture = await decodeTextureImage(imageBytes);
     await this.replaceJelly(mesh, texture);
-    // 換果凍成功後才記住這次的來源影像與完整參數（供存檔）——`buildSimMesh` / 貼圖
-    // 解碼 / `replaceJelly` 中途丟錯時維持上一份，跟畫面上實際還在的果凍一致。
+    // 換果凍成功後才記住這次的來源影像、完整參數與匯入尺寸（供存檔）——`buildSimMesh`
+    // / 貼圖解碼 / `replaceJelly` 中途丟錯時維持上一份，跟畫面上實際還在的果凍一致。
     this.lastImage = { format: sniffImageFormat(imageBytes), bytes: imageBytes };
     this.lastMeshParams = meshParams;
+    this.lastImportSize = importSize;
   }
 
   /**
@@ -1458,6 +1494,7 @@ export class JellySandbox {
     return {
       image,
       meshParams: this.lastMeshParams,
+      importSize: this.lastImportSize,
       sim: {
         softness: this.softness,
         tapStrength: this.sim.params.tapStrength,
@@ -1526,12 +1563,17 @@ export class JellySandbox {
    * 的行為一致。
    */
   private async applyClipState(clip: ClipState): Promise<void> {
-    const mesh: SimMesh = buildSimMesh(clip.image.bytes, clip.meshParams);
+    // 匯入尺寸依檔案值縮放、不套目前拉霸（載入是還原、不是重新匯入，issue #88）；
+    // 舊檔沒有此欄位 → `null` → 不縮放，果凍大小與 Track 座標跟存檔當下完全一樣。
+    const rawMesh = buildSimMesh(clip.image.bytes, clip.meshParams);
+    const mesh: SimMesh =
+      clip.importSize === null ? rawMesh : scaleMeshToLongestEdge(rawMesh, clip.importSize);
     const texture = await decodeTextureImage(clip.image.bytes);
     await this.replaceJelly(mesh, texture);
 
     this.lastImage = clip.image;
     this.lastMeshParams = clip.meshParams;
+    this.lastImportSize = clip.importSize; // 拉霸 `importSize` 刻意不動：它代表「下一次」
 
     this.setSoftness(clip.sim.softness);
     this.controlPanel.setSoftness(clip.sim.softness);

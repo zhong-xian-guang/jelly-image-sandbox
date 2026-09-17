@@ -161,6 +161,14 @@ body {
   font-weight: 600;
 }
 
+/** 滑桿旁的目前數值（issue #88 的匯入尺寸）——等寬、固定最小寬度，拖動時數字不會左右跳動。 */
+.jelly-range-value {
+  font-family: monospace;
+  font-size: 0.8rem;
+  min-width: 3.5ch;
+  text-align: right;
+}
+
 /**
  * substep 降級 debug 讀出（issue #16 追加）——低調的等寬小字，手動用 CPU 節流測試
  * 降級／回穩時方便一眼確認，不搶控制面板其他項目的注意力。

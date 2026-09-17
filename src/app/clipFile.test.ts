@@ -45,6 +45,7 @@ function fullClip(): ClipState {
       refineMaxAreaFactor: 2,
       refineMaxPasses: 30,
     },
+    importSize: 512,
     sim: { softness: 0.73, tapStrength: 4200, boundary: 'walled' },
     tracks: [
       {
@@ -265,6 +266,56 @@ describe('parseClipFile', () => {
     const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
     delete doc.counters;
     expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+});
+
+describe('importSize（issue #88 / V3 T1-1）', () => {
+  it('serializeClip：importSize 數字原樣寫出', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as { importSize: unknown };
+    expect(doc.importSize).toBe(512);
+  });
+
+  it('serializeClip：importSize 為 null 也照寫（欄位永遠存在）', () => {
+    const doc = JSON.parse(serializeClip({ ...fullClip(), importSize: null })) as Record<
+      string,
+      unknown
+    >;
+    expect('importSize' in doc).toBe(true);
+    expect(doc.importSize).toBeNull();
+  });
+
+  it('round-trip：數字', () => {
+    const clip: ClipState = { ...fullClip(), importSize: 384 };
+    expect(parseClipFile(serializeClip(clip)).importSize).toBe(384);
+  });
+
+  it('round-trip：null', () => {
+    const clip: ClipState = { ...fullClip(), importSize: null };
+    expect(parseClipFile(serializeClip(clip)).importSize).toBeNull();
+  });
+
+  it('舊版 v1 字串沒有 importSize 欄位 → null（未縮放）', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
+    delete doc.importSize;
+    const parsed = parseClipFile(JSON.stringify(doc));
+    expect(parsed.importSize).toBeNull();
+    expect(parsed).toEqual({ ...fullClip(), importSize: null });
+  });
+
+  it('非正數 → ClipFileError', () => {
+    for (const bad of [0, -1, -512]) {
+      const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
+      doc.importSize = bad;
+      expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+    }
+  });
+
+  it('非數字（字串／布林／物件）→ ClipFileError', () => {
+    for (const bad of ['512', true, {}]) {
+      const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
+      doc.importSize = bad;
+      expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+    }
   });
 });
 

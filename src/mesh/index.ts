@@ -7,6 +7,7 @@ export {
   sniffImageFormat,
   imageFormatToMime,
 } from './decodeImage';
+export { scaleMeshToLongestEdge } from './scaleMesh';
 export { DEFAULT_PARAMS } from './types';
 export { mulberry32 } from './prng';
 export type { BuildSimMeshParams, SimMesh, Mask, Point } from './types';
