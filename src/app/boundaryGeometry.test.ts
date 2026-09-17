@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeFloorY, computeWalledBounds, WALLED_SIZE_FACTOR } from './walledBounds';
+import { computeFloorY, computeWalledBounds, WALLED_SIZE_FACTOR } from './boundaryGeometry';
 
 describe('computeWalledBounds', () => {
   it('以 bbox 中心為中心、正方形邊長 = 較長邊 × sizeFactor', () => {

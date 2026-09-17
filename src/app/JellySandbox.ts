@@ -27,7 +27,7 @@
  *
  * **控制面板**：`ControlPanel`（同樣是薄的 DOM 接線層）建 UI、回呼往外送；實際
  * 換算邏輯都在純函式模組——Softness 曲線見 `../sim/softness`，Walled 邊界範圍見
- * `./walledBounds`，Pin 模式的輸入轉接見 `../input/pinModeRouting`（開啟 Pin 模式
+ * `./boundaryGeometry`，Pin 模式的輸入轉接見 `../input/pinModeRouting`（開啟 Pin 模式
  * 後，`PointerInput` 原本會發的 `grab` 改由它轉成 `pin`，直接放 Pin 而非可拖曳
  * 的 Grab；點在既有 Pin 附近則轉成 `unpin`，即「點掉特定 Pin」）。
  *
@@ -195,7 +195,7 @@ import {
   tracksInEnabledGroups,
   withGroupInvariant,
 } from './track';
-import { computeFloorY, computeWalledBounds } from './walledBounds';
+import { computeFloorY, computeWalledBounds } from './boundaryGeometry';
 
 /** 相機平滑用的單幀時距上限（分頁切回來不會讓相機瞬移）。 */
 const CAMERA_MAX_DT = 0.1;
@@ -1152,7 +1152,7 @@ export class JellySandbox {
 
   /**
    * Boundary 切換（issue #14；issue #92 加 Floor）：`walled` 用目前 bbox 算一個正方形
-   * 邊界範圍、`floor` 把地板貼齊目前 bbox 底邊（都見 `./walledBounds`）、`infinite`
+   * 邊界範圍、`floor` 把地板貼齊目前 bbox 底邊（都見 `./boundaryGeometry`）、`infinite`
    * 換回無邊界。記在 `boundaryMode`——`replaceJelly` 換新 `SimCore` 時要重套，否則
    * 面板顯示的模式會跟實際物理不一致。同時把 `boundaryFrame` 套到 Renderer（issue #9
    * 追加）：撞牆／落地時畫面上有界線可以對照，不會覺得「明明沒碰到東西卻被彈回來」。
@@ -1168,7 +1168,7 @@ export class JellySandbox {
     if (this.boundaryMode === 'walled') {
       const boundary = new WalledBoundary(computeWalledBounds(sim.bbox()));
       sim.setBoundary(boundary);
-      this.boundaryFrame = { kind: 'box', ...boundary.box };
+      this.boundaryFrame = { kind: 'walled', ...boundary.box };
     } else if (this.boundaryMode === 'floor') {
       const boundary = new FloorBoundary({ floorY: computeFloorY(sim.bbox()) });
       sim.setBoundary(boundary);

@@ -19,7 +19,7 @@
 
 import type { CameraState } from '../camera';
 import type { BuildSimMeshParams, ImageFormat } from '../mesh';
-import type { BoundaryMode } from '../sim';
+import { type BoundaryMode, BOUNDARY_MODES } from '../sim';
 import type { DemoEvent, DemoStep } from './demos/types';
 import type { Track } from './track';
 
@@ -228,10 +228,14 @@ function parseImportSize(v: unknown): number | null {
   return n;
 }
 
+function isBoundaryMode(v: string): v is BoundaryMode {
+  return (BOUNDARY_MODES as readonly string[]).includes(v);
+}
+
 function parseSim(v: unknown): ClipSim {
   const obj = requireObject(v, 'sim');
   const boundary = requireString(obj.boundary, 'sim.boundary');
-  if (boundary !== 'walled' && boundary !== 'infinite' && boundary !== 'floor') {
+  if (!isBoundaryMode(boundary)) {
     throw new ClipFileError(`欄位「sim.boundary」不是已知值：${boundary}`);
   }
   return {

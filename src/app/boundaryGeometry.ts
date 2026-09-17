@@ -1,5 +1,5 @@
 /**
- * 邊界範圍換算（issue #14 / T13；issue #92 追加 Floor）——切邊界模式時從 Jelly 目前
+ * 邊界幾何換算（issue #14 / T13；issue #92 追加 Floor）——切邊界模式時從 Jelly 目前
  * bbox 算出該模式的幾何：
  *
  * - **Walled**：圍著 bbox 展開一個正方形範圍當 `WalledBoundary` 的 AABB，給甩動留

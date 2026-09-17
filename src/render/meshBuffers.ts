@@ -6,7 +6,7 @@
  * 管（全專案只此一份），這裡只是 Pixi 特定的薄轉接。
  */
 
-import { screenToWorld, worldToScreen } from '../camera/project';
+import { worldToScreen } from '../camera/project';
 import type { CameraTransform } from '../camera/types';
 import type { SimMesh } from '../mesh';
 
@@ -116,25 +116,4 @@ export function containerPosition(
   height: number,
 ): { x: number; y: number } {
   return worldToScreen(camera, { width, height }, 0, 0);
-}
-
-/** `floorLineSpan` 往可視範圍外多畫的倍數——平移一格內不會先看到線的盡頭才等重畫。 */
-const FLOOR_LINE_OVERSCAN = 2;
-
-/**
- * Floor 邊界（issue #92）地板線的世界 x 區間：把螢幕左右緣投回世界座標，再向外
- * 擴 `FLOOR_LINE_OVERSCAN` 倍。地板本身左右無限，這裡只是「畫多長才夠蓋住畫面」；
- * 相機平移／縮放時呼叫端重算（`JellyRenderer.setCamera`／`resize`）。`scale = 0`
- * 視為 1，避免除以零。
- */
-export function floorLineSpan(
-  camera: CameraTransform,
-  width: number,
-): { minX: number; maxX: number } {
-  const t = camera.scale ? camera : { ...camera, scale: 1 };
-  const canvas = { width, height: 0 };
-  const left = screenToWorld(t, canvas, 0, 0).x;
-  const right = screenToWorld(t, canvas, width, 0).x;
-  const half = ((right - left) / 2) * FLOOR_LINE_OVERSCAN;
-  return { minX: t.x - half, maxX: t.x + half };
 }

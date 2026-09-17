@@ -4,7 +4,7 @@
  * 薄的 DOM 接線層（對照 `PointerInput`/`CameraInput`/`DropImportInput`）：建控制
  * 項、聽使用者操作、透過回呼往外送——不知道 `SimCore`/`JellySandbox` 的存在，
  * 邏輯（Softness 曲線、Walled 邊界範圍、Pin 模式轉接）都在各自的純函式模組
- * （`../sim/softness`、`./walledBounds`、`../input/pinModeRouting`），接線在
+ * （`../sim/softness`、`./boundaryGeometry`、`../input/pinModeRouting`），接線在
  * `JellySandbox`。
  *
  * 「Pin 模式」開啟時勾選框旁的文字會變色加粗（`.jelly-pin-mode-active`，樣式

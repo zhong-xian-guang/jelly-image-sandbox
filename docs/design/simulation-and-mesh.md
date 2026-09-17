@@ -57,7 +57,7 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
    - **Multi-grab** = 多個這種約束依序解；Grab 與 Pin 混用天然共存。**沒有**「鎖定質心」的獨立步驟——要固定中心就放幾個 Pin。
 5. **Boundary**：呼叫 `resolveBoundary(particles, dt)`。
    - **Walled**：每個 Particle clamp 進半平面組（或 AABB），歸零向外的速度分量，可選 restitution。切換當下 AABB 依 Jelly bbox 展開成正方形（`computeWalledBounds`）。
-   - **Floor**（issue #92、[ADR-0012](../adr/0012-gravity-is-a-slider-not-a-mode.md)）：一條水平地板 `y = floorY`，左右與上方無限延伸。`pos.y > floorY` 的 Particle clamp 到 `floorY`，`prev.y` 比照 Walled（restitution 沿用 0）；x 方向與上方不管。切換當下 `floorY` 貼齊 Jelly bbox 底邊（世界 y 向下 → `maxY`，`computeFloorY`），切過去 Jelly 就已經站在地板上——不憑空掉一段、不半截埋進去。畫面上畫一條橫跨可視範圍的地板線（線寬顏色沿用牆框、跟著相機重畫），跟牆框一樣不是提示、不受「播放時隱藏提示」影響。
+   - **Floor**（issue #92、[ADR-0012](../adr/0012-gravity-is-a-slider-not-a-mode.md)）：一條水平地板 `y = floorY`，左右與上方無限延伸。`pos.y > floorY` 的 Particle clamp 到 `floorY`，`prev.y` 比照 Walled（restitution 沿用 0）；x 方向與上方不管。切換當下 `floorY` 貼齊 Jelly bbox 底邊（世界 y 向下 → `maxY`，`computeFloorY`），切過去 Jelly 就已經站在地板上——不憑空掉一段、不半截埋進去。畫面上畫一條橫跨可視範圍的地板線（線寬顏色沿用牆框、跟著相機重畫），跟牆框一樣不是提示、不受「播放時隱藏提示」影響。ADR-0012 與 `CONTEXT.md` 說的「牆與地板都有摩擦」是下一張票（issue #93），本票地板仍無摩擦。
    - **Infinite**：no-op。
    - 執行期可切換；重新匯入／重建／載入片段換新求解器時依記住的模式重套（Walled／Floor 都依新 Jelly 的 bbox 重算）。
 6. **回推速度**：`v = (x − x_prev) / dt_substep`。**被抓的三頂點也照推** → 它們帶著拖曳速度，放開時直接就是 Fling，不需另外賦速。

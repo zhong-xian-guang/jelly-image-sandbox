@@ -34,3 +34,22 @@ export function screenToWorld(
     y: (screenY - canvas.height / 2) / t.scale + t.y,
   };
 }
+
+/**
+ * 目前畫布橫向可視的世界 x 區間（issue #92）：把畫布左右緣投回世界座標，再以
+ * `camera.x` 為中心向外擴 `overscan` 倍（`1` = 剛好可視範圍）。Floor 邊界的地板線
+ * 左右無限，算繪端用它決定「畫多長才夠蓋住畫面」，相機平移／縮放／resize 時重算。
+ * `scale = 0` 視為 1，避免除以零。
+ */
+export function visibleWorldSpanX(
+  t: CameraTransform,
+  canvasWidth: number,
+  overscan = 1,
+): { minX: number; maxX: number } {
+  const safe = t.scale ? t : { ...t, scale: 1 };
+  const canvas: CanvasSize = { width: canvasWidth, height: 0 };
+  const left = screenToWorld(safe, canvas, 0, 0).x;
+  const right = screenToWorld(safe, canvas, canvasWidth, 0).x;
+  const half = ((right - left) / 2) * overscan;
+  return { minX: safe.x - half, maxX: safe.x + half };
+}
