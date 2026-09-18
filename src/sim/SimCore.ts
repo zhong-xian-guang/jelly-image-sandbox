@@ -664,6 +664,7 @@ export class SimCore {
     const h = dt / subs;
     const alphaSm = this.params.alphaSm;
     const keep = 1 - this.params.damping;
+    const keepAir = 1 - this.params.airDamping;
     const gravity = this.params.gravity;
 
     for (let s = 0; s < subs; s++) {
@@ -694,10 +695,37 @@ export class SimCore {
       this.solveConstraints();
       // 6. Boundary：clamp 進邊界（Walled AABB／Floor 地板）、調 prev 讓回推速度不指向界外（Infinite 為 no-op）。
       this.boundary.resolveBoundary(this.pos, this.prev, this.n, h);
-      // 7. 回推速度 + 全域阻尼。
-      for (let i = 0; i < this.n; i++) {
-        this.vel[2 * i] = ((this.pos[2 * i]! - this.prev[2 * i]!) / h) * keep;
-        this.vel[2 * i + 1] = ((this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h) * keep;
+      // 7. 回推速度 + 阻尼。
+      if (gravity === 0) {
+        // 俯視：全域阻尼套在完整速度上（桌面摩擦感）。這條路徑的每個浮點運算跟
+        // issue #106 之前完全一樣——舊片段重播結果不變。
+        for (let i = 0; i < this.n; i++) {
+          this.vel[2 * i] = ((this.pos[2 * i]! - this.prev[2 * i]!) / h) * keep;
+          this.vel[2 * i + 1] = ((this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h) * keep;
+        }
+      } else {
+        // 側視（issue #106）：空中沒有桌面摩擦。速度拆成「質心平移」（只吃很小的
+        // airDamping，落體看得到加速）+「相對質心的內部運動」（維持 damping，放手後
+        // 抖動仍 1–2 s 靜止）。等權平均 = 等質量質心速度；Pin 住的 Particle 速度 0
+        // 也算進去，被 Pin 住的 Jelly 質心速度自然被拉向 0。
+        let sumX = 0;
+        let sumY = 0;
+        for (let i = 0; i < this.n; i++) {
+          const vx = (this.pos[2 * i]! - this.prev[2 * i]!) / h;
+          const vy = (this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h;
+          this.vel[2 * i] = vx;
+          this.vel[2 * i + 1] = vy;
+          sumX += vx;
+          sumY += vy;
+        }
+        const meanX = sumX / this.n;
+        const meanY = sumY / this.n;
+        const airX = meanX * keepAir;
+        const airY = meanY * keepAir;
+        for (let i = 0; i < this.n; i++) {
+          this.vel[2 * i] = airX + (this.vel[2 * i]! - meanX) * keep;
+          this.vel[2 * i + 1] = airY + (this.vel[2 * i + 1]! - meanY) * keep;
+        }
       }
     }
   }
