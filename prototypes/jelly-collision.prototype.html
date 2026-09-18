@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jelly 互撞 prototype（issue #94）</title>
+    <style>
+      :root {
+        --accent: #1f9d74;
+        --ink: #1b2320;
+        --muted: #6b7a74;
+        --line: #dfe6e2;
+        --bg: #f6f8f7;
+        --warn: #c0392b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        font:
+          13px/1.5 system-ui,
+          'Segoe UI',
+          Roboto,
+          'Noto Sans TC',
+          sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+        display: flex;
+        min-height: 100%;
+      }
+      #stage {
+        flex: 1 1 auto;
+        position: relative;
+        min-width: 0;
+        background: #101614;
+        touch-action: none;
+      }
+      #stage canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #panel {
+        flex: 0 0 400px;
+        overflow: auto;
+        border-left: 1px solid var(--line);
+        padding: 14px 16px 40px;
+        background: #fff;
+      }
+      h1 {
+        font-size: 15px;
+        margin: 0 0 6px;
+      }
+      h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin: 18px 0 6px;
+      }
+      p {
+        margin: 0 0 8px;
+        color: #33413c;
+      }
+      .row {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 6px;
+      }
+      button {
+        font: inherit;
+        padding: 5px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      label.field {
+        display: grid;
+        grid-template-columns: 1fr 120px 44px;
+        align-items: center;
+        gap: 6px;
+        margin: 4px 0;
+      }
+      label.field span:first-child {
+        color: #33413c;
+      }
+      label.field input[type='range'] {
+        width: 100%;
+      }
+      label.field output {
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        color: var(--muted);
+      }
+      label.check {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        margin: 4px 0;
+      }
+      select {
+        font: inherit;
+        padding: 3px 6px;
+        max-width: 100%;
+      }
+      label.field select {
+        width: 100%;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 2px 10px;
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+        text-align: right;
+      }
+      dd.warn {
+        color: var(--warn);
+        font-weight: 600;
+      }
+      dd.ok {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .scenario {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        margin-bottom: 8px;
+      }
+      .scenario b {
+        display: block;
+        margin-bottom: 2px;
+      }
+      .scenario p {
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+      #err {
+        color: var(--warn);
+        white-space: pre-wrap;
+      }
+      kbd {
+        border: 1px solid var(--line);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        padding: 0 4px;
+        font-size: 11px;
+      }
+      #building {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: #cfe;
+        font-size: 16px;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <canvas id="cv"></canvas>
+      <div id="building">建網格中（真實 buildSimMesh 管線，約 1–3 秒）…</div>
+    </div>
+    <aside id="panel">
+      <h1>Jelly 互撞演算法 prototype（issue #94）</h1>
+      <p>
+        問題：spec #87 草擬的「PBD 式推出 + 切線摩擦」在真實 <code>buildSimMesh</code> 網格上穩不穩？
+        每塊一個真的 <code>SimCore</code>（substep 拆成兩段，中間跑碰撞）。
+        拋棄式頁面，只在 <code>prototype/jelly-collision</code> 分支。
+      </p>
+      <p>
+        操作：<b>左鍵拖曳</b>抓任一塊（可多指）、<b>右鍵</b>或 <kbd>S</kbd> 在游標處生成一塊。
+        半透明色塊重疊變深 = 穿透；紅點 = 這幀結束仍落在別塊內的 Particle。
+      </p>
+      <div id="err"></div>
+
+      <h2>四個情境</h2>
+      <div class="scenario">
+        <b>① 兩塊疊放靜止（有重力）</b>
+        <p>平底磚疊平底磚。看：不抖、不緩慢互相穿透、上面那塊不滑開；動能應在 2 s 內歸零。</p>
+        <button class="primary" data-scenario="stack">跑情境 ①</button>
+      </div>
+      <div class="scenario">
+        <b>② 一塊從高處落到另一塊上</b>
+        <p>果凍從 700 單位高落在平底磚上。看：壓扁回彈、不穿透、不爆開。</p>
+        <button class="primary" data-scenario="drop">跑情境 ②</button>
+      </div>
+      <div class="scenario">
+        <b>③ 抓一塊去撞另一塊（無重力、俯視）</b>
+        <p>左邊那塊拖去撞右邊那塊。看：被撞的被推走、變形；放開後兩者都能靜止、分開時不黏。</p>
+        <button class="primary" data-scenario="ram">跑情境 ③</button>
+      </div>
+      <div class="scenario">
+        <b>④ 連生 10 塊堆在一起</b>
+        <p>每 0.25 s 從頂端掉一塊、x 略微左右偏。看：仍 60 fps、堆不發散、沒有塊被擠穿。</p>
+        <button class="primary" data-scenario="pile">跑情境 ④</button>
+        <select id="pileShape">
+          <option value="brick">掉平底磚（堆成一疊）</option>
+          <option value="jelly">掉果凍（圓的會滾開）</option>
+          <option value="mix">交替</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="clear">清空</button>
+        <button id="pause">❚❚ 暫停</button>
+        <button id="step">單步（1 幀）</button>
+        <button id="spawnTop">頂端生成一塊</button>
+        <select id="shape">
+          <option value="jelly">形狀：果凍（吃豆人）</option>
+          <option value="brick">形狀：平底磚</option>
+        </select>
+      </div>
+
+      <h2>開關與參數</h2>
+      <label class="check"><input type="checkbox" id="gravityOn" checked /> 重力（側視）</label>
+      <label class="field"><span>重力 g</span><input type="range" id="gravity" min="0" max="10000" step="100" value="3000" /><output for="gravity"></output></label>
+      <label class="check"><input type="checkbox" id="collideOn" checked /> 跨塊碰撞</label>
+      <label class="field">
+        <span>演算法</span>
+        <select id="algorithm" style="grid-column: 2 / 4">
+          <option value="pbd-contour">PBD 推出（輪廓射線內外，免重建網格）★推薦</option>
+          <option value="pbd-tri">PBD 推出（spec 草案：三角形內外）</option>
+          <option value="halfplane">候選 A：半平面</option>
+          <option value="particle">候選 B：Particle 排斥</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>摩擦形式</span>
+        <select id="frictionMode" style="grid-column: 2 / 4">
+          <option value="coulomb">Coulomb 位置式（靜摩擦）★推薦</option>
+          <option value="velocity">切線速度衰減（spec 原案）</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>pass 方向（實驗）</span>
+        <select id="passes" style="grid-column: 2 / 4">
+          <option value="both">A→B 與 B→A（spec）</option>
+          <option value="oneway">只跑 id 小→大</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>碰撞時機</span>
+        <select id="order" style="grid-column: 2 / 4">
+          <option value="after">內部約束之後（spec）</option>
+          <option value="before">內部約束之前</option>
+          <option value="both">前後各一次</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>推出方向</span>
+        <select id="normalMode" style="grid-column: 2 / 4">
+          <option value="toward-surface">朝最近表面點 ★推薦</option>
+          <option value="winding">邊外法線（靜止繞向）</option>
+        </select>
+      </label>
+      <label class="field"><span>整體衝量吸收（候選 C）</span><input type="range" id="impactAbsorb" min="0" max="1" step="0.05" value="0.5" /><output for="impactAbsorb"></output></label>
+      <label class="field"><span>每 substep 輪數</span><input type="range" id="rounds" min="1" max="4" step="1" value="1" /><output for="rounds"></output></label>
+      <label class="field"><span>Particle 分到的比例</span><input type="range" id="particleShare" min="0" max="1" step="0.05" value="0.5" /><output for="particleShare"></output></label>
+      <label class="field"><span>切線摩擦</span><input type="range" id="friction" min="0" max="1" step="0.05" value="0.3" /><output for="friction"></output></label>
+      <label class="field"><span>skin（× 平均邊長）</span><input type="range" id="skin" min="0" max="1" step="0.05" value="0" /><output for="skin"></output></label>
+      <label class="field"><span>粗篩格（× 平均邊長）</span><input type="range" id="gridCell" min="1" max="6" step="0.5" value="2" /><output for="gridCell"></output></label>
+      <label class="field"><span>Particle 半徑（候選 B）</span><input type="range" id="particleRadius" min="0.1" max="1" step="0.05" value="0.5" /><output for="particleRadius"></output></label>
+      <label class="field"><span>substeps</span><input type="range" id="substeps" min="1" max="8" step="1" value="4" /><output for="substeps"></output></label>
+      <label class="check"><input type="checkbox" id="surfaceOnly" checked /> 只測 A 的輪廓 Particle（效能）</label>
+      <label class="check"><input type="checkbox" id="wire" /> 線框</label>
+      <label class="check"><input type="checkbox" id="markPen" checked /> 標示殘餘穿透（每幀多算一次，關掉看純效能）</label>
+
+      <h2>狀態（60 幀滾動平均）</h2>
+      <dl>
+        <dt>塊數 / Particle</dt><dd id="s-count">0 / 0</dd>
+        <dt>rAF 幀時間</dt><dd id="s-raf">–</dd>
+        <dt>模擬（含碰撞）</dt><dd id="s-sim">–</dd>
+        <dt>其中碰撞</dt><dd id="s-col">–</dd>
+        <dt>　碰撞拆解 bbox／粗篩／塊對</dt><dd id="s-colparts">–</dd>
+        <dt>bbox 相交塊對／幀</dt><dd id="s-pairs">–</dd>
+        <dt>測試／接觸 Particle／幀</dt><dd id="s-tests">–</dd>
+        <dt>殘餘穿透 Particle</dt><dd id="s-pen">–</dd>
+        <dt>最大推出深度／幀</dt><dd id="s-depth">–</dd>
+        <dt>總動能</dt><dd id="s-ke">–</dd>
+        <dt>最大拉伸比</dt><dd id="s-stretch">–</dd>
+      </dl>
+      <h2>怎麼開</h2>
+      <p><code>npm run dev</code> → <code>http://localhost:5173/prototypes/jelly-collision.prototype.html</code>。結論回 issue #87 留言。</p>
+    </aside>
+    <script type="module" src="./jelly-collision.prototype.ts"></script>
+  </body>
+</html>
