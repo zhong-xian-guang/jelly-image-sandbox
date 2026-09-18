@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   type Boundary,
+  FloorBoundary,
   InfiniteBoundary,
   WalledBoundary,
   type WalledBoundaryOptions,
@@ -77,5 +78,59 @@ describe('WalledBoundary', () => {
     expect(b.box).toEqual(box);
     expect(b.restitution).toBe(0.3);
     expect(new WalledBoundary(box).restitution).toBe(0); // 預設
+  });
+});
+
+describe('FloorBoundary（issue #92 / V3 T2-2；ADR-0012）', () => {
+  const floorY = 50;
+  const floor = (restitution?: number): Boundary =>
+    new FloorBoundary(restitution === undefined ? { floorY } : { floorY, restitution });
+
+  it('y > floorY 的 Particle clamp 到 floorY；y ≤ floorY 不動', () => {
+    const pos = flat(0, 80, 10, 50, 20, -300);
+    const prev = flat(0, 40, 10, 50, 20, -290);
+    floor().resolveBoundary(pos, prev, 3, 1 / 240);
+    expect(Array.from(pos)).toEqual([0, 50, 10, 50, 20, -300]); // 只有第一點被 clamp
+  });
+
+  it('x 方向與上方不管：左右／往上飛多遠都不動', () => {
+    const pos = flat(-99999, -99999, 99999, 10);
+    const prev = flat(-99990, -99990, 99990, 10);
+    const posCopy = Array.from(pos);
+    const prevCopy = Array.from(prev);
+    floor().resolveBoundary(pos, prev, 2, 1 / 240);
+    expect(Array.from(pos)).toEqual(posCopy);
+    expect(Array.from(prev)).toEqual(prevCopy);
+  });
+
+  it('e = 0（預設）：撞地板時回推的 y 速度歸零、x 速度不受影響', () => {
+    const h = 1 / 240;
+    const pos = flat(30, 70);
+    const prev = flat(10, 30);
+    floor().resolveBoundary(pos, prev, 1, h);
+    expect(pos[1]).toBe(floorY);
+    expect((pos[1]! - prev[1]!) / h).toBe(0);
+    expect((pos[0]! - prev[0]!) / h).toBeCloseTo((30 - 10) / h, 9);
+  });
+
+  it('restitution：回推 y 速度 = −e · 入射速度（比照 WalledBoundary）', () => {
+    const h = 1 / 240;
+    const preY = 70;
+    const prevY = 30;
+    const vIn = (preY - prevY) / h;
+    for (const e of [0, 0.5, 1]) {
+      const pos = flat(0, preY);
+      const prev = flat(0, prevY);
+      floor(e).resolveBoundary(pos, prev, 1, h);
+      expect(pos[1]).toBe(floorY);
+      expect((pos[1]! - prev[1]!) / h).toBeCloseTo(-e * vIn, 9);
+    }
+  });
+
+  it('floorY 公開唯讀供算繪畫地板線；restitution 預設 0', () => {
+    const b = new FloorBoundary({ floorY: 123.5 });
+    expect(b.floorY).toBe(123.5);
+    expect(b.restitution).toBe(0);
+    expect(new FloorBoundary({ floorY: 0, restitution: 0.4 }).restitution).toBe(0.4);
   });
 });

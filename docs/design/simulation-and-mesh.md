@@ -56,16 +56,17 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
    - **Pin**：`locked = true`，目標點凍結在鎖定當下的位置，`β = 1`（絕對硬鎖）。用力甩、Tap 都拔不掉。可轉回 Grab（重新定位）後再鎖。
    - **Multi-grab** = 多個這種約束依序解；Grab 與 Pin 混用天然共存。**沒有**「鎖定質心」的獨立步驟——要固定中心就放幾個 Pin。
 5. **Boundary**：呼叫 `resolveBoundary(particles, dt)`。
-   - **Walled**：每個 Particle clamp 進半平面組（或 AABB），歸零向外的速度分量，可選 restitution。
+   - **Walled**：每個 Particle clamp 進半平面組（或 AABB），歸零向外的速度分量，可選 restitution。切換當下 AABB 依 Jelly bbox 展開成正方形（`computeWalledBounds`）。
+   - **Floor**（issue #92、[ADR-0012](../adr/0012-gravity-is-a-slider-not-a-mode.md)）：一條水平地板 `y = floorY`，左右與上方無限延伸。`pos.y > floorY` 的 Particle clamp 到 `floorY`，`prev.y` 比照 Walled（restitution 沿用 0）；x 方向與上方不管。切換當下 `floorY` 貼齊 Jelly bbox 底邊（世界 y 向下 → `maxY`，`computeFloorY`），切過去 Jelly 就已經站在地板上——不憑空掉一段、不半截埋進去。畫面上畫一條橫跨可視範圍的地板線（線寬顏色沿用牆框、跟著相機重畫），跟牆框一樣不是提示、不受「播放時隱藏提示」影響。ADR-0012 與 `CONTEXT.md` 說的「牆與地板都有摩擦」是下一張票（issue #93），本票地板仍無摩擦。
    - **Infinite**：no-op。
-   - 執行期可切換。
+   - 執行期可切換；重新匯入／重建／載入片段換新求解器時依記住的模式重套（Walled／Floor 都依新 Jelly 的 bbox 重算）。
 6. **回推速度**：`v = (x − x_prev) / dt_substep`。**被抓的三頂點也照推** → 它們帶著拖曳速度，放開時直接就是 Fling，不需另外賦速。
 7. **阻尼**：全域速度阻尼 `v *= (1 − k_damp)`。`k_damp` 調到放手後約 **1–2 秒**靜止。有重力時它同時給落體一個終端速度 `≈ g·h/k_damp`（`k_damp = 0.02`、240 Hz → `g / 4.8`）；issue #91 實測決定**不動阻尼**（改它舊片段重播就變），改把重力拉霸上限拉高（見參數表）。
 
 ### 模組邊界
 
 - **求解器與算繪無關**：求解器只吃／吐 Particle 位置陣列。
-- **Boundary 是介面**：`resolveBoundary(particles, dt)`，Walled / Infinite 是兩個實作。
+- **Boundary 是介面**：`resolveBoundary(particles, dt)`，Walled / Floor / Infinite 是三個實作。
 - **Sim mesh 生成是一個模組**：`(Contour, 內部點參數) → (positions, indices, uv, restAreas)`。換掉三角化實作（如日後改 spade→wasm）只動這裡。
 - **Grab／Pin 是 `(世界座標點) → {三角形, 重心座標}` 的 picking + 一條位置約束**。輸入層負責 picking（點擊命中哪個三角形），求解器只認 `{三角形, 重心座標, 目標點, locked}`。
 - **輸入走 `applyInput(event)` 單一介面**（見上「輸入介面」）。即時輸入層、Demo、v2 錄製器都經由它，不繞過。

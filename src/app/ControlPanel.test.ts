@@ -497,6 +497,42 @@ describe('ControlPanel — 載入片段按鈕（issue #58 / V2 T2-5）', () => {
   });
 });
 
+describe('ControlPanel — 邊界下拉（issue #92 / V3 T2-2；ADR-0012）', () => {
+  const boundarySelect = (panel: ControlPanel): HTMLSelectElement => {
+    const selects = [...panel.element.querySelectorAll('select')] as HTMLSelectElement[];
+    const select = selects.find((s) => s.querySelector('option[value="walled"]'));
+    if (!select) throw new Error('找不到邊界下拉');
+    return select;
+  };
+
+  it('邊界下拉含三個選項：無限／有牆／僅地板', () => {
+    const panel = new ControlPanel(makeOptions());
+    const options = [...boundarySelect(panel).options].map((o) => [o.value, o.textContent]);
+    expect(options).toEqual([
+      ['infinite', '無限'],
+      ['walled', '有牆'],
+      ['floor', '僅地板'],
+    ]);
+  });
+
+  it("選「僅地板」→ onBoundaryChange 收到 'floor'", () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const select = boundarySelect(panel);
+    select.value = 'floor';
+    select.dispatchEvent(new Event('change'));
+    expect(opts.onBoundaryChange).toHaveBeenCalledWith('floor');
+  });
+
+  it("setBoundary('floor') 同步顯示、不觸發回呼", () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    panel.setBoundary('floor');
+    expect(boundarySelect(panel).value).toBe('floor');
+    expect(opts.onBoundaryChange).not.toHaveBeenCalled();
+  });
+});
+
 describe('ControlPanel — 重力拉霸（issue #91 / V3 T2-1；ADR-0012）', () => {
   it('「重力」拉霸初始值來自 initial.gravity（0），範圍來自 gravityRange', () => {
     const panel = new ControlPanel(makeOptions());

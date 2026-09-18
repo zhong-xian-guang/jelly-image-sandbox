@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SimMesh } from '../mesh';
-import { InfiniteBoundary, WalledBoundary } from './boundary';
+import { FloorBoundary, InfiniteBoundary, WalledBoundary } from './boundary';
 import { SimCore } from './SimCore';
 import type { InputEvent, SurfacePoint } from './types';
 
@@ -1117,6 +1117,81 @@ describe('SimCore — Boundary', () => {
       return Array.from(sim.positions);
     };
     expect(play()).toEqual(play());
+  });
+});
+
+describe('SimCore — FloorBoundary（issue #92 / V3 T2-2；ADR-0012）', () => {
+  /** 抓上緣一點把整塊 Jelly 甩向 +y（往下），然後放開。 */
+  function flingDown(sim: SimCore, reach = 22): void {
+    sim.applyInput({ type: 'grab', id: 'f', x: 48, y: 0 });
+    for (let step = 1; step <= 8; step++) {
+      sim.applyInput({ type: 'moveGrab', id: 'f', x: 48, y: reach * step });
+      sim.step(1 / 60);
+    }
+    sim.applyInput({ type: 'release', id: 'f' });
+  }
+
+  const maxParticleY = (sim: SimCore) => {
+    let m = -Infinity;
+    for (let i = 1; i < sim.positions.length; i += 2)
+      if (sim.positions[i]! > m) m = sim.positions[i]!;
+    return m;
+  };
+
+  it('往下甩 → Particle 全程不穿地板、質心 y 收斂到 ≤ floorY、速度收斂到 0', () => {
+    const floorY = 120; // 網格 y ∈ [0, 96]，地板在下方 24 單位
+    const sim = new SimCore(MESH());
+    sim.setBoundary(new FloorBoundary({ floorY }));
+
+    flingDown(sim);
+    let reachedFloor = false;
+    for (let f = 0; f < 240; f++) {
+      sim.step(1 / 60);
+      expect(maxParticleY(sim)).toBeLessThanOrEqual(floorY + 1e-6); // 全程不滲地板
+      if (maxParticleY(sim) >= floorY - 1) reachedFloor = true;
+    }
+    expect(reachedFloor).toBe(true); // 確實有甩到地板
+    expect(sim.centroid().y).toBeLessThanOrEqual(floorY);
+    expect(sim.kineticEnergy()).toBeLessThan(1);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('往左右甩 → 不撞任何牆、飛得出去（x 方向無限）', () => {
+    const sim = new SimCore(MESH());
+    sim.setBoundary(new FloorBoundary({ floorY: 120 }));
+    sim.applyInput({ type: 'grab', id: 'f', x: 96, y: 48 });
+    for (let step = 1; step <= 8; step++) {
+      sim.applyInput({ type: 'moveGrab', id: 'f', x: 96 - 90 * step, y: 48 });
+      sim.step(1 / 60);
+    }
+    sim.applyInput({ type: 'release', id: 'f' });
+    run(sim, 120);
+    expect(sim.bbox().minX).toBeLessThan(-200);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('重力 + Floor：落下後停在地板上，質心收斂、動能歸零、不橫向滑走', () => {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    const floorY = 300;
+    sim.setBoundary(new FloorBoundary({ floorY }));
+    run(sim, 300); // 5 s
+    const a = sim.centroid();
+    run(sim, 60);
+    const b = sim.centroid();
+    expect(Math.abs(a.y - b.y)).toBeLessThan(0.5);
+    expect(Math.abs(a.x - b.x)).toBeLessThan(0.1);
+    expect(sim.bbox().maxY).toBeLessThanOrEqual(floorY + 1e-9);
+    expect(sim.bbox().maxY).toBeGreaterThan(floorY - 1);
+    expect(sim.kineticEnergy()).toBeLessThan(1);
+  });
+
+  it('地板貼齊 bbox 底邊（floorY = maxY）時，靜置的 Jelly 不動也不被推開', () => {
+    const sim = new SimCore(MESH());
+    const before = Float64Array.from(sim.positions);
+    sim.setBoundary(new FloorBoundary({ floorY: sim.bbox().maxY }));
+    run(sim, 60);
+    expect(Array.from(sim.positions)).toEqual(Array.from(before));
   });
 });
 

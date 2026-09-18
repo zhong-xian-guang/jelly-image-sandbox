@@ -27,7 +27,7 @@
  *
  * **控制面板**：`ControlPanel`（同樣是薄的 DOM 接線層）建 UI、回呼往外送；實際
  * 換算邏輯都在純函式模組——Softness 曲線見 `../sim/softness`，Walled 邊界範圍見
- * `./walledBounds`，Pin 模式的輸入轉接見 `../input/pinModeRouting`（開啟 Pin 模式
+ * `./boundaryGeometry`，Pin 模式的輸入轉接見 `../input/pinModeRouting`（開啟 Pin 模式
  * 後，`PointerInput` 原本會發的 `grab` 改由它轉成 `pin`，直接放 Pin 而非可拖曳
  * 的 Grab；點在既有 Pin 附近則轉成 `unpin`，即「點掉特定 Pin」）。
  *
@@ -45,9 +45,10 @@
  * 各層，所以不需要另外記一份還原快照。筆刷圓圈游標不受影響，理由見
  * `applyHintVisibility`。
  *
- * **牆壁邊框**（issue #9 追加）：切到 Walled 邊界時，`WalledBoundary.box`（世界
- * 座標常數）同步畫成 `JellyRenderer` 裡的一個外框（見 `setWallBounds`），撞牆
- * 時看得到界線在哪，不會覺得「明明沒碰到東西卻被彈回來」。切回 Infinite 或
+ * **邊界外框**（issue #9 追加；issue #92 擴成三態）：切到 Walled 邊界時，
+ * `WalledBoundary.box`（世界座標常數）同步畫成 `JellyRenderer` 裡的一個外框；切到
+ * Floor 時把 `FloorBoundary.floorY` 畫成一條地板線（見 `setBoundaryFrame`），撞牆／
+ * 落地時看得到界線在哪，不會覺得「明明沒碰到東西卻被彈回來」。切回 Infinite 或
  * 重新匯入圖片都會同步藏起來／重套（`applyBoundaryMode`、`replaceJelly`）。
  *
  * **Demo**（issue #15 / T14 追加）：`./demos` 提供純函式腳本（`DEMOS`）+
@@ -138,11 +139,11 @@ import {
   type BuildSimMeshParams,
   type SimMesh,
 } from '../mesh';
-import { JellyRenderer } from '../render';
+import { type BoundaryFrame, JellyRenderer } from '../render';
 import {
-  type Bbox,
   type BoundaryMode,
   type FanState,
+  FloorBoundary,
   InfiniteBoundary,
   type InputEvent,
   type Point,
@@ -194,7 +195,7 @@ import {
   tracksInEnabledGroups,
   withGroupInvariant,
 } from './track';
-import { computeWalledBounds } from './walledBounds';
+import { computeFloorY, computeWalledBounds } from './boundaryGeometry';
 
 /** 相機平滑用的單幀時距上限（分頁切回來不會讓相機瞬移）。 */
 const CAMERA_MAX_DT = 0.1;
@@ -379,8 +380,8 @@ export class JellySandbox {
   private importing = false;
   /** 目前的 Boundary 模式——`SimCore` 沒有 getter，重新匯入圖片時要靠這個重套。 */
   private boundaryMode: BoundaryMode = 'infinite';
-  /** `walled` 時目前的牆壁 AABB（給 `JellyRenderer.setWallBounds` 畫外框），`infinite` 時為 `null`。 */
-  private wallBox: Bbox | null = null;
+  /** 目前邊界的外框幾何（給 `JellyRenderer.setBoundaryFrame` 畫）：`walled` 是 AABB、`floor` 是地板 y、`infinite` 為 `null`。 */
+  private boundaryFrame: BoundaryFrame | null = null;
   /** 控制面板「Pin 模式」開關；`attachInputHandlers` 的 `applyInput` 靠它轉接。 */
   private pinModeEnabled = false;
   /**
@@ -1150,27 +1151,31 @@ export class JellySandbox {
   }
 
   /**
-   * Boundary 切換（issue #14）：`walled` 用目前 bbox 算一個正方形邊界範圍（見
-   * `./walledBounds`）、`infinite` 換回無邊界。記在 `boundaryMode`——`replaceJelly`
-   * 換新 `SimCore` 時要重套，否則面板顯示的模式會跟實際物理不一致。同時把
-   * `wallBox` 套到 Renderer（issue #9 追加）：撞牆時畫面上有外框可以對照，
-   * 不會覺得「明明沒碰到東西卻被彈回來」。
+   * Boundary 切換（issue #14；issue #92 加 Floor）：`walled` 用目前 bbox 算一個正方形
+   * 邊界範圍、`floor` 把地板貼齊目前 bbox 底邊（都見 `./boundaryGeometry`）、`infinite`
+   * 換回無邊界。記在 `boundaryMode`——`replaceJelly` 換新 `SimCore` 時要重套，否則
+   * 面板顯示的模式會跟實際物理不一致。同時把 `boundaryFrame` 套到 Renderer（issue #9
+   * 追加）：撞牆／落地時畫面上有界線可以對照，不會覺得「明明沒碰到東西卻被彈回來」。
    */
   private setBoundaryMode(mode: BoundaryMode): void {
     this.boundaryMode = mode;
     this.applyBoundaryMode(this.sim);
-    this.renderer.setWallBounds(this.wallBox);
+    this.renderer.setBoundaryFrame(this.boundaryFrame);
   }
 
-  /** 套用 `boundaryMode` 到 `sim`，並同步 `wallBox`（`replaceJelly` 換新 Renderer 後要另外重套，見該處）。 */
+  /** 套用 `boundaryMode` 到 `sim`，並同步 `boundaryFrame`（`replaceJelly` 換新 Renderer 後要另外重套，見該處）。 */
   private applyBoundaryMode(sim: SimCore): void {
     if (this.boundaryMode === 'walled') {
       const boundary = new WalledBoundary(computeWalledBounds(sim.bbox()));
       sim.setBoundary(boundary);
-      this.wallBox = boundary.box;
+      this.boundaryFrame = { kind: 'walled', ...boundary.box };
+    } else if (this.boundaryMode === 'floor') {
+      const boundary = new FloorBoundary({ floorY: computeFloorY(sim.bbox()) });
+      sim.setBoundary(boundary);
+      this.boundaryFrame = { kind: 'floor', y: boundary.floorY };
     } else {
       sim.setBoundary(new InfiniteBoundary());
-      this.wallBox = null;
+      this.boundaryFrame = null;
     }
   }
 
@@ -1727,7 +1732,7 @@ export class JellySandbox {
     this.input.setSprayParams({ radius: this.sprayRadius, spacing: this.spraySpacing });
     this.input.setEraseParams({ radius: this.eraseRadius });
     this.applyHintVisibility(); // 新 JellyRenderer 的線框預設隱藏，要按目前的提示狀態重套
-    this.renderer.setWallBounds(this.wallBox); // 新 JellyRenderer 預設沒有牆框，要重套
+    this.renderer.setBoundaryFrame(this.boundaryFrame); // 新 JellyRenderer 預設沒有邊界外框，要重套
   }
 
   /** `PointerInput` + `CameraInput` 都吃同一組 project／hitTest；重新匯入後換綁到新 canvas。 */

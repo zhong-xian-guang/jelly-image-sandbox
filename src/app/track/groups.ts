@@ -5,7 +5,7 @@
  * 這裡只放**純函式**：開啟中群組的成員聯集、「每條 Track 至少在一個群組」不變式、
  * 獨奏切換的狀態轉移。群組清單／歸屬本身存在 `JellySandbox` 記憶體（比照 `tracks`
  * 清單，`停止／重設` 保留、重新匯入 PNG 清空），UI 在 `ControlPanel`，接線在
- * `JellySandbox`——跟 `softness`／`walledBounds`／`overlay` 一樣的分工。
+ * `JellySandbox`——跟 `softness`／`boundaryGeometry`／`overlay` 一樣的分工。
  *
  * 難邏輯不進 `mergeTracks`（ADR-0008）：群組歸屬只是「扁平 Track 清單」上的一個
  * 過濾條件，`playAll` 呼叫 `mergeTracks` 前先用 `tracksInEnabledGroups` 濾掉不屬於
