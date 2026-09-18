@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeFloorY, computeWalledBounds, WALLED_SIZE_FACTOR } from './boundaryGeometry';
+import {
+  BOUNDARY_FRICTION,
+  computeFloorY,
+  computeWalledBounds,
+  WALLED_SIZE_FACTOR,
+} from './boundaryGeometry';
 
 describe('computeWalledBounds', () => {
   it('以 bbox 中心為中心、正方形邊長 = 較長邊 × sizeFactor', () => {
@@ -40,5 +45,12 @@ describe('computeFloorY（issue #92 / V3 T2-2）', () => {
 
   it('退化 bbox（單點）也回 maxY——地板就在那一點上，不憑空掉一段、不埋進去', () => {
     expect(computeFloorY({ minX: 5, minY: 5, maxX: 5, maxY: 5 })).toBe(5);
+  });
+});
+
+describe('BOUNDARY_FRICTION（issue #93）', () => {
+  it('是 (0, 1] 之間的固定手感值——0 等於沒摩擦、> 1 會把切線速度反向', () => {
+    expect(BOUNDARY_FRICTION).toBeGreaterThan(0);
+    expect(BOUNDARY_FRICTION).toBeLessThanOrEqual(1);
   });
 });

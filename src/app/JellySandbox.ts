@@ -195,7 +195,7 @@ import {
   tracksInEnabledGroups,
   withGroupInvariant,
 } from './track';
-import { computeFloorY, computeWalledBounds } from './boundaryGeometry';
+import { BOUNDARY_FRICTION, computeFloorY, computeWalledBounds } from './boundaryGeometry';
 
 /** 相機平滑用的單幀時距上限（分頁切回來不會讓相機瞬移）。 */
 const CAMERA_MAX_DT = 0.1;
@@ -1163,14 +1163,23 @@ export class JellySandbox {
     this.renderer.setBoundaryFrame(this.boundaryFrame);
   }
 
-  /** 套用 `boundaryMode` 到 `sim`，並同步 `boundaryFrame`（`replaceJelly` 換新 Renderer 後要另外重套，見該處）。 */
+  /**
+   * 套用 `boundaryMode` 到 `sim`，並同步 `boundaryFrame`（`replaceJelly` 換新 Renderer 後要
+   * 另外重套，見該處）。Walled／Floor 都帶 app 層常數 `BOUNDARY_FRICTION`（issue #93）。
+   */
   private applyBoundaryMode(sim: SimCore): void {
     if (this.boundaryMode === 'walled') {
-      const boundary = new WalledBoundary(computeWalledBounds(sim.bbox()));
+      const boundary = new WalledBoundary({
+        ...computeWalledBounds(sim.bbox()),
+        friction: BOUNDARY_FRICTION,
+      });
       sim.setBoundary(boundary);
       this.boundaryFrame = { kind: 'walled', ...boundary.box };
     } else if (this.boundaryMode === 'floor') {
-      const boundary = new FloorBoundary({ floorY: computeFloorY(sim.bbox()) });
+      const boundary = new FloorBoundary({
+        floorY: computeFloorY(sim.bbox()),
+        friction: BOUNDARY_FRICTION,
+      });
       sim.setBoundary(boundary);
       this.boundaryFrame = { kind: 'floor', y: boundary.floorY };
     } else {

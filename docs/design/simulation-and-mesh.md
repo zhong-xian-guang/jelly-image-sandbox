@@ -56,8 +56,9 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
    - **Pin**：`locked = true`，目標點凍結在鎖定當下的位置，`β = 1`（絕對硬鎖）。用力甩、Tap 都拔不掉。可轉回 Grab（重新定位）後再鎖。
    - **Multi-grab** = 多個這種約束依序解；Grab 與 Pin 混用天然共存。**沒有**「鎖定質心」的獨立步驟——要固定中心就放幾個 Pin。
 5. **Boundary**：呼叫 `resolveBoundary(particles, dt)`。
-   - **Walled**：每個 Particle clamp 進半平面組（或 AABB），歸零向外的速度分量，可選 restitution。切換當下 AABB 依 Jelly bbox 展開成正方形（`computeWalledBounds`）。
-   - **Floor**（issue #92、[ADR-0012](../adr/0012-gravity-is-a-slider-not-a-mode.md)）：一條水平地板 `y = floorY`，左右與上方無限延伸。`pos.y > floorY` 的 Particle clamp 到 `floorY`，`prev.y` 比照 Walled（restitution 沿用 0）；x 方向與上方不管。切換當下 `floorY` 貼齊 Jelly bbox 底邊（世界 y 向下 → `maxY`，`computeFloorY`），切過去 Jelly 就已經站在地板上——不憑空掉一段、不半截埋進去。畫面上畫一條橫跨可視範圍的地板線（線寬顏色沿用牆框、跟著相機重畫），跟牆框一樣不是提示、不受「播放時隱藏提示」影響。ADR-0012 與 `CONTEXT.md` 說的「牆與地板都有摩擦」是下一張票（issue #93），本票地板仍無摩擦。
+   - **Walled**：每個 Particle clamp 進半平面組（或 AABB），歸零向外的速度分量，可選 restitution。切換當下 AABB 依 Jelly bbox 展開成正方形（`computeWalledBounds`）。撞到 x 面的 Particle 回推 y 速度乘 `(1 − friction)`、撞到 y 面衰減 x、角落兩軸都衰（摩擦見下）。
+   - **Floor**（issue #92、[ADR-0012](../adr/0012-gravity-is-a-slider-not-a-mode.md)）：一條水平地板 `y = floorY`，左右與上方無限延伸。`pos.y > floorY` 的 Particle clamp 到 `floorY`，`prev.y` 比照 Walled（restitution 沿用 0）；x 方向與上方不管。切換當下 `floorY` 貼齊 Jelly bbox 底邊（世界 y 向下 → `maxY`，`computeFloorY`），切過去 Jelly 就已經站在地板上——不憑空掉一段、不半截埋進去。畫面上畫一條橫跨可視範圍的地板線（線寬顏色沿用牆框、跟著相機重畫），跟牆框一樣不是提示、不受「播放時隱藏提示」影響。貼地那步 x 速度乘 `(1 − friction)`。
+   - **摩擦（issue #93、ADR-0012）**：Walled 與 Floor 共用 `friction`（0–1，app 層常數 `BOUNDARY_FRICTION`，不進面板、不進片段檔）。語意：這個 substep 被某個面 clamp 的 Particle，`prev` 沿該面切線往 `pos` 靠——`prev_t = pos_t − (pos_t − prev_t) × (1 − friction)`，回推的切線速度乘 `(1 − friction)`；法線維持 restitution 規則。「接觸」= 這個 substep 被 clamp，所以有重力靜置在地板上的 Jelly 每步都在接觸、摩擦持續作用；沒重力時只有真的撞上才作用，俯視手感不變。`friction = 0` 整段跳過（`pos − (pos − prev)` 不保證位元等於 `prev`），既有無摩擦行為位元不變。**既有片段的影響**：摩擦不進片段檔、也沒有 0 的退路，所以 #93 之前錄的片段若是 Walled／Floor 且有撞牆或貼地，重播結果會跟錄製當時不同（無重力、沒撞牆的片段不受影響）——ADR-0012 接受這點（固定手感值、不給拉霸），與 #91 守住阻尼不同。實測（真瀏覽器、400×200 平底果凍、g = 5000、抓右下角貼地快甩，放開後質心 x 位移）：friction 0 → 274 單位、0.7 s 停（靠阻尼）；0.3 → 160（58%）、0.4 s；0.6 → 93（34%）、0.3 s；1 → 68（25%）、0.3 s。太黏（≥ 0.6）拖著貼地的果凍走也會被明顯拖住，故定 0.3。抓上緣或中段甩出去 Jelly 會前傾翻滾、底邊離地，摩擦幾乎無從作用（0 vs 1 只差 ~15%）——圓形 Jelly 在有摩擦地板上被側甩會從滑變滾，是正確物理。
    - **Infinite**：no-op。
    - 執行期可切換；重新匯入／重建／載入片段換新求解器時依記住的模式重套（Walled／Floor 都依新 Jelly 的 bbox 重算）。
 6. **回推速度**：`v = (x − x_prev) / dt_substep`。**被抓的三頂點也照推** → 它們帶著拖曳速度，放開時直接就是 Fling，不需另外賦速。
@@ -134,6 +135,7 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 | Grab 硬度 β | 1.0（精準貼游標；調低＝彈性把手） |
 | Tap 脈衝 strength | 6000（向內；prototype 實測） |
 | 重力 `gravity` | **使用者可調**（「重力」拉霸 0–10000、步進 100，預設 0 = 俯視無重力；issue #91）。實測（阻尼 0.02、512 高的平底果凍落 ~830 單位到 Walled 箱底）：spec 初訂上限 2000 中段只有 ~200 單位／秒、4 秒才落地，像糖漿；5000 → 1.2 s 落地、終端速度 ≈ 1000（約 2 倍身高／秒）、著地壓扁到 0.83、靜置下陷 3%；10000 → 0.6 s、壓扁到 0.7、下陷 6%；任何值落地後 ≤ 2 s 靜止。圓形果凍（預設 Pac-Man）在無摩擦地板上會慢慢滾到重心最低的姿態，是正確物理、不是抖動 |
+| 邊界摩擦 `friction` | **0.3**（`BOUNDARY_FRICTION`，Walled／Floor 共用；issue #93。0 = 冰面、1 = 貼地那步切線速度歸零；實測數據見上「邊界」節） |
 | Tap 影響半徑 | Jelly bbox 對角線 × 0.2 |
 | Tap 判定 | pointerdown→up ≤ 250ms 且位移 < 6px |
 | Pin 硬度 β | 1.0（絕對硬鎖，不可調） |

@@ -5,6 +5,7 @@ export { BOUNDARY_MODES, FloorBoundary, InfiniteBoundary, WalledBoundary } from 
 export type {
   Boundary,
   BoundaryMode,
+  ContactOptions,
   FloorBoundaryOptions,
   WalledBoundaryOptions,
 } from './boundary';
