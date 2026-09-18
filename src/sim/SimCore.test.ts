@@ -65,6 +65,19 @@ function run(sim: SimCore, frames: number): void {
   for (let f = 0; f < frames; f++) sim.step(1 / 60);
 }
 
+/**
+ * 抓 `(x, y)` 往 +x 拉 8 幀（每幀 `dxPerFrame`）後放開——Fling 的共用手勢
+ * （issue #93 摩擦、issue #106 側視阻尼測試共用）。
+ */
+function flingRight(sim: SimCore, x: number, y: number, dxPerFrame = 40): void {
+  sim.applyInput({ type: 'grab', id: 'fling', x, y });
+  for (let step = 1; step <= 8; step++) {
+    sim.applyInput({ type: 'moveGrab', id: 'fling', x: x + dxPerFrame * step, y });
+    sim.step(1 / 60);
+  }
+  sim.applyInput({ type: 'release', id: 'fling' });
+}
+
 const MESH = () => gridMesh(13, 13, 8); // 96×96，對角線 ≈ 136
 
 describe('SimCore — 靜置', () => {
@@ -1211,19 +1224,14 @@ describe('SimCore — 邊界摩擦（issue #93 / V3 T2-3；ADR-0012）', () => {
     sim.setBoundary(boundary);
     run(sim, 30); // 先讓它在地板上站穩
     const restX = sim.centroid().x;
-    sim.applyInput({ type: 'grab', id: 'f', x: 96, y: 96 });
-    for (let step = 1; step <= 8; step++) {
-      sim.applyInput({ type: 'moveGrab', id: 'f', x: 96 + 40 * step, y: 96 });
-      sim.step(1 / 60);
-    }
-    sim.applyInput({ type: 'release', id: 'f' });
+    flingRight(sim, 96, 96);
     return restX;
   }
 
   /**
-   * 甩完跑 4 s，回傳質心 x 總位移。有摩擦那組 4 s 早就停了（下一個測試驗）；無摩擦那組
-   * 在側視阻尼拆開後（issue #106）質心只剩 `airDamping`，不會自己停——所以這裡量的是
-   * 固定時間的距離，不是「停下的距離」。
+   * 甩完跑 4 s，回傳質心 x 總位移。有摩擦那組 4 s 早就停了（`slideUntilStopped` 驗）；
+   * 無摩擦那組在側視阻尼拆開後（issue #106）質心只剩 `airDamping`，不會自己停——所以
+   * 這裡量的是固定時間的距離，不是「停下的距離」。
    */
   function slideFor4s(sim: SimCore, boundary: Boundary): number {
     const restX = flingAlongFloor(sim, boundary);
@@ -1232,16 +1240,14 @@ describe('SimCore — 邊界摩擦（issue #93 / V3 T2-3；ADR-0012）', () => {
     return sim.centroid().x - restX;
   }
 
-  /** 甩完跑 4 s、再跑 1 s 確認質心 x 已不再變，回傳總滑行距離。 */
+  /** `slideFor4s` 之後再跑 1 s 確認質心 x 已不再變，回傳總滑行距離（= 停下的距離）。 */
   function slideUntilStopped(sim: SimCore, boundary: Boundary): number {
-    const restX = flingAlongFloor(sim, boundary);
-    run(sim, 240);
+    const d = slideFor4s(sim, boundary);
     const a = sim.centroid().x;
     run(sim, 60);
     const b = sim.centroid().x;
     expect(Math.abs(b - a)).toBeLessThan(0.1); // 已經停了，量到的才是「停下的距離」
-    expect(allFinite(sim.positions)).toBe(true);
-    return b - restX;
+    return d + (b - a);
   }
 
   it('重力 + Floor + 側向初速：friction > 0 時質心 x 停下的距離明顯短於 friction = 0', () => {
@@ -1525,7 +1531,52 @@ describe('SimCore — 側視阻尼只作用在內部運動（issue #106 / V3 T2-
     expect(second / first).toBeLessThan(1.4); // 第 1 秒含 0.2 s 加速段，舊路徑實測 ≈ 1.25
   });
 
-  it('gravity > 0 + Floor：從 2 倍身高落下，落地後 ≤ 2 s 靜止、拉伸比回到 ~1、不橫向漂移', () => {
+  it('gravity > 0 + Floor（貼齊 bbox 底邊）靜置：動能歸零、不橫向漂移', () => {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    sim.setBoundary(new FloorBoundary({ floorY: sim.bbox().maxY, friction: 0.3 }));
+    run(sim, 300); // 5 s
+    const a = sim.centroid();
+    run(sim, 60);
+    const b = sim.centroid();
+    expect(Math.abs(a.x - b.x)).toBeLessThan(0.1); // 動量守恆修正仍成立，沒有跟著阻尼一起走掉
+    expect(Math.abs(a.y - b.y)).toBeLessThan(0.1);
+    expect(sim.kineticEnergy()).toBeLessThan(1);
+  });
+
+  it('gravity > 0 + Floor：抓上緣輕輕甩起放手 → 落地後 ≤ 2 s 內部抖動靜止、拉伸比回到 ~1', () => {
+    // 輕甩（8 單位／幀、離地 ~50）落地後 ~1.3 s 靜止；用力甩（25／幀、飛 2 倍身高）會
+    // 翻滾＋回彈一次、~3 s 才靜止——「≤ 2 s」是對正常放手講的，不是對砸下來講的。
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    const floorY = sim.bbox().maxY;
+    sim.setBoundary(new FloorBoundary({ floorY, friction: 0.3 }));
+    run(sim, 30);
+    sim.applyInput({ type: 'grab', id: 'g', x: 48, y: 0 });
+    for (let step = 1; step <= 6; step++) {
+      sim.applyInput({ type: 'moveGrab', id: 'g', x: 48, y: -8 * step });
+      sim.step(1 / 60);
+    }
+    sim.applyInput({ type: 'release', id: 'g' });
+    // 等到重新碰地（放開瞬間還在空中）
+    let touched = false;
+    for (let f = 0; f < 120 && !touched; f++) {
+      sim.step(1 / 60);
+      if (sim.bbox().maxY >= floorY - 1) touched = true;
+    }
+    expect(touched).toBe(true);
+    run(sim, 120); // 落地後 2 s
+    const a = sim.centroid();
+    run(sim, 30);
+    const b = sim.centroid();
+    expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeLessThan(0.2);
+    expect(sim.kineticEnergy()).toBeLessThan(100); // 169 顆 RMS < 1 單位／秒，肉眼靜止
+    const st = sim.stretchStats();
+    expect(st.avg).toBeGreaterThan(0.95);
+    expect(st.avg).toBeLessThan(1.05);
+  });
+
+  it('gravity > 0 + Floor：從 2 倍身高落下，回彈一次後 ≤ 2 s 靜止、拉伸比回到 ~1、不橫向漂移', () => {
     // 落 200 單位、~890 單位／秒著地（舊路徑終端速度只有 417）：壓扁到 0.64、彈起
     // 一次（~70 單位）、1.5 s 第二次落地，之後靠內部阻尼在 ~1 s 內靜止。
     const sim = new SimCore(MESH());
@@ -1561,12 +1612,7 @@ describe('SimCore — 側視阻尼只作用在內部運動（issue #106 / V3 T2-
   it('gravity > 0 + Infinite：側甩後質心 x 速度只被 airDamping 慢慢吃掉，1 s 後仍保有大半', () => {
     const sim = new SimCore(MESH());
     sim.params.gravity = 2000;
-    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 48 });
-    for (let step = 1; step <= 8; step++) {
-      sim.applyInput({ type: 'moveGrab', id: 'g', x: 96 + 40 * step, y: 48 });
-      sim.step(1 / 60);
-    }
-    sim.applyInput({ type: 'release', id: 'g' });
+    flingRight(sim, 96, 48);
     const x0 = sim.centroid().x;
     run(sim, 6);
     const early = (sim.centroid().x - x0) / 0.1; // 放手後 0.1 s 的平均 x 速度

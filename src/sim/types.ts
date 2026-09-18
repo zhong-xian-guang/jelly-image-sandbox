@@ -88,11 +88,10 @@ export interface SimParams {
    */
   damping: number;
   /**
-   * 側視（`gravity ≠ 0`）時質心速度的「空氣阻力」：每個 substep `v̄ *= (1 − airDamping)`
-   * （issue #106 / V3 T2-4；ADR-0012）。全域 `damping` 套在落體上等於終端速度 `g / 4.8`、
-   * 0.2 s 就到，看起來沒有加速度；拆開後質心只吃這個很小的值（終端速度 `g / 0.24`、
-   * 63% 要 ~4 s），自由落體看得到先慢後快，停下來交給牆／地板摩擦（issue #93）。
-   * `gravity = 0` 時完全不參與。預設 0.001。
+   * 側視（`gravity ≠ 0`）時質心速度的「空氣阻力」：每個 substep `v̄ *= (1 − airDamping)`，
+   * 相對質心的內部運動仍走 `damping`（issue #106 / V3 T2-4；ADR-0012）。`gravity = 0`
+   * 時完全不參與。是固定手感值：不進面板、不進片段檔。預設 0.001（終端速度 `g / 0.24`，
+   * 落體看得到先慢後快；動機與實測見設計文件阻尼節）。
    */
   airDamping: number;
   /** 每次 `step(dt)` 的物理 substep 數（弱裝置降到 2）。預設 4。 */

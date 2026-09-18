@@ -666,7 +666,6 @@ export class SimCore {
     const keep = 1 - this.params.damping;
     const keepAir = 1 - this.params.airDamping;
     const gravity = this.params.gravity;
-    const n = this.n;
 
     for (let s = 0; s < subs; s++) {
       // 1. 電風扇（沒有時 no-op）：對目前位置落在矩形內的 Particle 把它的加速度
@@ -700,7 +699,7 @@ export class SimCore {
       if (gravity === 0) {
         // 俯視：全域阻尼套在完整速度上（桌面摩擦感）。這條路徑的每個浮點運算跟
         // issue #106 之前完全一樣——舊片段重播結果不變。
-        for (let i = 0; i < n; i++) {
+        for (let i = 0; i < this.n; i++) {
           this.vel[2 * i] = ((this.pos[2 * i]! - this.prev[2 * i]!) / h) * keep;
           this.vel[2 * i + 1] = ((this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h) * keep;
         }
@@ -711,7 +710,7 @@ export class SimCore {
         // 也算進去，被 Pin 住的 Jelly 質心速度自然被拉向 0。
         let sumX = 0;
         let sumY = 0;
-        for (let i = 0; i < n; i++) {
+        for (let i = 0; i < this.n; i++) {
           const vx = (this.pos[2 * i]! - this.prev[2 * i]!) / h;
           const vy = (this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h;
           this.vel[2 * i] = vx;
@@ -719,11 +718,11 @@ export class SimCore {
           sumX += vx;
           sumY += vy;
         }
-        const meanX = sumX / n;
-        const meanY = sumY / n;
+        const meanX = sumX / this.n;
+        const meanY = sumY / this.n;
         const airX = meanX * keepAir;
         const airY = meanY * keepAir;
-        for (let i = 0; i < n; i++) {
+        for (let i = 0; i < this.n; i++) {
           this.vel[2 * i] = airX + (this.vel[2 * i]! - meanX) * keep;
           this.vel[2 * i + 1] = airY + (this.vel[2 * i + 1]! - meanY) * keep;
         }
