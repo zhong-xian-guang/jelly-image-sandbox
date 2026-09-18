@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type Boundary,
   FloorBoundary,
+  type FloorBoundaryOptions,
   InfiniteBoundary,
   WalledBoundary,
   type WalledBoundaryOptions,
@@ -132,5 +133,140 @@ describe('FloorBoundary（issue #92 / V3 T2-2；ADR-0012）', () => {
     expect(b.floorY).toBe(123.5);
     expect(b.restitution).toBe(0);
     expect(new FloorBoundary({ floorY: 0, restitution: 0.4 }).restitution).toBe(0.4);
+  });
+});
+
+describe('摩擦（issue #93 / V3 T2-3；ADR-0012）', () => {
+  const h = 1 / 240;
+  const box: WalledBoundaryOptions = { minX: -100, minY: -100, maxX: 100, maxY: 100 };
+  /** 回推速度 `(pos − prev) / h` 的 x / y 分量。 */
+  const vel = (pos: Float64Array, prev: Float64Array) => ({
+    vx: (pos[0]! - prev[0]!) / h,
+    vy: (pos[1]! - prev[1]!) / h,
+  });
+  const walled = (opts: WalledBoundaryOptions): Boundary & { friction: number } =>
+    new WalledBoundary(opts);
+  const floor = (opts: FloorBoundaryOptions): Boundary & { friction: number } =>
+    new FloorBoundary(opts);
+
+  describe('WalledBoundary', () => {
+    it('撞 x 面 → 回推 y 速度乘 (1 − friction)、x 依 restitution（e = 0 → 歸零）', () => {
+      for (const friction of [0.3, 0.7]) {
+        const pos = flat(-130, 30);
+        const prev = flat(-90, 10);
+        walled({ ...box, friction }).resolveBoundary(pos, prev, 1, h);
+        const { vx, vy } = vel(pos, prev);
+        expect(pos[0]).toBe(-100);
+        expect(vx).toBe(0);
+        expect(vy).toBeCloseTo(((30 - 10) / h) * (1 - friction), 9);
+      }
+    });
+
+    it('撞 y 面對稱：回推 x 速度乘 (1 − friction)、y 歸零', () => {
+      const pos = flat(20, 140);
+      const prev = flat(-20, 90);
+      walled({ ...box, friction: 0.3 }).resolveBoundary(pos, prev, 1, h);
+      const { vx, vy } = vel(pos, prev);
+      expect(pos[1]).toBe(100);
+      expect(vy).toBe(0);
+      expect(vx).toBeCloseTo(((20 - -20) / h) * 0.7, 9);
+    });
+
+    it('摩擦與 restitution 各管各的：撞 x 面時 x 走 −e·入射、y 走 (1 − friction)', () => {
+      const pos = flat(-130, 30);
+      const prev = flat(-90, 10);
+      walled({ ...box, restitution: 0.5, friction: 0.3 }).resolveBoundary(pos, prev, 1, h);
+      const { vx, vy } = vel(pos, prev);
+      expect(vx).toBeCloseTo(-0.5 * ((-130 - -90) / h), 9);
+      expect(vy).toBeCloseTo(((30 - 10) / h) * 0.7, 9);
+    });
+
+    it('角落兩軸都撞 → 兩軸都是法線（依 restitution）也都是切線（乘 1 − friction）', () => {
+      const pos = flat(-130, 140);
+      const prev = flat(-90, 90);
+      walled({ ...box, restitution: 1, friction: 0.5 }).resolveBoundary(pos, prev, 1, h);
+      const { vx, vy } = vel(pos, prev);
+      expect(Array.from(pos)).toEqual([-100, 100]);
+      expect(vx).toBeCloseTo(-1 * ((-130 - -90) / h) * 0.5, 9);
+      expect(vy).toBeCloseTo(-1 * ((140 - 90) / h) * 0.5, 9);
+    });
+
+    it('沒撞到的 Particle 切線速度不變', () => {
+      const pos = flat(30, -40);
+      const prev = flat(10, -80);
+      walled({ ...box, friction: 0.9 }).resolveBoundary(pos, prev, 1, h);
+      expect(Array.from(pos)).toEqual([30, -40]);
+      expect(Array.from(prev)).toEqual([10, -80]);
+    });
+
+    it('friction = 0（預設）與沒有 friction 位元相同', () => {
+      const posA = flat(-130, 30.1, 20, 140.3, 5, 5);
+      const prevA = flat(-90, 10.7, -20.9, 90, 1, 1);
+      const posB = Float64Array.from(posA);
+      const prevB = Float64Array.from(prevA);
+      walled(box).resolveBoundary(posA, prevA, 3, h);
+      walled({ ...box, friction: 0 }).resolveBoundary(posB, prevB, 3, h);
+      expect(Array.from(posA)).toEqual(Array.from(posB));
+      expect(Array.from(prevA)).toEqual(Array.from(prevB));
+      expect(walled(box).friction).toBe(0);
+    });
+
+    it('friction = 1 → 切線速度歸零', () => {
+      const pos = flat(-130, 30);
+      const prev = flat(-90, 10);
+      walled({ ...box, friction: 1 }).resolveBoundary(pos, prev, 1, h);
+      const { vx, vy } = vel(pos, prev);
+      expect(vx).toBe(0);
+      expect(vy).toBe(0);
+    });
+  });
+
+  describe('FloorBoundary', () => {
+    const floorY = 50;
+
+    it('撞地板 → 回推 x 速度乘 (1 − friction)、y 依 restitution', () => {
+      for (const friction of [0.3, 0.7]) {
+        const pos = flat(30, 70);
+        const prev = flat(10, 30);
+        floor({ floorY, friction }).resolveBoundary(pos, prev, 1, h);
+        const { vx, vy } = vel(pos, prev);
+        expect(pos[1]).toBe(floorY);
+        expect(vy).toBe(0);
+        expect(vx).toBeCloseTo(((30 - 10) / h) * (1 - friction), 9);
+      }
+      const pos = flat(30, 70);
+      const prev = flat(10, 30);
+      floor({ floorY, restitution: 0.5, friction: 0.3 }).resolveBoundary(pos, prev, 1, h);
+      const { vx, vy } = vel(pos, prev);
+      expect(vy).toBeCloseTo(-0.5 * ((70 - 30) / h), 9);
+      expect(vx).toBeCloseTo(((30 - 10) / h) * 0.7, 9);
+    });
+
+    it('沒撞到地板的 Particle 不動', () => {
+      const pos = flat(30, 20);
+      const prev = flat(10, -10);
+      floor({ floorY, friction: 0.9 }).resolveBoundary(pos, prev, 1, h);
+      expect(Array.from(pos)).toEqual([30, 20]);
+      expect(Array.from(prev)).toEqual([10, -10]);
+    });
+
+    it('friction = 0（預設）與沒有 friction 位元相同；friction = 1 → x 速度歸零', () => {
+      const posA = flat(30.3, 70.1, 10, 20);
+      const prevA = flat(10.7, 30, -10.1, -10);
+      const posB = Float64Array.from(posA);
+      const prevB = Float64Array.from(prevA);
+      floor({ floorY }).resolveBoundary(posA, prevA, 2, h);
+      floor({ floorY, friction: 0 }).resolveBoundary(posB, prevB, 2, h);
+      expect(Array.from(posA)).toEqual(Array.from(posB));
+      expect(Array.from(prevA)).toEqual(Array.from(prevB));
+      expect(floor({ floorY }).friction).toBe(0);
+
+      const pos = flat(30, 70);
+      const prev = flat(10, 30);
+      floor({ floorY, friction: 1 }).resolveBoundary(pos, prev, 1, h);
+      const { vx, vy } = vel(pos, prev);
+      expect(vx).toBe(0);
+      expect(vy).toBe(0);
+    });
   });
 });

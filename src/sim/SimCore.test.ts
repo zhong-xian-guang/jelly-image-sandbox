@@ -1195,6 +1195,101 @@ describe('SimCore — FloorBoundary（issue #92 / V3 T2-2；ADR-0012）', () => 
   });
 });
 
+describe('SimCore — 邊界摩擦（issue #93 / V3 T2-3；ADR-0012）', () => {
+  /**
+   * 重力 + Floor（地板貼齊 bbox 底邊）+ 往 +x 側向甩：抓**右下角**往右拉 8 幀後放開，
+   * 讓整塊貼著地板滑。回傳放開後再跑 `settleFrames` 幀的質心 x 位移。抓下角是因為
+   * 抓上緣或中段甩出去 Jelly 會前傾翻滾、底邊離地，摩擦沒東西可作用（實測翻滾時
+   * 摩擦 0 vs 1 距離只差 ~15%）；貼地滑時 friction 0.3 距離約為無摩擦的一半。
+   */
+  function slideOnFloor(friction: number, settleFrames = 240): number {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    sim.setBoundary(new FloorBoundary({ floorY: sim.bbox().maxY, friction }));
+    run(sim, 30); // 先讓它在地板上站穩
+    const x0 = sim.centroid().x;
+    sim.applyInput({ type: 'grab', id: 'f', x: 96, y: 96 });
+    for (let step = 1; step <= 8; step++) {
+      sim.applyInput({ type: 'moveGrab', id: 'f', x: 96 + 40 * step, y: 96 });
+      sim.step(1 / 60);
+    }
+    sim.applyInput({ type: 'release', id: 'f' });
+    run(sim, settleFrames);
+    expect(allFinite(sim.positions)).toBe(true);
+    return sim.centroid().x - x0;
+  }
+
+  it('重力 + Floor + 側向初速：friction > 0 時質心 x 停下的距離明顯短於 friction = 0', () => {
+    const slick = slideOnFloor(0);
+    const rough = slideOnFloor(0.3);
+    expect(slick).toBeGreaterThan(0);
+    expect(rough).toBeGreaterThan(0); // 還是有滑出去，不是黏住
+    expect(rough).toBeLessThan(slick * 0.7);
+  });
+
+  it('有摩擦時滑到停：放開 4 s 後再跑 1 s 質心 x 不再變', () => {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    sim.setBoundary(new FloorBoundary({ floorY: sim.bbox().maxY, friction: 0.3 }));
+    run(sim, 30);
+    sim.applyInput({ type: 'grab', id: 'f', x: 96, y: 96 });
+    for (let step = 1; step <= 8; step++) {
+      sim.applyInput({ type: 'moveGrab', id: 'f', x: 96 + 40 * step, y: 96 });
+      sim.step(1 / 60);
+    }
+    sim.applyInput({ type: 'release', id: 'f' });
+    run(sim, 240);
+    const a = sim.centroid();
+    run(sim, 60);
+    const b = sim.centroid();
+    expect(Math.abs(b.x - a.x)).toBeLessThan(0.1);
+    expect(sim.kineticEnergy()).toBeLessThan(1);
+  });
+
+  it('Walled 有摩擦：重力下沿箱底滑，同樣比無摩擦停得短', () => {
+    const slide = (friction: number) => {
+      const sim = new SimCore(MESH());
+      sim.params.gravity = 2000;
+      const bb = sim.bbox();
+      sim.setBoundary(
+        new WalledBoundary({ minX: -2000, minY: -100, maxX: 2000, maxY: bb.maxY, friction }),
+      );
+      run(sim, 30);
+      const x0 = sim.centroid().x;
+      sim.applyInput({ type: 'grab', id: 'f', x: 96, y: 96 });
+      for (let step = 1; step <= 8; step++) {
+        sim.applyInput({ type: 'moveGrab', id: 'f', x: 96 + 40 * step, y: 96 });
+        sim.step(1 / 60);
+      }
+      sim.applyInput({ type: 'release', id: 'f' });
+      run(sim, 240);
+      return sim.centroid().x - x0;
+    };
+    const slick = slide(0);
+    const rough = slide(0.3);
+    expect(rough).toBeGreaterThan(0);
+    expect(rough).toBeLessThan(slick * 0.7);
+  });
+
+  it('決定性：同輸入兩次跑位置位元相同', () => {
+    const runOnce = () => {
+      const sim = new SimCore(MESH());
+      sim.params.gravity = 2000;
+      sim.setBoundary(new FloorBoundary({ floorY: sim.bbox().maxY, friction: 0.3 }));
+      run(sim, 30);
+      sim.applyInput({ type: 'grab', id: 'f', x: 96, y: 96 });
+      for (let step = 1; step <= 8; step++) {
+        sim.applyInput({ type: 'moveGrab', id: 'f', x: 96 + 40 * step, y: 96 });
+        sim.step(1 / 60);
+      }
+      sim.applyInput({ type: 'release', id: 'f' });
+      run(sim, 120);
+      return Array.from(sim.positions);
+    };
+    expect(runOnce()).toEqual(runOnce());
+  });
+});
+
 describe('SimCore — reset', () => {
   it('位置回到 rest、速度歸零、清掉 Grab／Pin', () => {
     const sim = new SimCore(MESH());

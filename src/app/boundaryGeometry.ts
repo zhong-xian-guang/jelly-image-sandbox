@@ -1,6 +1,6 @@
 /**
- * 邊界幾何換算（issue #14 / T13；issue #92 追加 Floor）——切邊界模式時從 Jelly 目前
- * bbox 算出該模式的幾何：
+ * 邊界幾何換算與接觸常數（issue #14 / T13；issue #92 追加 Floor；issue #93 追加摩擦）
+ * ——切邊界模式時從 Jelly 目前 bbox 算出該模式的幾何：
  *
  * - **Walled**：圍著 bbox 展開一個正方形範圍當 `WalledBoundary` 的 AABB，給甩動留
  *   空間，同時仍然是有限大小（見 `docs/design/simulation-and-mesh.md`：「Walled：
@@ -14,6 +14,13 @@ import type { Bbox } from '../sim';
 
 /** Walled 範圍邊長 = Jelly bbox 較長邊 × 此係數，未指定 `sizeFactor` 時的預設值。 */
 export const WALLED_SIZE_FACTOR = 4;
+
+/**
+ * 牆與地板的切線摩擦（issue #93 / V3 T2-3；ADR-0012：固定手感值、不給拉霸、不進
+ * 片段檔）。語意見 `ContactOptions.friction`；Walled 與 Floor 共用同一個值。實測
+ * 見 `docs/design/simulation-and-mesh.md` 參數表。
+ */
+export const BOUNDARY_FRICTION = 0.3;
 
 /**
  * 以 `bbox` 中心為中心、邊長 = `bbox` 較長邊 × `sizeFactor` 的正方形範圍。
