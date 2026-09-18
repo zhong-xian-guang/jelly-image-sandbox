@@ -1220,7 +1220,19 @@ describe('SimCore — 邊界摩擦（issue #93 / V3 T2-3；ADR-0012）', () => {
     return restX;
   }
 
-  /** 甩完跑 4 s（足夠兩種摩擦都停下）、再跑 1 s 確認質心 x 已不再變，回傳總滑行距離。 */
+  /**
+   * 甩完跑 4 s，回傳質心 x 總位移。有摩擦那組 4 s 早就停了（下一個測試驗）；無摩擦那組
+   * 在側視阻尼拆開後（issue #106）質心只剩 `airDamping`，不會自己停——所以這裡量的是
+   * 固定時間的距離，不是「停下的距離」。
+   */
+  function slideFor4s(sim: SimCore, boundary: Boundary): number {
+    const restX = flingAlongFloor(sim, boundary);
+    run(sim, 240);
+    expect(allFinite(sim.positions)).toBe(true);
+    return sim.centroid().x - restX;
+  }
+
+  /** 甩完跑 4 s、再跑 1 s 確認質心 x 已不再變，回傳總滑行距離。 */
   function slideUntilStopped(sim: SimCore, boundary: Boundary): number {
     const restX = flingAlongFloor(sim, boundary);
     run(sim, 240);
@@ -1233,7 +1245,7 @@ describe('SimCore — 邊界摩擦（issue #93 / V3 T2-3；ADR-0012）', () => {
   }
 
   it('重力 + Floor + 側向初速：friction > 0 時質心 x 停下的距離明顯短於 friction = 0', () => {
-    const slick = slideUntilStopped(new SimCore(MESH()), new FloorBoundary({ floorY: GROUND_Y }));
+    const slick = slideFor4s(new SimCore(MESH()), new FloorBoundary({ floorY: GROUND_Y }));
     const rough = slideUntilStopped(
       new SimCore(MESH()),
       new FloorBoundary({ floorY: GROUND_Y, friction: 0.3 }),
@@ -1250,8 +1262,9 @@ describe('SimCore — 邊界摩擦（issue #93 / V3 T2-3；ADR-0012）', () => {
   });
 
   it('Walled 有摩擦：重力下沿箱底滑，同樣比無摩擦停得短', () => {
-    const box = { minX: -2000, minY: -100, maxX: 2000, maxY: GROUND_Y };
-    const slick = slideUntilStopped(new SimCore(MESH()), new WalledBoundary(box));
+    // 箱子要夠寬：無摩擦那組 4 s 會滑 ~6000 單位，撞到右牆會被彈回來、距離量不準。
+    const box = { minX: -20000, minY: -100, maxX: 20000, maxY: GROUND_Y };
+    const slick = slideFor4s(new SimCore(MESH()), new WalledBoundary(box));
     const rough = slideUntilStopped(
       new SimCore(MESH()),
       new WalledBoundary({ ...box, friction: 0.3 }),
@@ -1392,10 +1405,11 @@ describe('SimCore — Gravity（issue #91 / V3 T2-1；ADR-0012）', () => {
     expect(play(true)).toEqual(play(false));
   });
 
-  it('gravity > 0、damping = 0、Infinite：自由落體 N 步後質心 y 位移 ≈ ½ g t²（容許 symplectic Euler 一階誤差）', () => {
+  it('gravity > 0、damping = airDamping = 0、Infinite：自由落體 N 步後質心 y 位移 ≈ ½ g t²（容許 symplectic Euler 一階誤差）', () => {
     const sim = new SimCore(MESH());
     sim.params.gravity = 1000;
     sim.params.damping = 0;
+    sim.params.airDamping = 0; // issue #106 之後質心速度吃的是這個
     const y0 = cy(sim);
     const x0 = sim.centroid().x;
     const frames = 60; // t = 1 s
@@ -1477,6 +1491,91 @@ describe('SimCore — Gravity（issue #91 / V3 T2-1；ADR-0012）', () => {
     const y0 = cy(sim);
     run(sim, 30);
     expect(cy(sim)).toBeGreaterThan(y0);
+  });
+});
+
+describe('SimCore — 側視阻尼只作用在內部運動（issue #106 / V3 T2-4；ADR-0012）', () => {
+  const cy = (sim: SimCore) => sim.centroid().y;
+
+  it('gravity > 0、預設阻尼、Infinite：自由落體第 2 秒的位移明顯大於第 1 秒（看得到加速）', () => {
+    // 舊路徑（全域阻尼 0.02 也套在質心速度上）終端速度 g / 4.8、0.2 s 就到，兩秒的
+    // 位移比 ≈ 1.1；拆開後質心只剩 airDamping，比值接近自由落體的 3。
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    const y0 = cy(sim);
+    run(sim, 60);
+    const first = cy(sim) - y0;
+    run(sim, 60);
+    const second = cy(sim) - y0 - first;
+    expect(first).toBeGreaterThan(0);
+    expect(second / first).toBeGreaterThan(2);
+    expect(second / first).toBeLessThan(3); // airDamping > 0 → 略低於理想值 3
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('airDamping 決定質心速度的衰減：airDamping = damping 時退回舊的等速落體', () => {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    sim.params.airDamping = sim.params.damping;
+    const y0 = cy(sim);
+    run(sim, 60);
+    const first = cy(sim) - y0;
+    run(sim, 60);
+    const second = cy(sim) - y0 - first;
+    expect(second / first).toBeLessThan(1.4); // 第 1 秒含 0.2 s 加速段，舊路徑實測 ≈ 1.25
+  });
+
+  it('gravity > 0 + Floor：從 2 倍身高落下，落地後 ≤ 2 s 靜止、拉伸比回到 ~1、不橫向漂移', () => {
+    // 落 200 單位、~890 單位／秒著地（舊路徑終端速度只有 417）：壓扁到 0.64、彈起
+    // 一次（~70 單位）、1.5 s 第二次落地，之後靠內部阻尼在 ~1 s 內靜止。
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    sim.setBoundary(new FloorBoundary({ floorY: sim.bbox().maxY + 200, friction: 0.3 }));
+    run(sim, 180); // 3 s
+    const a = sim.centroid();
+    run(sim, 60);
+    const b = sim.centroid();
+    expect(Math.abs(a.y - b.y)).toBeLessThan(0.5);
+    expect(Math.abs(a.x - b.x)).toBeLessThan(0.1);
+    const st = sim.stretchStats();
+    expect(st.avg).toBeGreaterThan(0.95);
+    expect(st.avg).toBeLessThan(1.05);
+    expect(sim.kineticEnergy()).toBeLessThan(1);
+    expect(allFinite(sim.positions)).toBe(true);
+  });
+
+  it('gravity = 0：airDamping 完全不參與（俯視路徑不變）', () => {
+    const play = (airDamping: number): number[] => {
+      const sim = new SimCore(MESH());
+      sim.params.airDamping = airDamping;
+      sim.applyInput({ type: 'grab', id: 1, x: 0, y: 0 });
+      sim.applyInput({ type: 'moveGrab', id: 1, x: 60, y: 10 });
+      run(sim, 10);
+      sim.applyInput({ type: 'release', id: 1 });
+      run(sim, 60);
+      return Array.from(sim.positions);
+    };
+    expect(play(0)).toEqual(play(0.5));
+  });
+
+  it('gravity > 0 + Infinite：側甩後質心 x 速度只被 airDamping 慢慢吃掉，1 s 後仍保有大半', () => {
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 48 });
+    for (let step = 1; step <= 8; step++) {
+      sim.applyInput({ type: 'moveGrab', id: 'g', x: 96 + 40 * step, y: 48 });
+      sim.step(1 / 60);
+    }
+    sim.applyInput({ type: 'release', id: 'g' });
+    const x0 = sim.centroid().x;
+    run(sim, 6);
+    const early = (sim.centroid().x - x0) / 0.1; // 放手後 0.1 s 的平均 x 速度
+    run(sim, 54);
+    const x1 = sim.centroid().x;
+    run(sim, 6);
+    const late = (sim.centroid().x - x1) / 0.1; // 1 s 後
+    expect(early).toBeGreaterThan(0);
+    expect(late / early).toBeGreaterThan(0.6); // 舊路徑 1 s 後只剩 e^(−4.8) ≈ 0.8%
   });
 });
 

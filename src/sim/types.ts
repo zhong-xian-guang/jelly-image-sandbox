@@ -80,8 +80,21 @@ export interface SimParams {
   cellFrac: number;
   /** shape-matching 把位置拉向 goal 的混合係數 `α_sm`。預設 0.7。 */
   alphaSm: number;
-  /** 每個 substep 的全域速度阻尼：`v *= (1 − damping)`。調到放手後約 1–2 秒靜止。預設 0.02。 */
+  /**
+   * 每個 substep 的速度阻尼：`v *= (1 − damping)`。調到放手後約 1–2 秒靜止。預設 0.02。
+   * 俯視（`gravity = 0`）時套在每個 Particle 的完整速度上（桌面摩擦感）；側視
+   * （`gravity ≠ 0`）時只套在**相對質心**的內部運動（抖動、拉伸、自轉）上，整體平移
+   * 改由 `airDamping` 管（issue #106）。
+   */
   damping: number;
+  /**
+   * 側視（`gravity ≠ 0`）時質心速度的「空氣阻力」：每個 substep `v̄ *= (1 − airDamping)`
+   * （issue #106 / V3 T2-4；ADR-0012）。全域 `damping` 套在落體上等於終端速度 `g / 4.8`、
+   * 0.2 s 就到，看起來沒有加速度；拆開後質心只吃這個很小的值（終端速度 `g / 0.24`、
+   * 63% 要 ~4 s），自由落體看得到先慢後快，停下來交給牆／地板摩擦（issue #93）。
+   * `gravity = 0` 時完全不參與。預設 0.001。
+   */
+  airDamping: number;
   /** 每次 `step(dt)` 的物理 substep 數（弱裝置降到 2）。預設 4。 */
   substeps: number;
   /** Grab 硬度 `β`：1 = 精準貼目標點、< 1 = 彈性把手。預設 1。 */
@@ -113,6 +126,7 @@ export const DEFAULT_SIM_PARAMS: SimParams = {
   cellFrac: 0.15,
   alphaSm: 0.7,
   damping: 0.02,
+  airDamping: 0.001,
   substeps: 4,
   grabBeta: 1,
   xpbd: true,
