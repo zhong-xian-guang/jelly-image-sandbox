@@ -68,12 +68,12 @@ function meshBBox(m: SimMesh) {
   return { minX, minY, maxX, maxY };
 }
 
-interface Body {
+interface JellyEntry {
   sim: SplitSimCore;
   shape: ShapeId;
   hue: number;
 }
-const bodies: Body[] = [];
+const jellies: JellyEntry[] = [];
 let nextId = 1;
 const params: CollisionParams = { ...DEFAULT_COLLISION };
 let gravity = 3000;
@@ -96,7 +96,7 @@ function spawn(shape: ShapeId, cx: number, cy: number): number {
   const id = nextId++;
   const sim = new SplitSimCore(id, mesh, { gravity: gravityOn ? gravity : 0 });
   sim.setBoundary(walls);
-  bodies.push({ sim, shape, hue: (id * 67) % 360 });
+  jellies.push({ sim, shape, hue: (id * 67) % 360 });
   return id;
 }
 
@@ -106,13 +106,13 @@ function shapeHalfHeight(shape: ShapeId): number {
 }
 
 function clearAll(): void {
-  bodies.length = 0;
+  jellies.length = 0;
   pileTimer = null;
   for (const id of [...grabs.keys()]) grabs.delete(id);
 }
 
 function setGravityAll(): void {
-  for (const b of bodies) b.sim.params.gravity = gravityOn ? gravity : 0;
+  for (const b of jellies) b.sim.params.gravity = gravityOn ? gravity : 0;
 }
 
 // ---- 情境 -----------------------------------------------------------------------------
@@ -201,7 +201,7 @@ const toScreenY = (y: number) => (y - WORLD.minY) * scale + oy;
 
 // ---- 輸入 -------------------------------------------------------------------------------
 
-const grabs = new Map<number, Body>();
+const grabs = new Map<number, JellyEntry>();
 let cursor = { x: MID_X, y: 300 };
 
 stage.addEventListener('pointerdown', (e) => {
@@ -213,7 +213,7 @@ stage.addEventListener('pointerdown', (e) => {
   }
   if (e.button !== 0) return;
   // 依 id 倒序（最後生成在最上面）：第一個成功建立 Grab 的塊拿走這個指標。
-  for (const b of [...bodies].sort((x, y) => y.sim.id - x.sim.id)) {
+  for (const b of [...jellies].sort((x, y) => y.sim.id - x.sim.id)) {
     const before = b.sim.grabCount;
     b.sim.applyInput({ type: 'grab', id: e.pointerId, x: p.x, y: p.y });
     if (b.sim.grabCount > before) {
@@ -300,6 +300,34 @@ pileShapeEl.addEventListener('change', () => (pileShape = pileShapeEl.value as S
 for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-scenario]')) {
   btn.addEventListener('click', () => scenarios[btn.dataset.scenario!]!());
 }
+/** spec 草案 vs. 本 prototype 推薦組合，一鍵切換（人工驗證兩者對照用）。 */
+const PRESETS: Record<string, Partial<CollisionParams>> = {
+  spec: {
+    algorithm: 'pbd-tri',
+    frictionMode: 'velocity',
+    normalMode: 'winding',
+    impactAbsorb: 0,
+    skin: 0,
+    rounds: 1,
+    particleShare: 0.5,
+    friction: 0.3,
+    passes: 'both',
+    order: 'after',
+    surfaceOnly: false,
+  },
+  recommended: { ...DEFAULT_COLLISION },
+};
+function applyPreset(name: string): void {
+  Object.assign(params, PRESETS[name]!);
+  syncToggles();
+  for (const id of ['rounds', 'particleShare', 'friction', 'skin', 'impactAbsorb'] as const) {
+    const input = $<HTMLInputElement>(id);
+    input.value = String(params[id]);
+    (input.nextElementSibling as HTMLOutputElement).value = input.value;
+  }
+}
+$('presetSpec').addEventListener('click', () => applyPreset('spec'));
+$('presetRecommended').addEventListener('click', () => applyPreset('recommended'));
 $('clear').addEventListener('click', clearAll);
 $('pause').addEventListener('click', () => {
   paused = !paused;
@@ -352,8 +380,8 @@ function updatePanel(): void {
   stats.pairs = avgPairs.value;
   stats.tests = avgTests.value;
   stats.contacts = avgContacts.value;
-  const n = bodies.reduce((s, b) => s + b.sim.count, 0);
-  $('s-count').textContent = `${bodies.length} / ${n}`;
+  const n = jellies.reduce((s, b) => s + b.sim.count, 0);
+  $('s-count').textContent = `${jellies.length} / ${n}`;
   $('s-raf').textContent = `${fmt(stats.raf, 1)} ms（${fmt(1000 / Math.max(stats.raf, 0.01), 0)} fps）`;
   $('s-sim').textContent = `${fmt(stats.sim)} ms`;
   $('s-col').textContent = `${fmt(stats.col)} ms`;
@@ -386,7 +414,7 @@ function draw(): void {
   ctx.fillStyle = '#1c2a24';
   ctx.fillRect(toScreenX(WORLD.minX), toScreenY(WORLD.maxY), (WORLD.maxX - WORLD.minX) * scale, 6);
 
-  const sorted = [...bodies].sort((x, y) => x.sim.id - y.sim.id);
+  const sorted = [...jellies].sort((x, y) => x.sim.id - y.sim.id);
   const sims = sorted.map((b) => b.sim);
   let penCount = 0;
   let ke = 0;
@@ -475,7 +503,7 @@ function frame(now: number): void {
     acc -= DT;
     stepped = true;
     tickPile(DT);
-    const sims = bodies.map((b) => b.sim);
+    const sims = jellies.map((b) => b.sim);
     const st = stepWorld(sims, DT, substeps, params, collideOn);
     colStats.pairs += st.pairs;
     colStats.tests += st.tests;
@@ -524,7 +552,7 @@ setTimeout(() => {
 
 // Playwright／console 用。
 (globalThis as any).__proto = {
-  bodies,
+  jellies,
   spawn,
   clearAll,
   scenarios,

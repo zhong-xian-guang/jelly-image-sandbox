@@ -12,7 +12,7 @@
  *     直接透過 `as any` 碰 `SimCore` 的 private 欄位（TS private 只是編譯期），並複製
  *     `step()` 迴圈主體——**與 `src/sim/SimCore.ts` 的 step() 逐步對齊**，若 main 改了
  *     step() 這裡不會自動跟上。
- *  2. `resolveCollisions(bodies, params)`：就地改每塊的 `pos`／`prev`。
+ *  2. `resolveCollisions(jellies, params)`：就地改每塊的 `pos`／`prev`。
  */
 
 import type { SimMesh } from '../src/mesh';
@@ -321,6 +321,7 @@ export class SplitSimCore extends SimCore {
   penetrating(others: readonly SplitSimCore[], out: number[]): void {
     for (const o of others) {
       if (o === this || !overlaps(this.bb, o.bb, 0)) continue;
+      o.triGridBuilt = false; // 診斷用，不沿用碰撞那次（cell 可能不同）的網格。
       ensureTriGrid(o, o.avgEdge * 2);
       for (let i = 0; i < this.count; i++) {
         if (findContainingTri(o, this.positions[2 * i]!, this.positions[2 * i + 1]!) >= 0) out.push(i);
@@ -393,7 +394,7 @@ export const DEFAULT_COLLISION: CollisionParams = {
   passes: 'both',
   order: 'after',
   normalMode: 'toward-surface',
-  impactAbsorb: 0.5,
+  impactAbsorb: 0.75,
 };
 
 export interface CollisionStats {
@@ -659,7 +660,7 @@ function absorbImpact(a: SplitSimCore, b: SplitSimCore, absorb: number): void {
   b.meanDy -= ny * dB;
 }
 
-/** 有序塊對 (A, B)：A 的 Particle 對 B。回傳 [tests, contacts]。 */
+/** 有序塊對 (A, B)：A 的 Particle 對 B。tests／contacts 累加進 `stats`。 */
 function solvePairEdges(
   a: SplitSimCore,
   b: SplitSimCore,
@@ -775,12 +776,12 @@ function solvePairParticles(
  * **有序**塊對各跑一次（A→B、B→A），`particle` 對每個無序塊對跑一次。
  */
 export function resolveCollisions(
-  bodies: readonly SplitSimCore[],
+  jellies: readonly SplitSimCore[],
   p: CollisionParams,
 ): CollisionStats {
   const t0 = performance.now();
   const stats: CollisionStats = { pairs: 0, tests: 0, contacts: 0, ms: 0, corrX: 0, corrY: 0, maxDepth: 0, tBounds: 0, tGrid: 0, tPairs: 0 };
-  const sorted = bodies as SplitSimCore[]; // 頁面依 id 生成順序維護，不再每次排序。
+  const sorted = [...jellies].sort((x, y) => x.id - y.id); // 依 id 走訪（決定性），不信任呼叫端順序。
   for (const b of sorted) {
     b.refreshBounds();
     b.triGridBuilt = false;
@@ -804,7 +805,8 @@ export function resolveCollisions(
           PASS.ny = 0;
           PASS.count = 0;
           solvePairEdges(a, b, p, stats);
-          if (PASS.count > 0) absorbImpact(a, b, p.impactAbsorb);
+          // 整體衝量每個**無序**塊對只做一次（否則 A→B、B→A 各吸一次，實效 1 − (1 − k)²）。
+          if (PASS.count > 0 && (p.passes === 'oneway' || j > i)) absorbImpact(a, b, p.impactAbsorb);
         }
       }
     }
@@ -829,19 +831,19 @@ export function resolveCollisions(
  * `finishSubstep`（spec `World.step` 的形狀）。回傳這幀碰撞統計的加總。
  */
 export function stepWorld(
-  bodies: readonly SplitSimCore[],
+  jellies: readonly SplitSimCore[],
   dt: number,
   substeps: number,
   p: CollisionParams,
   enabled: boolean,
 ): CollisionStats {
   const total: CollisionStats = { pairs: 0, tests: 0, contacts: 0, ms: 0, corrX: 0, corrY: 0, maxDepth: 0, tBounds: 0, tGrid: 0, tPairs: 0 };
-  if (!(dt > 0) || bodies.length === 0) return total;
+  if (!(dt > 0) || jellies.length === 0) return total;
   const subs = Math.max(1, Math.floor(substeps));
   const h = dt / subs;
   const collide = () => {
-    if (enabled && bodies.length > 1) {
-      const st = resolveCollisions(bodies, p);
+    if (enabled && jellies.length > 1) {
+      const st = resolveCollisions(jellies, p);
       total.pairs += st.pairs;
       total.tests += st.tests;
       total.contacts += st.contacts;
@@ -853,15 +855,15 @@ export function stepWorld(
       total.tGrid += st.tGrid;
       total.tPairs += st.tPairs;
     } else {
-      for (const b of bodies) b.refreshBounds();
+      for (const b of jellies) b.refreshBounds();
     }
   };
   for (let s = 0; s < subs; s++) {
-    for (const b of bodies) b.predict(h);
+    for (const b of jellies) b.predict(h);
     if (p.order !== 'after') collide();
-    for (const b of bodies) b.solveInternal(h);
+    for (const b of jellies) b.solveInternal(h);
     if (p.order !== 'before') collide();
-    for (const b of bodies) b.finishSubstep(h);
+    for (const b of jellies) b.finishSubstep(h);
   }
   return total;
 }

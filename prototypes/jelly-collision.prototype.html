@@ -237,6 +237,11 @@
       </div>
 
       <h2>開關與參數</h2>
+      <div class="row">
+        <button id="presetSpec">套 spec 原案</button>
+        <button id="presetRecommended" class="primary">套推薦組合（預設）</button>
+      </div>
+      <p>spec 原案 = 三角形內外 + 邊外法線 + 切線速度衰減、無整體衝量。先套原案跑情境 ①②看它怎麼壞，再套推薦組合對照。</p>
       <label class="check"><input type="checkbox" id="gravityOn" checked /> 重力（側視）</label>
       <label class="field"><span>重力 g</span><input type="range" id="gravity" min="0" max="10000" step="100" value="3000" /><output for="gravity"></output></label>
       <label class="check"><input type="checkbox" id="collideOn" checked /> 跨塊碰撞</label>
@@ -278,7 +283,7 @@
           <option value="winding">邊外法線（靜止繞向）</option>
         </select>
       </label>
-      <label class="field"><span>整體衝量吸收（候選 C）</span><input type="range" id="impactAbsorb" min="0" max="1" step="0.05" value="0.5" /><output for="impactAbsorb"></output></label>
+      <label class="field"><span>整體衝量吸收（候選 C）</span><input type="range" id="impactAbsorb" min="0" max="1" step="0.05" value="0.75" /><output for="impactAbsorb"></output></label>
       <label class="field"><span>每 substep 輪數</span><input type="range" id="rounds" min="1" max="4" step="1" value="1" /><output for="rounds"></output></label>
       <label class="field"><span>Particle 分到的比例</span><input type="range" id="particleShare" min="0" max="1" step="0.05" value="0.5" /><output for="particleShare"></output></label>
       <label class="field"><span>切線摩擦</span><input type="range" id="friction" min="0" max="1" step="0.05" value="0.3" /><output for="friction"></output></label>
