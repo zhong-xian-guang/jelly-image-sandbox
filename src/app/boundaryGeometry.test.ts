@@ -49,7 +49,7 @@ describe('computeFloorY（issue #92 / V3 T2-2）', () => {
 });
 
 describe('BOUNDARY_FRICTION（issue #93）', () => {
-  it('是 (0, 1] 之間的固定手感值——0 等於沒接摩擦、> 1 會把切線速度反向', () => {
+  it('是 (0, 1] 之間的固定手感值——0 等於沒摩擦、> 1 會把切線速度反向', () => {
     expect(BOUNDARY_FRICTION).toBeGreaterThan(0);
     expect(BOUNDARY_FRICTION).toBeLessThanOrEqual(1);
   });

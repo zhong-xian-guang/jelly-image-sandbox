@@ -83,15 +83,14 @@ export class WalledBoundary implements Boundary {
     const { minX, minY, maxX, maxY } = this.box;
     const e = this.restitution;
     const f = this.friction;
+    const rough = f > 0;
     for (let i = 0; i < count; i++) {
       const ix = 2 * i;
       const iy = ix + 1;
       const hitX = clampAxis(pos, prev, ix, minX, maxX, e);
       const hitY = clampAxis(pos, prev, iy, minY, maxY, e);
-      if (f > 0) {
-        if (hitX) applyFriction(pos, prev, iy, f);
-        if (hitY) applyFriction(pos, prev, ix, f);
-      }
+      if (rough && hitX) applyFriction(pos, prev, iy, f);
+      if (rough && hitY) applyFriction(pos, prev, ix, f);
     }
   }
 }
@@ -126,10 +125,11 @@ export class FloorBoundary implements Boundary {
     const floorY = this.floorY;
     const e = this.restitution;
     const f = this.friction;
+    const rough = f > 0;
     for (let i = 0; i < count; i++) {
       const ix = 2 * i;
       const hit = clampAxis(pos, prev, ix + 1, -Infinity, floorY, e);
-      if (hit && f > 0) applyFriction(pos, prev, ix, f);
+      if (rough && hit) applyFriction(pos, prev, ix, f);
     }
   }
 }
