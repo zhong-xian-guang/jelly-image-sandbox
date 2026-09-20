@@ -523,6 +523,12 @@ export class JellySandbox {
    * 都要重跑整條網格管線（幾十到幾百毫秒一塊）。「清空全部」與載入片段時清掉。
    */
   private readonly meshMemo = new Map<string, SimMesh>();
+  /**
+   * 算繪端目前每塊拿到的 rest 網格（issue #95）——`syncRenderer` 用它偵測「同 id 但
+   * 網格換了」（重建 = 同 id `remove` + `spawn`，兩步在同一個同步呼叫裡完成，下一幀
+   * 只看 id 集合會以為沒變、沿用舊幾何，`setPositions` 長度對不上）。
+   */
+  private readonly renderedMeshes = new Map<string, SimMesh>();
   /** 下一塊 Jelly／下一張來源圖的流水號（`jelly/<N>`／`src/<N>`），隨片段保存。 */
   private nextJellyNum = 1;
   private nextSourceNum = 1;
@@ -1698,21 +1704,27 @@ export class JellySandbox {
   }
 
   /**
-   * 每幀把算繪端的塊集合同步成 `World.jellies()`（issue #95）：新塊 `addJelly`（貼圖從
-   * 來源圖庫查）、消失的 `removeJelly`、順序依 id（後生成在上）。id 序列沒變時只跳過
-   * 重排；位置上傳在 `frame()` 另外做。
+   * 每幀把算繪端的塊集合同步成 `World.jellies()`（issue #95）：新塊（或同 id 但網格換了
+   * 的塊，見 `renderedMeshes`）`addJelly`（貼圖從來源圖庫查）、消失的 `removeJelly`、
+   * 順序依 id（後生成在上）。id 序列沒變時跳過重排；位置上傳在 `frame()` 另外做。
    */
   private syncRenderer(): void {
     const views = this.world.jellies();
     const live = new Set<string>();
     for (const j of views) {
       live.add(j.id);
-      if (this.renderer.hasJelly(j.id)) continue;
+      if (this.renderedMeshes.get(j.id) === j.mesh) continue;
       const source = this.sources.get(j.sourceId);
       if (!source) throw new Error(`來源圖「${j.sourceId}」不存在`);
+      this.renderer.removeJelly(j.id); // 同 id 換網格時先拆舊的；不存在時 no-op
       this.renderer.addJelly(j.id, j.mesh, j.positions, source.texture);
+      this.renderedMeshes.set(j.id, j.mesh);
     }
-    for (const id of this.renderer.jellyIds()) if (!live.has(id)) this.renderer.removeJelly(id);
+    for (const id of this.renderer.jellyIds()) {
+      if (live.has(id)) continue;
+      this.renderer.removeJelly(id);
+      this.renderedMeshes.delete(id);
+    }
     const order = views.map((j) => j.id);
     const current = this.renderer.jellyIds();
     if (order.some((id, i) => id !== current[i])) this.renderer.setJellyOrder(order);
