@@ -5,7 +5,7 @@
 ## 情境前提
 
 - **預設俯視、無重力；重力 > 0 視為側視**（[ADR-0012](../adr/0012-gravity-is-a-slider-not-a-mode.md)、issue #91）。重力 = 0 時 Jelly 靜置即靜止，Fling 給初速、靠阻尼收斂；重力 > 0 時所有 Particle 持續被往 +y（畫面下方）拉，落到邊界的地板上壓扁、回彈、靜止。
-- 桌上永遠一塊 Jelly。Multi-grab 是同一塊上的多個 Grab。
+- 桌上可以同時有**多塊** Jelly（[ADR-0013](../adr/0013-multi-jelly-scene-is-setup-spawn-while-recording-is-an-event.md)、issue #95）：每次匯入在畫面中央新增一塊、既有的都留著；`停止／重設` 回到 Scene（片段第 0 步就存在的那組塊）。每塊是一個獨立的求解器（`SimCore`），Softness／Tap 力道／重力全域共用；Region 邊長、Tap 半徑、Grab 吸附半徑等「對角線 × 係數」的參數用**各塊自己**的對角線。Multi-grab 的多個 Grab 可以落在不同塊上。塊與塊之間的碰撞見 V3 T3-3（issue #96）；本階段重疊就互相穿過。
 - 目標裝置：2020 後中階手機 60fps；更弱裝置降 substep。
 
 ## 匯入 → 網格管線
@@ -72,7 +72,9 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 - **Sim mesh 生成是一個模組**：`(Contour, 內部點參數) → (positions, indices, uv, restAreas)`。換掉三角化實作（如日後改 spade→wasm）只動這裡。
 - **Grab／Pin 是 `(世界座標點) → {三角形, 重心座標}` 的 picking + 一條位置約束**。輸入層負責 picking（點擊命中哪個三角形），求解器只認 `{三角形, 重心座標, 目標點, locked}`。
 - **輸入走 `applyInput(event)` 單一介面**（見上「輸入介面」）。即時輸入層、Demo、v2 錄製器都經由它，不繞過。
-- **Camera 與求解器無關**：Camera 吃 Jelly 的 bbox + `cameraMove` event，吐世界→螢幕變換；求解器不知道 Camera 存在。
+- **`World` 是多塊容器**（`src/sim/World.ts`，issue #95）：對外契約與 `SimCore` 同形（`applyInput`／`step`／`pick`／`bbox` 聯集／`listPins` 帶 `jellyId`／`reset` …），沙盒只對它說話。每塊一個 `SimCore`；網格由注入的 `meshProvider(sourceId, meshParams, importSize)` 給（`World` 不認得影像位元組，`spawn` 才能同步、在 Track 重播裡生成）。事件路由：`grab`／帶座標的 `pin`／`tap` 依 picking（id 倒序、先命中先贏；都沒中則跨塊最近 Particle 吸附）；`moveGrab`／`release`／`unpin`／`movePin` 依「約束 id → jellyId」表；`setFan`／`clearFan`／`clearPins` 廣播。`spawn`／`remove` 是 `World` 層級的事件（`jellyId` 而非 `id`，`mergeTracks` 不加前綴）。塊的迭代依 id 排序（決定性）。
+- **`SimCore` 的 substep 拆成三段**（issue #95）：`predict(h)`（步驟 1–2）／`solveInternal(h)`（3–6）／`finishSubstep(h)`（7），`step(dt)` = 三者迴圈。`World.step(dt)` 每個 substep 對每塊各跑三段，跨塊碰撞（V3 T3-3）插在第二與第三段之間；`SimCore` 另公開輪廓邊清單（`contour`，只屬於一個三角形的邊，含外法線正負號）、輪廓 Particle 索引（`surfaceParticles`）與 `prevPositions` 給碰撞讀寫。
+- **Camera 與求解器無關**：Camera 吃所有 Jelly 的聯集 bbox（`World.bbox()`，空場 `null` → 鏡頭不動）+ `cameraMove` event，吐世界→螢幕變換；求解器不知道 Camera 存在。
 
 ## 輸入介面
 
@@ -112,7 +114,7 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 
 ## 算繪
 
-- WebGL 每頂點 UV 三角網格：PixiJS `Mesh` / `MeshSimple`，或自寫 shader。
+- WebGL 每頂點 UV 三角網格：PixiJS `Mesh` / `MeshSimple`，或自寫 shader。多塊時每塊一個 `Mesh`（`JellyRenderer.addJelly`／`removeJelly`），繪製順序依 id（後生成在上）；沙盒每幀以 `World.jellies()` 與算繪端 id 集合 diff 同步。
 - 不用 Canvas 2D 逐三角 `drawImage`（慢、有接縫、只能仿射）。
 - Camera 的世界→螢幕轉換套在繪製與 picking 兩端。
 
