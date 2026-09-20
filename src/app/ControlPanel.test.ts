@@ -79,6 +79,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onImportSizeChange: vi.fn(),
     onMeshDensityChange: vi.fn(),
     onRebuild: vi.fn(),
+    onClearAll: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
@@ -1331,6 +1332,37 @@ describe('ControlPanel — 匯入區塊：「重建」按鈕（issue #90 / V3 T1
     // 有 Track 也一樣：鎖與解鎖只看錄製／播放狀態。
     panel.setGroups(groupRows());
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    panel.setPlaybackControlsEnabled(false);
+    expect(button.disabled).toBe(true);
+    panel.setPlaybackControlsEnabled(true);
+    expect(button.disabled).toBe(false);
+  });
+});
+
+describe('ControlPanel — 「清空全部」按鈕（issue #95 / V3 T3-2；ADR-0013）', () => {
+  function clearAllButton(panel: ControlPanel): HTMLButtonElement {
+    const button = [...panel.element.querySelectorAll('button')].find(
+      (b) => b.textContent === '清空全部',
+    );
+    expect(button).toBeDefined();
+    return button!;
+  }
+
+  it('面板有一顆「清空全部」按鈕，點擊呼叫 onClearAll', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    clearAllButton(panel).click();
+    expect(opts.onClearAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('錄製中／播放中 → 按鈕變灰，結束後解鎖', () => {
+    const panel = new ControlPanel(makeOptions());
+    const button = clearAllButton(panel);
+    expect(button.disabled).toBe(false);
+    panel.setRecordingActive(true);
+    expect(button.disabled).toBe(true);
+    panel.setRecordingActive(false);
+    expect(button.disabled).toBe(false);
     panel.setPlaybackControlsEnabled(false);
     expect(button.disabled).toBe(true);
     panel.setPlaybackControlsEnabled(true);

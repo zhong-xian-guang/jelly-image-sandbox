@@ -280,10 +280,16 @@ export interface ControlPanelOptions {
    * 「重建」按鈕被按（issue #90 / V3 T1-3，見 CONTEXT.md「重建」）——用最近一次匯入
    * 的來源圖＋目前兩條拉霸，重新生成場上的果凍（走跟匯入完全相同的換網格路徑）。
    * 跟兩條拉霸不同，這顆**會**被 `setPlaybackControlsEnabled`／`setRecordingActive`
-   * 鎖住（比照片段初始 Pin 兩顆鈕）：換網格會清空 Track（v3 Scene／issue #87 落地前
-   * 的暫行規則），錄製中／播放中按下沒意義。
+   * 鎖住（比照片段初始 Pin 兩顆鈕）：重建只改 Scene、不是 Track 事件（ADR-0013），
+   * 錄製中／播放中按下沒意義。issue #95 起對場上**每一塊**重建、不再清空 Track。
    */
   onRebuild: () => void;
+  /**
+   * 「清空全部」按鈕被按（issue #95 / V3 T3-2；ADR-0013）——把 Scene、Track、群組、片段
+   * 初始 Pin、來源圖庫一起清成一個新片段（空桌面）。匯入／生成／移除本身不再清任何
+   * 東西，這是唯一會清掉片段的入口。錄製中／播放中鎖住（比照「重建」）。
+   */
+  onClearAll: () => void;
   onBoundaryChange: (mode: BoundaryMode) => void;
   onSoftnessChange: (t: number) => void;
   onTapStrengthChange: (strength: number) => void;
@@ -357,6 +363,8 @@ export class ControlPanel {
   private readonly setupPinsClearButton: HTMLButtonElement;
   /** 「重建」鈕（issue #90）——錄製中／播放中鎖住，見 `updateTrackControlsState`。 */
   private readonly rebuildButton: HTMLButtonElement;
+  /** 「清空全部」鈕（issue #95）——同上鎖法。 */
+  private readonly clearAllButton: HTMLButtonElement;
   /**
    * 「鎖定跟隨」勾選框（issue #36 追加把手）——`setFollowLocked` 讓 `JellySandbox`
    * 每幀把它同步到相機實際的 `followEnabled`，這樣相機軌播放（`setState` 硬切、
@@ -609,12 +617,18 @@ export class ControlPanel {
     // 「重建」鈕（issue #90）放在「匯入」區塊最後：拉完拉霸按一下就看到效果。
     const rebuild = this.rebuildRow(opts.onRebuild);
     this.rebuildButton = rebuild.button;
+    // 「清空全部」（issue #95）緊接在匯入／存取片段三顆鈕之後：它是「新片段」的入口，
+    // 跟「載入片段」同一組語意（整份片段換掉），放一起最直覺。
+    const clearAll = this.buttonRowEl('清空全部', opts.onClearAll);
+    clearAll.button.title = '清掉桌上所有果凍、Track、群組與片段初始 Pin，從空桌面重新開始';
+    this.clearAllButton = clearAll.button;
 
     panel.append(
       this.perfStatus,
       this.buttonRow('匯入圖片…', opts.onImportImage),
       this.buttonRow('儲存片段', opts.onSaveClip),
       this.buttonRow('載入片段…', opts.onLoadClip),
+      clearAll.row,
       toolSection,
       boundary.row,
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
@@ -795,8 +809,10 @@ export class ControlPanel {
     // 片段初始 Pin 的兩顆鈕比照 Track 清單編輯：錄製中／播放中鎖住（issue #39）。
     this.setupPinsSnapshotButton.disabled = busy;
     this.setupPinsClearButton.disabled = busy;
-    // 「重建」鈕同理（issue #90）：換網格會清空 Track，錄製中／播放中鎖住。
+    // 「重建」鈕（issue #90）錄製中／播放中鎖住：重建只改 Scene、不是事件（ADR-0013）。
     this.rebuildButton.disabled = busy;
+    // 「清空全部」（issue #95）同理：它會清掉正在錄／正在播的片段本身。
+    this.clearAllButton.disabled = busy;
     // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
     this.playAllButton.disabled = busy || this.trackCount === 0 || this.playableTrackCount === 0;
     this.addGroupButton.disabled = busy;
@@ -1118,14 +1134,13 @@ export class ControlPanel {
   }
 
   /**
-   * 「重建」按鈕列（issue #90）——回傳按鈕本身讓建構子記進 `rebuildButton`，
-   * `updateTrackControlsState` 才管得到它的 `disabled`。tooltip 裡的「會清空 Track」
-   * 是 v3 Scene（issue #87）落地前沿用「換網格 = 清空片段」的暫行行為。
+   * 「重建」按鈕列（issue #90；issue #95 起對每一塊）——回傳按鈕本身讓建構子記進
+   * `rebuildButton`，`updateTrackControlsState` 才管得到它的 `disabled`。
    */
   private rebuildRow(onRebuild: () => void): { row: HTMLElement; button: HTMLButtonElement } {
     const result = this.buttonRowEl('重建', onRebuild);
     result.button.title =
-      '用最近匯入的圖＋目前的匯入尺寸／網格密度，重新生成場上的果凍（會清空 Track）';
+      '用各塊的來源圖＋目前的匯入尺寸／網格密度，重新生成桌上每一塊果凍（位置不變、Pin 掉光；Track 保留）';
     return result;
   }
 

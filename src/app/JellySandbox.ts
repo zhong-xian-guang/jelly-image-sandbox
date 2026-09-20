@@ -1,27 +1,41 @@
 /**
  * `JellySandbox`（issue #11 / T10，issue #13 / T12 接入 Camera，issue #12 / T11
- * 接入拖放匯入，issue #14 / T13 接入控制面板）——第一個能玩的組裝：`SimCore`
- * （模擬）+ `JellyRenderer`（算繪）+ `PointerInput`（輸入）+ `CameraInput`
- * （相機手動輸入）+ 固定步主迴圈。
+ * 接入拖放匯入，issue #14 / T13 接入控制面板；issue #95 / V3 T3-2 改接多塊容器）
+ * ——第一個能玩的組裝：`World`（多塊 Jelly 的模擬容器，每塊一個 `SimCore`）+
+ * `JellyRenderer`（多網格算繪）+ `PointerInput`（輸入）+ `CameraInput`（相機手動輸入）
+ * + 固定步主迴圈。
+ *
+ * **多塊 Jelly 與 Scene**（issue #95；ADR-0013）：沙盒只對一個 `World` 說話，契約與
+ * `SimCore` 同形。每塊由 `spawn` 事件生成——網格由注入 `World` 的 `meshProvider`
+ * （`buildSimMesh` + `scaleMeshToLongestEdge`，以參數 key memo，見 `meshFor`）給、
+ * 貼圖從沙盒持有的**來源圖庫** `sources`（`src/<N>` → 位元組 + 格式 + 預先解碼的貼圖）
+ * 查。啟動時 Scene = 內建預設果凍一塊（`src/1` / `jelly/1`）。**匯入 = 新增**：拖放／
+ * 按鈕匯入註冊一張新來源、在相機對準處 `spawn` 一塊（`offset` = 相機中心 − 網格
+ * bbox 中心），既有的塊都留著；不再清 Track／群組／片段初始 Pin。不在錄製中做的
+ * 匯入／重建之後 `world.setScene(world.sceneSnapshot())` 讓 Scene 跟上；錄製中的匯入
+ * 則把 `spawn` 錄進 Action Track（播到那步才出現、重設後消失）。「清空全部」
+ * （`clearAll`）是唯一會把 Scene、Track、群組、初始 Pin、圖庫一起清成新片段的入口
+ * （空桌面，內建預設果凍重新註冊為來源但不自動放上桌）。算繪端每幀用
+ * `World.jellies()` 的 id 序列跟 `JellyRenderer` diff 同步（`syncRenderer`）。本票沒有
+ * 碰撞（重疊就互相穿過，V3 T3-3 接）、沒有生成／移除工具（V3 T3-4）。
  *
  * 主迴圈用 `FixedStepAccumulator`（+ 250ms clamp）把真實時間切成 60Hz 固定步推進
  * 求解器；每幀再用**真實**幀時距（clamp 到 100ms）呼叫純函式 `updateCamera` 推進
  * 相機（平滑是視覺的、不進物理）。所有影響模擬的輸入都經 `PointerInput` →
- * `sim.applyInput`；所有相機手動輸入都經 `CameraInput` → 收集成 `CameraCommand[]`
+ * `world.applyInput`；所有相機手動輸入都經 `CameraInput` → 收集成 `CameraCommand[]`
  * 每幀餵給 `updateCamera`（ADR-0005：兩條輸入流都不繞過各自的窄介面）。
  *
  * picking／算繪都吃 `cameraState.transform`——相機平移／縮放後仍命中正確的表面點。
  *
  * **拖放匯入**：`DropImportInput`（薄的接線層，對照 `PointerInput`/`CameraInput`）
- * 挑出拖放的影像檔（png/jpeg/gif）、讀成位元組後回呼 `importImage` → `buildSimMesh` →
- * `scaleMeshToLongestEdge`（匯入尺寸拉霸，issue #88）→ 換一套新的
- * `SimCore` + `JellyRenderer`（拓撲變了、舊 Mesh geometry 沒法沿用）。新 Renderer
- * 先建好、確定成功了才拆舊的，畫面不會有空檔；解碼／建網格失敗（非圖片、不支援
- * 格式、壞檔）一律 `console.warn` ＋ 畫面上閃一行 `notice` 後放棄，不影響原本的
- * Jelly。匯入時把控制面板目前設定（Softness、輕拍力道、Boundary 模式）重新套到
- * 新的 `SimCore`，面板不會顯示跟實際物理不一致的值。「重建」鈕（issue #90）拿最近
- * 匯入的位元組（沒匯入過就是預設果凍拍的 PNG）再走一次同一條路，讓拉霸改動不必
- * 重拖圖就能看到。`importHint`（issue #12 追加）
+ * 挑出拖放的影像檔（png/jpeg/gif）、讀成位元組後回呼 `importImage` → 解碼貼圖 →
+ * 註冊來源 → `spawn`（網格在 `World` 的 `meshProvider` 裡走 `buildSimMesh` →
+ * `scaleMeshToLongestEdge`，匯入尺寸拉霸 issue #88、網格密度拉霸 issue #89）。解碼／
+ * 建網格失敗（非圖片、不支援格式、壞檔）一律 `console.warn` ＋ 畫面上閃一行
+ * `notice` 後放棄，場上原有的塊不受影響。新塊從 `World.params` 起家，控制面板目前
+ * 設定（Softness、輕拍力道、重力、Boundary）本來就在那裡，不必重套。「重建」鈕
+ * （issue #90；issue #95 起對每一塊）拿各塊自己的來源＋目前兩條拉霸，同 id 同圖同
+ * `offset` 地 `remove` + `spawn`，只改 Scene、Track 保留。`importHint`（issue #12 追加）
  * 是常駐在角落的低調小字，提示「可以拖圖片進來」——`dropHint` 只在拖曳中才出現，
  * 沒有這個常駐提示的話使用者無從發現這個功能本身存在。
  *
@@ -31,7 +45,7 @@
  * 後，`PointerInput` 原本會發的 `grab` 改由它轉成 `pin`，直接放 Pin 而非可拖曳
  * 的 Grab；點在既有 Pin 附近則轉成 `unpin`，即「點掉特定 Pin」）。
  *
- * **Pin 的視覺提示**：`PinMarkers`（DOM 覆蓋層）每幀把 `sim.listPins()` 的世界
+ * **Pin 的視覺提示**：`PinMarkers`（DOM 覆蓋層）每幀把 `world.listPins()` 的世界
  * 座標投影成螢幕座標畫成小圓點；Pin 模式開啟時標記變紅脈動（提示可以點掉）、
  * 畫布游標也換成十字——兩層一起讓「現在是不是在 Pin 模式」不用低頭看面板就
  * 知道（見 `setPinMode`）。「顯示 Pin」關掉時整層藏起來、`frame()` 也跳過投影
@@ -48,23 +62,25 @@
  * **邊界外框**（issue #9 追加；issue #92 擴成三態）：切到 Walled 邊界時，
  * `WalledBoundary.box`（世界座標常數）同步畫成 `JellyRenderer` 裡的一個外框；切到
  * Floor 時把 `FloorBoundary.floorY` 畫成一條地板線（見 `setBoundaryFrame`），撞牆／
- * 落地時看得到界線在哪，不會覺得「明明沒碰到東西卻被彈回來」。切回 Infinite 或
- * 重新匯入圖片都會同步藏起來／重套（`applyBoundaryMode`、`replaceJelly`）。
+ * 落地時看得到界線在哪，不會覺得「明明沒碰到東西卻被彈回來」。切換當下依所有塊的
+ * 聯集 bbox（`World.bbox()`）展開 Walled 範圍／貼齊 Floor；空場時維持上一次的值
+ * （`lastBbox`）。
  *
  * **Demo**（issue #15 / T14 追加）：`./demos` 提供純函式腳本（`DEMOS`）+
  * `DemoRunner`（依 sim-step 計數排定事件，見該檔說明）。主迴圈每跑一個固定
  * step 前先呼叫 `demoRunner.advance(...)`，把該 step 排定的 `InputEvent` 一樣
- * 經 `sim.applyInput` 送進去——跟即時輸入同一條窄介面，不繞道。「停止／重設」
- * 按鈕（`resetSim`）先停 Demo 排程再重設 `SimCore`，避免重設後殘留事件繼續
- * 觸發；重新匯入圖片（`replaceJelly`）也會中斷 Demo，因為排定座標是對著舊
- * 網格算的，套到新網格沒意義。播放中鎖住所有 Demo 按鈕（`setPlaybackLocked`），
+ * 經 `world.applyInput` 送進去——跟即時輸入同一條窄介面，不繞道。Demo 腳本吃
+ * 場上**所有塊**串接起來的 Particle 位置（對目前 Scene 執行，spec #87 US52）。
+ * 「停止／重設」按鈕（`resetSim`）先停 Demo 排程再 `world.reset()`，避免重設後殘留
+ * 事件繼續觸發；匯入圖片也會中斷播放（新塊加進 Scene 的時機要乾淨，見
+ * `importImage`）。播放中鎖住所有 Demo 按鈕（`setPlaybackLocked`），
  * 擋掉「疊加播放另一個 Demo」——`DemoRunner.start` 只換排程、不會回頭釋放前一個
  * Demo 已經建立的 Pin/Grab，疊加播放會留下一個沒人記得、永遠釘住的 Pin。
  *
  * **Track 錄製 + 疊加播放**（issue #29 / V2 T1a，issue #33 / V2 T1-1 依 ADR-0007
  * 改為多動作軌，issue #36 / V2 T1-4 加相機軌）：`./track` 提供 `TrackRecorder`
  * ——跟 `DemoRunner` 互補的純類別，依 sim-step 排程「錄」而非「播」事件。攔截點
- * 是 `attachInputHandlers` 裡既有的兩個派送點（`sim.applyInput(routed)` 之前、
+ * 是 `attachInputHandlers` 裡既有的兩個派送點（`world.applyInput(routed)` 之前、
  * `cameraInput` 的 `emit` 推進 `cameraCommands` 之前）＋ `emitCamera`（「框住果凍」
  * ／「鎖定跟隨」按鈕）——錄製開啟時額外把同一個事件轉呼叫進
  * `trackRecorder.record()`，不新增輸入路徑（ADR-0005）。主迴圈每個固定 step
@@ -83,26 +99,28 @@
  * 動作軌疊起來等於同時多點抓取（Multi-grab）。
  *
  * **Track 座標對齊**：Grab/Tap/Pin 記的是錄製當下的絕對世界座標，`playAll`
- * 因此在 `demoRunner.start` 之前先 `sim.reset()`（場景回 rest 狀態，絕對世界
- * 座標才準確落在果凍上）。相機：整段沒有相機軌時，重設後推一個一次性 `frame`
+ * 因此在 `demoRunner.start` 之前先 `world.reset()`（場上回到 Scene、每塊回 rest，
+ * 絕對世界座標才準確落在果凍上）。相機：整段沒有相機軌時，重設後推一個一次性 `frame`
  * 指令把鏡頭框回果凍靜止狀態；有相機軌時改由每條相機軌自帶的 `setState` 硬切
  * 在它的起始 step 把鏡頭瞬間設回錄製起點——兩種都是離散、決定性的瞬間對齊，
  * 確保「連按播放全部結果逐格一致」（issue #33 / #36 決定性驗收條件）不受播放前
  * 場景／相機被怎麼動過影響。
  *
- * **場景狀態整合**（issue #38 / V2 T1-6）：「停止／重設」（`resetSim`）與「重新
- * 匯入 PNG」（`replaceJelly`）共用 `haltPlaybackAndRecording()` 把場景收束成
- * 一致的乾淨狀態；「Track 清單保留 vs 清空」的分野見那個方法的說明。錄製中與
+ * **場景狀態整合**（issue #38 / V2 T1-6；issue #95 改）：「停止／重設」（`resetSim`）、
+ * 「清空全部」（`clearAll`）與「載入片段」（`applyClipState`）共用
+ * `haltPlaybackAndRecording()` 把場景收束成一致的乾淨狀態；只有後兩者會換掉整份
+ * 片段（Track／群組／初始 Pin），匯入圖片不再清任何東西。錄製中與
  * 播放中互斥（`ControlPanel` 依 `setRecordingActive`／`setPlaybackControlsEnabled`
  * 互相鎖住對方的按鈕）。
  *
  * **substep 自動降級 + 網格密度退路**（issue #16 / T15；退路改成壓拉霸見
  * issue #89）：`PerfMonitor`（純狀態機，見該檔）每幀吃「這幀花了幾毫秒」，持續
- * 超標（弱裝置／背景分頁搶資源）就把 `sim.params.substeps` 從 4 降到 2，讓每步
+ * 超標（弱裝置／背景分頁搶資源）就把 `World.params.substeps` 從 4 降到 2，讓每步
  * 花的運算變少、幀率回穩；持續回穩又升回 4。降級當下順便點亮一次性的「網格
  * 退路」旗標——舊 Jelly 拓撲已凍結沒法即時減面，只能讓**下一次**匯入的三角形
  * 變少：`frame()` 讀到旗標就把「網格密度」拉霸砍半（`halveMeshDensity`）、面板
  * 同步、畫面提示一行（`applyMeshDensityFallback`）；使用者之後可以手動拉回去。
+ * substep 數經 `world.applyParams` 套到每塊。
  * `frame()` 每幀把目前 substep 數同步到 `ControlPanel.setPerfStatus`，手動用
  * DevTools CPU 節流測試時能直接看到 4→2→4 有沒有真的發生。
  */
@@ -141,15 +159,16 @@ import {
 } from '../mesh';
 import { type BoundaryFrame, JellyRenderer } from '../render';
 import {
+  type Bbox,
   type BoundaryMode,
   type FanState,
   FloorBoundary,
   InfiniteBoundary,
   type InputEvent,
   type Point,
-  SimCore,
   softnessToParams,
   WalledBoundary,
+  World,
 } from '../sim';
 import { ClipFileInput } from './ClipFileInput';
 import {
@@ -164,7 +183,7 @@ import {
 import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { CanvasHover } from './CanvasHover';
 import { ControlPanel } from './ControlPanel';
-import { canvasToPng, createDefaultJelly } from './defaultJelly';
+import { canvasToPng, drawDefaultTexture } from './defaultJelly';
 import {
   DEMOS,
   DemoRunner,
@@ -260,6 +279,8 @@ const ERASE_RADIUS_RANGE = { min: 20, max: 400, step: 10 };
  */
 const IMPORT_SIZE_RANGE = { min: 128, max: 1024, step: 16 };
 const DEFAULT_IMPORT_SIZE = 512;
+/** 內建預設果凍在來源圖庫裡的 id（啟動時、「清空全部」後都重新註冊成它）。 */
+const DEFAULT_SOURCE_ID = 'src/1';
 /**
  * Pin 模式下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
  * CSS 直徑（16px）同數量級，換算回世界座標時要除以目前相機縮放（見
@@ -290,6 +311,15 @@ const ALL_HINTS_HIDDEN: Readonly<HintVisibility> = {
  */
 function needsHintProjection(hints: Readonly<HintVisibility>): boolean {
   return hints.pins || hints.fanRange || hints.fanIcon || hints.formation;
+}
+
+/**
+ * 來源圖庫的一筆（issue #95）：存檔用的位元組＋格式（= `ClipImage`）加上預先解碼好的
+ * 貼圖——`spawn` 全程同步（Track 重播中生成不需要 async，spec #87 US65）。內建預設
+ * 果凍的貼圖是 `<canvas>`，匯入的圖是 `<img>`。
+ */
+interface SourceImage extends ClipImage {
+  texture: HTMLImageElement | HTMLCanvasElement;
 }
 
 /**
@@ -335,10 +365,11 @@ interface RecordedTrack {
 }
 
 export class JellySandbox {
-  private sim: SimCore;
-  private renderer: JellyRenderer;
-  private input: PointerInput;
-  private cameraInput: CameraInput;
+  /** 多塊 Jelly 的模擬容器（issue #95）——沙盒唯一的模擬入口，契約與 `SimCore` 同形。 */
+  private readonly world: World;
+  private readonly renderer: JellyRenderer;
+  private readonly input: PointerInput;
+  private readonly cameraInput: CameraInput;
   private readonly dropImportInput: DropImportInput;
   /** 「匯入圖片」按鈕與角落提示字點擊 → 原生檔案選擇器 → 與拖放相同的匯入路徑（issue #56）。 */
   private readonly fileImportInput: FileImportInput;
@@ -378,16 +409,19 @@ export class JellySandbox {
   private cameraCommands: CameraCommand[] = [];
   /** 拖放匯入進行中——擋掉重疊的第二次匯入（連續拖放兩張圖不會互相打架）。 */
   private importing = false;
-  /** 目前的 Boundary 模式——`SimCore` 沒有 getter，重新匯入圖片時要靠這個重套。 */
+  /** 目前的 Boundary 模式——`World` 沒有 getter，存檔／面板同步靠這個。 */
   private boundaryMode: BoundaryMode = 'infinite';
+  /**
+   * 最近一次非空的聯集 bbox（issue #95）——場上沒有任何塊時 `World.bbox()` 回 `null`，
+   * 相機跟隨與 Walled／Floor 幾何改用這一份「維持上一次的值」，鏡頭停在原地、面板照常
+   * 可用（spec #87 US8）。
+   */
+  private lastBbox: Bbox;
   /** 目前邊界的外框幾何（給 `JellyRenderer.setBoundaryFrame` 畫）：`walled` 是 AABB、`floor` 是地板 y、`infinite` 為 `null`。 */
   private boundaryFrame: BoundaryFrame | null = null;
   /** 控制面板「Pin 模式」開關；`attachInputHandlers` 的 `applyInput` 靠它轉接。 */
   private pinModeEnabled = false;
-  /**
-   * 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，
-   * 重新匯入圖片換綁新 canvas 時要靠這個重套（見 `attachInputHandlers` 呼叫處）。
-   */
+  /** 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，筆刷／Pin 視覺靠這個判定。 */
   private activeTool: ToolId = 'general';
   /**
    * 五個提示開關「使用者想不想看」的意圖——`wireframe` 是顯示網格（issue #14，
@@ -398,7 +432,7 @@ export class JellySandbox {
    * issue #71 起收成一個 record 而非五個各自為政的欄位：它們永遠成組被讀（見
    * `effectiveHints`），而且新增一層提示時「要改哪幾處」才收斂得住。這裡存的
    * 一律是使用者的意圖，播放中被壓下時完全不動——所以播完各自還原不需要另外
-   * 記一份快照。`replaceJelly` 換新 `JellyRenderer`／overlay 後也是靠它重套。
+   * 記一份快照。
    */
   private readonly hintIntent: HintVisibility = {
     wireframe: false,
@@ -445,25 +479,26 @@ export class JellySandbox {
   /** 按下錄製前選定的錄製目標（issue #33）——只錄動作／只錄運鏡／兩者同時。 */
   private recordTarget: RecordTarget = 'action';
   /**
-   * 已錄好的 Track 清單（issue #33；issue #36 加相機軌）——記憶體內，重新匯入 PNG
-   * 即清空；「停止／重設」保留。陣列順序＝錄製順序＝清單顯示順序＝相機軌「認先列」
-   * 的先後（`mergeTracks`）。
+   * 已錄好的 Track 清單（issue #33；issue #36 加相機軌）——記憶體內，「清空全部」／載入
+   * 片段才換掉；「停止／重設」與匯入圖片都保留（ADR-0013）。陣列順序＝錄製順序＝清單
+   * 顯示順序＝相機軌「認先列」的先後（`mergeTracks`）。
    */
   private tracks: RecordedTrack[] = [];
   /** 下一條 Track 的流水號，兼作 `id`／`PointerId` 前綴（各條唯一）與預設標籤編號。 */
   private nextTrackNum = 1;
   /**
    * 片段初始 Pin 快照（issue #39 / ADR-0007 追記）——每個元素是一個 Pin 附著點在
-   * **rest 形狀**下的世界座標（`sim.restAttachPoint`），獨立於任何 Track。`playAll`
-   * 在 `sim.reset()` 之後、`demoRunner.start` 之前，把它組成一條合成 `OverlayTrack`
+   * **rest 形狀**下的世界座標（`world.restAttachPoint`），獨立於任何 Track。`playAll`
+   * 在 `world.reset()` 之後、`demoRunner.start` 之前，把它組成一條合成 `OverlayTrack`
    *（`setupPinsTrack`）排在 `mergeTracks` 輸入最前面，於 step 0 一次還原。生命週期
-   * 比照 `tracks`：`停止／重設` 保留、重新匯入 PNG 清空（座標對舊網格沒意義）。
+   * 比照 `tracks`：`停止／重設` 與匯入保留、「清空全部」清空。多塊時還原用帶座標的
+   * `pin` 事件，命中哪塊就釘哪塊。
    */
   private setupPins: Point[] = [];
   /**
    * Track 群組清單（issue #43 / V2 T1-8，見 ADR-0008）——`groups[0]` 永遠是預設
    * 群組（`DEFAULT_GROUP_ID`、不可刪、新錄好的 Track 自動加入）。生命週期比照
-   * `tracks`：`停止／重設` 保留、重新匯入 PNG 重建成只剩預設群組。
+   * `tracks`：`停止／重設` 與匯入保留、「清空全部」重建成只剩預設群組。
    */
   private groups: TrackGroup[] = [createDefaultGroup()];
   /** 下一個使用者新建群組的流水號（`g1`／`g2`…，兼作預設名稱編號）。 */
@@ -473,21 +508,24 @@ export class JellySandbox {
 
   /**
    * 軟硬度滑桿目前值本身（0–1）——`setSoftness` 收到後即轉成 `cellFrac`／`alphaSm`
-   * 套進 `sim.params`，滑桿原始值 `SimCore` 不留，這裡記著供存檔（issue #57）。
+   * 經 `world.applyParams` 套到每塊，滑桿原始值求解器不留，這裡記著供存檔（issue #57）。
    */
   private softness = DEFAULT_SOFTNESS;
   /**
-   * 最近一次匯入實際餵給 `buildSimMesh` 的**解析後完整**參數（issue #57）——含匯入當下
-   * 「網格密度」拉霸的 `targetParticleCount`。存檔時原樣寫進 `ClipState.meshParams`，載入端
-   * （issue #58）據此決定性重算 mesh。還沒匯入任何圖時 = `DEFAULT_PARAMS`（內建果凍）。
+   * 來源圖庫（issue #95）：`src/<N>` → 位元組＋格式＋預先解碼的貼圖。啟動時只有內建
+   * 預設果凍（`DEFAULT_SOURCE_ID`）；每次匯入多一筆。未被任何塊引用的來源存檔時仍
+   * 保留；「清空全部」清空後重新註冊預設。
    */
-  private lastMeshParams: BuildSimMeshParams = { ...DEFAULT_PARAMS };
+  private readonly sources = new Map<string, SourceImage>();
   /**
-   * 最近一次成功匯入的來源影像（issue #57）——存檔時原樣成為 `ClipState.image`。
-   * `null` = 還沒匯入任何圖，仍是內建預設果凍：存檔當下改用
-   * `canvasToPng(defaultTexture)` 拍成 `format: 'png'`（見 `buildClipState`）。
+   * `meshFor` 的 memo（issue #95）：`sourceId|importSize|meshParams` → `SimMesh`。
+   * `World.reset()` 會對 Scene 裡的塊重新呼叫 provider，沒有 memo 的話每次「停止／重設」
+   * 都要重跑整條網格管線（幾十到幾百毫秒一塊）。「清空全部」與載入片段時清掉。
    */
-  private lastImage: ClipImage | null = null;
+  private readonly meshMemo = new Map<string, SimMesh>();
+  /** 下一塊 Jelly／下一張來源圖的流水號（`jelly/<N>`／`src/<N>`），隨片段保存。 */
+  private nextJellyNum = 1;
+  private nextSourceNum = 1;
   /**
    * 「匯入尺寸」拉霸目前值（issue #88）——**下一次**匯入（或「重建」，issue #90）的
    * 果凍最長邊有多少世界單位。只是意圖：載入片段不改寫它（那是還原、不是重新
@@ -500,30 +538,29 @@ export class JellySandbox {
    * （`applyMeshDensityFallback`）會直接改它並同步面板。
    */
   private meshDensity = DEFAULT_MESH_DENSITY;
-  /**
-   * 最近一次**實際套用**的匯入尺寸（issue #88）——存檔時原樣寫進 `ClipState.importSize`，
-   * 載入端據此在 `buildSimMesh` 之後縮放（見 `scaleMeshToLongestEdge`）。跟 `importSize`
-   * 分開：拉霸是「下一次」的意圖，這個是「場上這塊」的事實。`null` = 未縮放——只有
-   * 從沒有此欄位的舊片段檔載入、又還沒重新匯入時才會是 `null`（存回去仍是 `null`，
-   * 舊檔 round-trip 不變）。內建預設果凍啟動時也走同一條縮放，所以初值是數字。
-   */
-  private lastImportSize: number | null = DEFAULT_IMPORT_SIZE;
-
   private rafId = 0;
   private lastFrameMs = 0;
 
   private constructor(
     root: HTMLElement,
-    sim: SimCore,
     renderer: JellyRenderer,
-    cameraState: CameraState,
-    /** 內建預設果凍的貼圖畫布——沒匯入任何圖時，存檔靠它拍一張 PNG（issue #57）。 */
+    /** 內建預設果凍的貼圖畫布——啟動與「清空全部」時註冊成來源 `src/1`（issue #57 / #95）。 */
     private readonly defaultTexture: HTMLCanvasElement,
   ) {
     this.root = root;
-    this.sim = sim;
     this.renderer = renderer;
-    this.cameraState = cameraState;
+    // `World` 的 `meshProvider` 綁到沙盒的 `meshFor`（來源圖庫 + memo），所以在這裡建。
+    this.world = new World((sourceId, meshParams, importSize) =>
+      this.meshFor(sourceId, meshParams, importSize),
+    );
+    this.registerDefaultSource();
+    this.spawnJelly(DEFAULT_SOURCE_ID, this.currentMeshParams(), DEFAULT_IMPORT_SIZE, {
+      x: 0,
+      y: 0,
+    });
+    this.world.setScene(this.world.sceneSnapshot());
+    this.lastBbox = this.world.bbox()!;
+    this.cameraState = createCameraState({ bbox: this.lastBbox }, this.canvasSize());
 
     ({ input: this.input, cameraInput: this.cameraInput } = this.attachInputHandlers(
       renderer.canvas,
@@ -563,8 +600,8 @@ export class JellySandbox {
         activeTool: this.activeTool,
         boundary: this.boundaryMode,
         softness: DEFAULT_SOFTNESS,
-        tapStrength: this.sim.params.tapStrength,
-        gravity: this.sim.params.gravity,
+        tapStrength: this.world.params.tapStrength,
+        gravity: this.world.params.gravity,
         pinMode: this.pinModeEnabled,
         showPins: this.hintIntent.pins,
         followLocked: !this.cameraState.followEnabled,
@@ -616,7 +653,8 @@ export class JellySandbox {
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onImportSizeChange: (size) => this.setImportSize(size),
       onMeshDensityChange: (density) => this.setMeshDensity(density),
-      onRebuild: () => this.rebuildJelly(),
+      onRebuild: () => this.rebuildAll(),
+      onClearAll: () => this.clearAll(),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
@@ -659,8 +697,6 @@ export class JellySandbox {
     root.appendChild(this.formationOverlay.element);
     this.brushCursor = new BrushCursor();
     root.appendChild(this.brushCursor.element);
-    // `isCanvas` 讀當下的 `renderer.canvas`：重新匯入圖片會換掉整個 canvas 元素，
-    // 用回呼而非直接傳元素，換過之後判定自動跟著新的那一個走（issue #69）。
     this.canvasHover = new CanvasHover(root, {
       isCanvas: (target) => target === this.renderer.canvas,
     });
@@ -671,32 +707,18 @@ export class JellySandbox {
     this.syncPanelTracks();
   }
 
-  /** 建立預設 Jelly 並組裝好；呼叫 `start()` 開始跑。 */
+  /**
+   * 建立空的 `JellyRenderer` 並組裝好（建構子接著建 `World`、把內建預設果凍註冊成來源
+   * `src/1`、`spawn` 成 `jelly/1`、拍成 Scene、鏡頭框住它）；呼叫 `start()` 開始跑。
+   */
   static async create(root: HTMLElement): Promise<JellySandbox> {
-    const { mesh: rawMesh, texture } = createDefaultJelly();
-    // 內建預設果凍也走同一條匯入尺寸縮放（issue #88）：跟匯入的圖大小一致；Demo
-    // 幾何以 bbox 對角線為基準，手感不受影響。
-    const mesh = scaleMeshToLongestEdge(rawMesh, DEFAULT_IMPORT_SIZE);
-    const sim = new SimCore(mesh);
-
     const renderer = await JellyRenderer.create({
       width: root.clientWidth,
       height: root.clientHeight,
-      mesh,
-      positions: sim.positions,
-      texture,
       background: { color: 0x1a1a1a, alpha: 1 },
     });
     root.appendChild(renderer.canvas);
-
-    const cameraState = createCameraState(
-      { bbox: sim.bbox() },
-      {
-        width: root.clientWidth,
-        height: root.clientHeight,
-      },
-    );
-    return new JellySandbox(root, sim, renderer, cameraState, texture);
+    return new JellySandbox(root, renderer, drawDefaultTexture());
   }
 
   start(): void {
@@ -757,14 +779,32 @@ export class JellySandbox {
   }
 
   /**
-   * Demo 按鈕（issue #15）：依 `id` 找到腳本，用「目前」`sim.positions` 算出這個
-   * Jelly 形狀上的時間軸交給 `demoRunner`。已在播放中的 Demo（若有）直接被取代。
+   * Demo 按鈕（issue #15）：依 `id` 找到腳本，用「目前」場上所有塊串接的 Particle 位置
+   * 算出時間軸交給 `demoRunner`——Demo 對目前 Scene 執行（spec #87 US52）：找角、找
+   * 中心都以聯集算，多塊時抓到的是整體最外圍的點。空場沒東西可示範，直接返回。已在
+   * 播放中的 Demo（若有）直接被取代。
    */
   private runDemo(id: string): void {
     const demo = DEMOS.find((d) => d.id === id);
     if (!demo) return;
-    this.demoRunner.start(demo.build(this.sim.positions));
+    const positions = this.allPositions();
+    if (positions.length === 0) return;
+    this.demoRunner.start(demo.build(positions));
     this.setPlaybackLocked(true); // 立即鎖住，擋掉「趁還沒進下一幀又點另一個 Demo」的疊加播放
+  }
+
+  /** 場上所有塊的 Particle 位置串成一條（依 id 順序）——Demo 腳本的輸入。 */
+  private allPositions(): Float64Array {
+    const views = this.world.jellies();
+    let total = 0;
+    for (const j of views) total += j.positions.length;
+    const out = new Float64Array(total);
+    let at = 0;
+    for (const j of views) {
+      out.set(j.positions, at);
+      at += j.positions.length;
+    }
+    return out;
   }
 
   /**
@@ -880,15 +920,15 @@ export class JellySandbox {
 
   /**
    * 「片段初始 Pin：設為目前 Pin」（issue #39 / ADR-0007 追記）——把畫面上現在所有
-   * Pin（`sim.listPins()`）的**rest 形狀附著座標**（`sim.restAttachPoint`）拍成快照，
-   * 取代上一份。存 rest 座標而非目前變形座標：`playAll` 會先 `sim.reset()`，還原時
+   * Pin（`world.listPins()`，跨所有塊）的**rest 形狀附著座標**（`world.restAttachPoint`）
+   * 拍成快照，取代上一份。存 rest 座標而非目前變形座標：`playAll` 會先 `world.reset()`，還原時
    * 這些座標才精準落在原本的表面點，也不隨拍快照當下的變形而偏。`ControlPanel`
    * 那邊錄製中／播放中已把這顆鈕鎖住，這裡不用再擋。
    */
   private snapshotSetupPins(): void {
-    this.setupPins = this.sim.listPins().flatMap((pin) => {
+    this.setupPins = this.world.listPins().flatMap((pin) => {
       // `restAttachPoint` 回傳全新的 `Point`；作用中的 Pin 必有約束，`null` 只是防呆。
-      const rest = this.sim.restAttachPoint(pin.id);
+      const rest = this.world.restAttachPoint(pin.id);
       return rest ? [rest] : [];
     });
     this.syncPanelTracks();
@@ -1036,9 +1076,10 @@ export class JellySandbox {
    * 跟 issue #33 的「播放全部」完全相同。開啟中群組成員聯集為空時直接返回
    *（`ControlPanel` 那邊按鈕也已變灰）。
    *
-   * 播放前先 `sim.reset()`：Track 裡 Grab/Tap/Pin 記的是錄製當下的絕對世界座標，
-   * 場景回到 rest 狀態它們才會準確落在果凍上、每次疊加結果才逐格一致（issue #33
-   * 決定性驗收條件），不受「播放前場景被怎麼動過」影響。
+   * 播放前先 `world.reset()`：場上回到 Scene（錄製中生成的消失、移除的回來、每塊回
+   * rest）——Track 裡 Grab/Tap/Pin 記的是錄製當下的絕對世界座標，場景回到 rest 狀態
+   * 它們才會準確落在果凍上、每次疊加結果才逐格一致（issue #33 決定性驗收條件），
+   * 不受「播放前場景被怎麼動過」影響。
    *
    * 相機：整段沒有任何 Camera Track 時，重設後推一個一次性 `frame` 指令把鏡頭
    * 框回果凍靜止狀態（不停在上一次亂動到的位置）。有 Camera Track 時改成把
@@ -1050,10 +1091,10 @@ export class JellySandbox {
   private playAll(): void {
     const active = tracksInEnabledGroups(this.tracks, this.groups);
     if (active.length === 0) return;
-    this.sim.reset();
+    this.world.reset();
     const hasCameraTrack = active.some((t) => t.kind === 'camera');
     if (hasCameraTrack) {
-      this.cameraState = createCameraState({ bbox: this.sim.bbox() }, this.canvasSize());
+      this.cameraState = createCameraState({ bbox: this.currentBbox() }, this.canvasSize());
       this.cameraCommands = [];
     } else {
       this.cameraCommands.push({ type: 'frame' });
@@ -1062,7 +1103,7 @@ export class JellySandbox {
       mergeTracks([
         // 片段初始 Pin 合成軌排在最前面（issue #39）：`setup/` 前綴不撞 Action Track
         // 的 `t{n}/`，一串 `atStep: 0` 的 `pin` 事件靠穩定排序落在所有軌的 step-0
-        // 事件之前——`sim.reset()` 後先在 step 0 還原初始 Pin，再開演。空快照時這條
+        // 事件之前——`world.reset()` 後先在 step 0 還原初始 Pin，再開演。空快照時這條
         // steps 為空，`mergeTracks` 不貢獻任何事件。
         setupPinsTrack(this.setupPins),
         ...active.map((t) => ({
@@ -1126,9 +1167,9 @@ export class JellySandbox {
    *    播放狀態列（見 `setPlaybackLocked`）。
    * 3. 仍在進行中的錄製一併中斷並**丟棄**（不進清單）——「中斷」不是「存檔」。
    *
-   * 差別只在呼叫端各自接的下一步：`resetSim` 呼 `sim.reset()` 但**保留** Track／
-   * 群組清單；`replaceJelly` 連清單一起清空、換上新網格（ADR-0007 生命週期：
-   * `停止／重設` 保留、重新匯入清空）。
+   * 差別只在呼叫端各自接的下一步：`resetSim` 呼 `world.reset()` 但**保留** Track／
+   * 群組清單；`clearAll`／`applyClipState` 連清單一起換掉（ADR-0013 生命週期：
+   * `停止／重設` 與匯入保留、「清空全部」／載入片段才換）。
    */
   private haltPlaybackAndRecording(): void {
     this.demoRunner.stop();
@@ -1140,75 +1181,100 @@ export class JellySandbox {
   }
 
   /**
-   * 「停止／重設」（issue #14；issue #15 追加停 Demo；issue #38 收束播放／錄製）：
-   * 先 `haltPlaybackAndRecording()`，再 `sim.reset()` 把 Jelly 回 rest 座標、速度
-   * 歸零、清掉所有 Grab／Pin。Track／群組清單與片段初始 Pin 快照（issue #39）
-   * **保留**（拓撲沒變，錄好的還能疊加播放）——只有 `replaceJelly` 才清空。
+   * 「停止／重設」（issue #14；issue #15 追加停 Demo；issue #38 收束播放／錄製；
+   * issue #95 回到 Scene）：先 `haltPlaybackAndRecording()`，再 `world.reset()` 讓場上
+   * 與 Scene 一致（錄製中生成的塊消失、每塊回 rest 座標、速度歸零、清掉所有 Grab／
+   * Pin 與風扇）。Track／群組清單與片段初始 Pin 快照（issue #39）**保留**——只有
+   * 「清空全部」／載入片段才換掉。
    */
   private resetSim(): void {
     this.haltPlaybackAndRecording();
-    this.sim.reset();
+    this.world.reset();
   }
 
   /**
-   * Boundary 切換（issue #14；issue #92 加 Floor）：`walled` 用目前 bbox 算一個正方形
-   * 邊界範圍、`floor` 把地板貼齊目前 bbox 底邊（都見 `./boundaryGeometry`）、`infinite`
-   * 換回無邊界。記在 `boundaryMode`——`replaceJelly` 換新 `SimCore` 時要重套，否則
-   * 面板顯示的模式會跟實際物理不一致。同時把 `boundaryFrame` 套到 Renderer（issue #9
-   * 追加）：撞牆／落地時畫面上有界線可以對照，不會覺得「明明沒碰到東西卻被彈回來」。
+   * 「清空全部」（issue #95 / V3 T3-2；ADR-0013）——唯一會把整份片段清掉的入口：中斷播放
+   * ／錄製，Scene 清空、場上所有塊移除（`setScene([])` + `reset()`），Track／群組／片段
+   * 初始 Pin／流水號全部歸零，來源圖庫清空後重新註冊內建預設果凍（不自動放上桌：
+   * 空桌面）、網格 memo 清掉。相機不動（`lastBbox` 維持，跟隨會停在原地）；拉霸與
+   * 邊界模式是使用者的設定，不動。
+   */
+  private clearAll(): void {
+    this.haltPlaybackAndRecording();
+    this.world.setScene([]);
+    this.world.reset();
+    this.tracks = [];
+    this.nextTrackNum = 1;
+    this.setupPins = [];
+    this.groups = [createDefaultGroup()];
+    this.nextGroupNum = 1;
+    this.soloState = null;
+    this.sources.clear();
+    this.meshMemo.clear();
+    this.nextJellyNum = 1;
+    this.nextSourceNum = 1;
+    this.registerDefaultSource();
+    this.syncPanelTracks();
+    this.syncRenderer();
+  }
+
+  /**
+   * Boundary 切換（issue #14；issue #92 加 Floor；issue #95 依聯集）：`walled` 用場上所有
+   * 塊的聯集 bbox 算一個正方形邊界範圍、`floor` 把地板貼齊聯集的最低點（都見
+   * `./boundaryGeometry`）、`infinite` 換回無邊界；空場時用 `lastBbox`（維持上一次的值）。
+   * 記在 `boundaryMode` 供存檔。同時把 `boundaryFrame` 套到 Renderer（issue #9 追加）：
+   * 撞牆／落地時畫面上有界線可以對照，不會覺得「明明沒碰到東西卻被彈回來」。
+   * Walled／Floor 都帶 app 層常數 `BOUNDARY_FRICTION`（issue #93）。
    */
   private setBoundaryMode(mode: BoundaryMode): void {
     this.boundaryMode = mode;
-    this.applyBoundaryMode(this.sim);
+    const bbox = this.currentBbox();
+    if (mode === 'walled') {
+      const boundary = new WalledBoundary({
+        ...computeWalledBounds(bbox),
+        friction: BOUNDARY_FRICTION,
+      });
+      this.world.setBoundary(boundary);
+      this.boundaryFrame = { kind: 'walled', ...boundary.box };
+    } else if (mode === 'floor') {
+      const boundary = new FloorBoundary({
+        floorY: computeFloorY(bbox),
+        friction: BOUNDARY_FRICTION,
+      });
+      this.world.setBoundary(boundary);
+      this.boundaryFrame = { kind: 'floor', y: boundary.floorY };
+    } else {
+      this.world.setBoundary(new InfiniteBoundary());
+      this.boundaryFrame = null;
+    }
     this.renderer.setBoundaryFrame(this.boundaryFrame);
   }
 
-  /**
-   * 套用 `boundaryMode` 到 `sim`，並同步 `boundaryFrame`（`replaceJelly` 換新 Renderer 後要
-   * 另外重套，見該處）。Walled／Floor 都帶 app 層常數 `BOUNDARY_FRICTION`（issue #93）。
-   */
-  private applyBoundaryMode(sim: SimCore): void {
-    if (this.boundaryMode === 'walled') {
-      const boundary = new WalledBoundary({
-        ...computeWalledBounds(sim.bbox()),
-        friction: BOUNDARY_FRICTION,
-      });
-      sim.setBoundary(boundary);
-      this.boundaryFrame = { kind: 'walled', ...boundary.box };
-    } else if (this.boundaryMode === 'floor') {
-      const boundary = new FloorBoundary({
-        floorY: computeFloorY(sim.bbox()),
-        friction: BOUNDARY_FRICTION,
-      });
-      sim.setBoundary(boundary);
-      this.boundaryFrame = { kind: 'floor', y: boundary.floorY };
-    } else {
-      sim.setBoundary(new InfiniteBoundary());
-      this.boundaryFrame = null;
-    }
+  /** 場上所有塊的聯集 bbox；空場時退回最近一次非空的值（見 `lastBbox`）。 */
+  private currentBbox(): Bbox {
+    const bbox = this.world.bbox();
+    if (bbox) this.lastBbox = bbox;
+    return this.lastBbox;
   }
 
-  /** Softness 滑桿（issue #14）：0–1 → `cellFrac` + `alphaSm`（見 `../sim/softness`）。滑桿原始值另記一份供存檔（issue #57）。 */
+  /** Softness 滑桿（issue #14）：0–1 → `cellFrac` + `alphaSm`（見 `../sim/softness`），經 `applyParams` 套到每塊。滑桿原始值另記一份供存檔（issue #57）。 */
   private setSoftness(t: number): void {
     this.softness = t;
-    const { cellFrac, alphaSm } = softnessToParams(t);
-    this.sim.params.cellFrac = cellFrac;
-    this.sim.params.alphaSm = alphaSm;
-    this.sim.rebuildRegions();
+    this.world.applyParams(softnessToParams(t));
   }
 
-  /** 輕拍力道滑桿（issue #14）。 */
+  /** 輕拍力道滑桿（issue #14）——全域，套到每塊。 */
   private setTapStrength(strength: number): void {
-    this.sim.params.tapStrength = strength;
+    this.world.applyParams({ tapStrength: strength });
   }
 
   /**
-   * 重力拉霸（issue #91 / V3 T2-1；ADR-0012）——直接套進 `sim.params.gravity`，拖動
-   * 立刻生效；是參數不是狀態，「停止／重設」不動它，換果凍時跟 `tapStrength` 一樣
-   * 搬到新 `SimCore`（`replaceJelly`）。
+   * 重力拉霸（issue #91 / V3 T2-1；ADR-0012）——經 `applyParams` 套到每塊，拖動立刻
+   * 生效；是參數不是狀態，「停止／重設」不動它，之後 `spawn` 的新塊也從 `World.params`
+   * 起家、自動吃到。
    */
   private setGravity(gravity: number): void {
-    this.sim.params.gravity = gravity;
+    this.world.applyParams({ gravity });
   }
 
   /**
@@ -1314,27 +1380,23 @@ export class JellySandbox {
 
   /**
    * 「清除所有 Pin」按鈕（issue #14；issue #51 起改走窄介面）——跟指標事件同一條
-   * 路：一個無 `id` 的「清除 Pin 事件」`InputEvent` 送進 `sim.applyInput`，同時
-   * `trackRecorder.record`（no-op 除非正在錄製）。不再直呼 `sim.clearPins()`，回到
+   * 路：一個無 `id` 的「清除 Pin 事件」`InputEvent` 送進 `world.applyInput`，同時
+   * `trackRecorder.record`（no-op 除非正在錄製）。不再直呼 `SimCore.clearPins()`，回到
    * ADR-0005「所有影響模擬的輸入都經 `applyInput`」——這樣錄製中按這顆鈕會落進
    * Action Track，重播到那個 step 清掉畫面上所有 Pin（含片段初始 Pin，刻意跨軌，
    * 見 ADR-0007 追記）。`applyInput` 不會前進錄製 step 計數，兩行順序不影響結果。
    */
   private clearPins(): void {
-    const event: InputEvent = { type: 'clearPins' };
-    this.sim.applyInput(event);
-    this.trackRecorder.record(event); // no-op 除非正在錄製（issue #51）
+    this.dispatchInput({ type: 'clearPins' });
   }
 
   /**
    * 「移除風扇」按鈕（issue #66）——比照 `clearPins`：一個無座標的 `clearFan`
-   * 事件經 `sim.applyInput` 送進去，同時餵給 `trackRecorder`（錄製中才會真的記
+   * 事件經 `world.applyInput` 送進去，同時餵給 `trackRecorder`（錄製中才會真的記
    * 下來），讓錄下的「移除風扇」重播時能在正確的 step 讓風扇消失。
    */
   private removeFan(): void {
-    const event: InputEvent = { type: 'clearFan' };
-    this.sim.applyInput(event);
-    this.trackRecorder.record(event);
+    this.dispatchInput({ type: 'clearFan' });
   }
 
   /** 「風扇寬度」滑桿（issue #67）。 */
@@ -1375,12 +1437,12 @@ export class JellySandbox {
    * 「即時反映到目前場上的風扇（若有）」（issue #67）：場上沒有風扇就什麼都不做；
    * 有的話拿它目前的原點／方向／長度，換上最新的寬度／強度／衰減程度／頻率，
    * 整包重送一次 `setFan`（ADR-0010：`setFan` 本來就是整包覆蓋，不用先 `clearFan`）。
-   * 比照 `clearPins`／`removeFan`：任何直接呼叫 `sim.applyInput` 的分支都同時餵
+   * 比照 `clearPins`／`removeFan`：任何直接呼叫 `world.applyInput` 的分支都同時餵
    * 給 `trackRecorder`（no-op 除非正在錄製）——錄製中途調整滑桿，重播時風扇的
    * 手感才跟錄製當下看到的一致，不會停留在放置那一刻的舊參數。
    */
   private updateLiveFan(): void {
-    const fan = this.sim.fanState();
+    const fan = this.world.fanState();
     if (!fan) return;
     const event: InputEvent = {
       type: 'setFan',
@@ -1394,7 +1456,17 @@ export class JellySandbox {
       falloffExponent: this.fanFalloffExponent,
       frequency: this.fanFrequency,
     };
-    this.sim.applyInput(event);
+    this.dispatchInput(event);
+  }
+
+  /**
+   * 所有「沙盒自己發的模擬事件」的單一出口（issue #95 收攏）：送進 `world.applyInput`，
+   * 同時 `trackRecorder.record`（no-op 除非正在錄製）——ADR-0005「所有影響模擬的輸入
+   * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件另有
+   * `attachInputHandlers` 裡的派送點（先過 Pin 模式轉接），做的是同樣兩件事。
+   */
+  private dispatchInput(event: InputEvent): void {
+    this.world.applyInput(event);
     this.trackRecorder.record(event);
   }
 
@@ -1470,9 +1542,9 @@ export class JellySandbox {
    * 「bbox 對角線的固定比例」是世界座標常數，縮得越近，同一個世界半徑換算成
    * 螢幕像素就越大，會出現「明明離標記很遠，點下去卻被當成點中」的錯覺。
    */
-  private pinModeContext(): { pins: ReturnType<SimCore['listPins']>; removeRadius: number } {
+  private pinModeContext(): { pins: ReturnType<World['listPins']>; removeRadius: number } {
     return {
-      pins: this.sim.listPins(),
+      pins: this.world.listPins(),
       removeRadius: PIN_REMOVE_RADIUS_PX / this.cameraState.transform.scale,
     };
   }
@@ -1486,30 +1558,44 @@ export class JellySandbox {
   };
 
   /**
-   * 「重建」按鈕（issue #90 / V3 T1-3，見 CONTEXT.md「重建」）：用最近一次匯入的
-   * 來源影像（`sourceImage`，跟存檔用的是同一張）＋目前兩條拉霸，走跟拖放／按鈕
-   * 匯入**完全相同**的 `runImport` 路徑：同一套換網格收束、同一個 `importing` 互斥、
-   * 失敗時同樣保留舊果凍並提示。重建後 `lastImage`／`lastMeshParams`／`lastImportSize`
-   * 都由 `importImage` 更新，存檔自然反映重建後的實際值。面板在錄製中／播放中把
-   * 按鈕鎖住，但就算按到了，`replaceJelly` 也會先把播放／錄製收束掉。
+   * 「重建」按鈕（issue #90 / V3 T1-3；issue #95 起對每一塊，見 CONTEXT.md「重建」）：
+   * 對場上每一塊，用它自己的來源圖＋目前兩條拉霸，同 id 同圖同 `offset` 地 `remove`
+   * + `spawn`（新 `meshParams`／`importSize`），之後 `setScene(sceneSnapshot())`——只改
+   * Scene、不是 Track 事件（面板在錄製中／播放中已把按鈕鎖住），Track／群組／初始 Pin
+   * 都保留。先把每塊的新網格都建好（`meshFor`，失敗就整批放棄、場上不動＋提示），
+   * 確定都成功才動場上的塊，不會重建到一半留下缺塊。
    */
-  private rebuildJelly(): void {
-    this.runImport(this.sourceImage().bytes, '重建失敗，場上的果凍維持不變');
+  private rebuildAll(): void {
+    if (this.importing) return;
+    const meshParams = this.currentMeshParams();
+    const importSize = this.importSize;
+    const entries = this.world.sceneSnapshot();
+    try {
+      for (const e of entries) this.meshFor(e.sourceId, meshParams, importSize);
+    } catch (err: unknown) {
+      console.warn('[jelly] 重建失敗，已略過', err);
+      this.showNotice('重建失敗，場上的果凍維持不變');
+      return;
+    }
+    for (const e of entries) {
+      this.world.applyInput({ type: 'remove', jellyId: e.jellyId });
+      this.world.applyInput({ type: 'spawn', ...e, meshParams, importSize });
+    }
+    this.world.setScene(this.world.sceneSnapshot());
   }
 
   /**
-   * 場上這塊果凍的來源影像——最近一次成功匯入的那張；還沒匯入任何圖時，內建預設
-   * 果凍在此刻用 `canvasToPng` 拍成 `format: 'png'`（載入端零特例）。存檔
-   * （`buildClipState`）與重建（`rebuildJelly`）共用同一條規則。
+   * 「下一次」匯入／重建／生成要餵給 `buildSimMesh` 的**解析後完整**參數（issue #57 /
+   * #89）：拉霸值就是 `targetParticleCount`，其他網格參數維持預設。效能退路不在這裡
+   * ——它在 `frame()` 直接壓拉霸（`applyMeshDensityFallback`），這裡讀到的已是壓過的值。
    */
-  private sourceImage(): ClipImage {
-    return this.lastImage ?? { format: 'png', bytes: canvasToPng(this.defaultTexture) };
+  private currentMeshParams(): BuildSimMeshParams {
+    return { ...DEFAULT_PARAMS, targetParticleCount: this.meshDensity };
   }
 
   /**
-   * 拖放／按鈕匯入與「重建」共用的外殼：`importing` 擋掉重疊呼叫（含跟載入片段
-   * 互斥），`importImage` 任何一步丟錯都 `console.warn` ＋ 閃一行 `notice` 後放棄，
-   * 原本的果凍不受影響。
+   * 拖放／按鈕匯入的外殼：`importing` 擋掉重疊呼叫（含跟載入片段互斥），`importImage`
+   * 任何一步丟錯都 `console.warn` ＋ 閃一行 `notice` 後放棄，場上的塊不受影響。
    */
   private runImport(imageBytes: Uint8Array, failureNotice: string): void {
     if (this.importing) return;
@@ -1524,34 +1610,118 @@ export class JellySandbox {
       });
   }
 
+  /**
+   * 匯入 = 在畫面中央**新增**一塊（issue #95；ADR-0013）：貼圖先解碼（之後的 `spawn`
+   * 全程同步）、網格先建好（`meshFor`，失敗就在這裡丟、不註冊來源、場上不動），才
+   * 註冊來源 `src/<N>`、`spawn` 成 `jelly/<N>`。`offset` = 相機目前對準的世界座標
+   * （`transform.x/y` = 畫布中心的世界點）− 網格 bbox 中心，新塊一定落在畫面中央。
+   * 匯入尺寸／密度拉霸的值在 `await` 之前抄下來，使用者在解碼期間再拉也不會讓「實際
+   * 套用的值」跟存檔對不上。
+   *
+   * 播放中匯入先停掉播放（比照舊的換網格行為）：Scene 快照要拍的是使用者擺的佈景，
+   * 不該把 Track 正在播、播完就會消失的塊收進去。錄製中匯入**不**中斷錄製——`spawn`
+   * 經 `dispatchInput` 錄進 Action Track（播到那步才出現、重設後消失），Scene 不動。
+   */
   private async importImage(imageBytes: Uint8Array): Promise<void> {
-    // 網格密度（issue #89）：拉霸值就是這次的 targetParticleCount，其他網格參數維持
-    // 預設。這裡就把參數**解析完整**（不只帶 diff），存檔要原樣寫進
-    // `ClipState.meshParams` 供載入端決定性重算（issue #57）。效能退路不在這裡——
-    // 它在 `frame()` 直接壓拉霸（`applyMeshDensityFallback`），這裡讀到的已是壓過的值。
-    const meshParams: BuildSimMeshParams = {
-      ...DEFAULT_PARAMS,
-      targetParticleCount: this.meshDensity,
-    };
-    // 匯入尺寸（issue #88）：在管線之後、建 `SimCore` 之前把網格縮到拉霸指定的最長邊。
-    // 這一步在管線外（不進 `BuildSimMeshParams`／種子雜湊，ADR-0005）。先把拉霸值
-    // 抄下來，`await` 期間使用者再拉也不會讓「實際套用的值」跟存檔對不上。
+    const meshParams = this.currentMeshParams();
     const importSize = this.importSize;
-    const mesh: SimMesh = scaleMeshToLongestEdge(buildSimMesh(imageBytes, meshParams), importSize);
+    const format = sniffImageFormat(imageBytes);
     const texture = await decodeTextureImage(imageBytes);
-    await this.replaceJelly(mesh, texture);
-    // 換果凍成功後才記住這次的來源影像、完整參數與匯入尺寸（供存檔）——`buildSimMesh`
-    // / 貼圖解碼 / `replaceJelly` 中途丟錯時維持上一份，跟畫面上實際還在的果凍一致。
-    this.lastImage = { format: sniffImageFormat(imageBytes), bytes: imageBytes };
-    this.lastMeshParams = meshParams;
-    this.lastImportSize = importSize;
+    if (this.demoRunner.isRunning) {
+      this.demoRunner.stop();
+      this.setPlaybackLocked(false);
+    }
+    const sourceId = `src/${this.nextSourceNum}`;
+    // 先在圖庫外建網格：失敗會丟到 runImport 的 catch，來源不會被半註冊。
+    this.sources.set(sourceId, { format, bytes: imageBytes, texture });
+    try {
+      this.meshFor(sourceId, meshParams, importSize);
+    } catch (err) {
+      this.sources.delete(sourceId);
+      throw err;
+    }
+    this.nextSourceNum++;
+    const mesh = this.meshFor(sourceId, meshParams, importSize);
+    const center = meshBboxCenter(mesh);
+    this.spawnJelly(sourceId, meshParams, importSize, {
+      x: this.cameraState.transform.x - center.x,
+      y: this.cameraState.transform.y - center.y,
+    });
+    if (!this.trackRecorder.isRecording) this.world.setScene(this.world.sceneSnapshot());
+  }
+
+  /**
+   * 生成一塊（issue #95）：配一個新的 `jelly/<N>`、組 `spawn` 事件經 `dispatchInput`
+   * 送進 `World`（錄製中會被錄下）。呼叫端決定要不要接著 `setScene`。回傳新塊的 id。
+   */
+  private spawnJelly(
+    sourceId: string,
+    meshParams: BuildSimMeshParams,
+    importSize: number | null,
+    offset: Point,
+  ): string {
+    const jellyId = `jelly/${this.nextJellyNum++}`;
+    this.dispatchInput({ type: 'spawn', jellyId, sourceId, meshParams, importSize, offset });
+    return jellyId;
+  }
+
+  /**
+   * `World` 的 `meshProvider`（issue #95）：來源圖庫查位元組 → `buildSimMesh`（決定性，
+   * ADR-0005）→ 匯入尺寸縮放（`scaleMeshToLongestEdge`，`null` = 不縮放、舊片段遷移的塊）。
+   * 以參數 key memo：`reset()`／重建／載入片段對同一組參數不會重跑整條管線。來源不存在
+   * 時丟錯（載入片段在 `parseClipFile` 就擋掉了引用不存在的來源，這裡是最後防線）。
+   */
+  private meshFor(
+    sourceId: string,
+    meshParams: BuildSimMeshParams,
+    importSize: number | null,
+  ): SimMesh {
+    const key = `${sourceId}|${importSize}|${JSON.stringify(meshParams)}`;
+    const cached = this.meshMemo.get(key);
+    if (cached) return cached;
+    const source = this.sources.get(sourceId);
+    if (!source) throw new Error(`來源圖「${sourceId}」不存在`);
+    const raw = buildSimMesh(source.bytes, meshParams);
+    const mesh = importSize === null ? raw : scaleMeshToLongestEdge(raw, importSize);
+    this.meshMemo.set(key, mesh);
+    return mesh;
+  }
+
+  /** 把內建預設果凍註冊成來源 `src/1`（啟動與「清空全部」）；流水號跳到 2。 */
+  private registerDefaultSource(): void {
+    this.sources.set(DEFAULT_SOURCE_ID, {
+      format: 'png',
+      bytes: canvasToPng(this.defaultTexture),
+      texture: this.defaultTexture,
+    });
+    this.nextSourceNum = 2;
+  }
+
+  /**
+   * 每幀把算繪端的塊集合同步成 `World.jellies()`（issue #95）：新塊 `addJelly`（貼圖從
+   * 來源圖庫查）、消失的 `removeJelly`、順序依 id（後生成在上）。id 序列沒變時只跳過
+   * 重排；位置上傳在 `frame()` 另外做。
+   */
+  private syncRenderer(): void {
+    const views = this.world.jellies();
+    const live = new Set<string>();
+    for (const j of views) {
+      live.add(j.id);
+      if (this.renderer.hasJelly(j.id)) continue;
+      const source = this.sources.get(j.sourceId);
+      if (!source) throw new Error(`來源圖「${j.sourceId}」不存在`);
+      this.renderer.addJelly(j.id, j.mesh, j.positions, source.texture);
+    }
+    for (const id of this.renderer.jellyIds()) if (!live.has(id)) this.renderer.removeJelly(id);
+    const order = views.map((j) => j.id);
+    const current = this.renderer.jellyIds();
+    if (order.some((id, i) => id !== current[i])) this.renderer.setJellyOrder(order);
   }
 
   /**
    * 「儲存片段」按鈕（issue #57 / V2 T2-4）——把目前整個片段序列化成一個帶時間戳
    * 的 `.json` 下載（`jelly-sandbox-<YYYYMMDD-HHMMSS>.json`，多版本不互相覆蓋）。
-   * 任何時候都可用：還沒匯入任何圖時，內建預設果凍在此刻用 `canvasToPng` 拍成
-   * `format: 'png'`（載入端零特例）。
+   * 任何時候都可用（空桌面也能存：Scene 為空、來源只有內建預設）。
    */
   private saveClip(): void {
     const json = serializeClip(this.buildClipState());
@@ -1571,20 +1741,24 @@ export class JellySandbox {
   }
 
   /**
-   * 蒐集目前記憶體狀態成 `ClipState`（issue #57）——`RecordedTrack` 攤成 `ClipTrack`
-   * （`groupIds` 的 `Set` → 陣列、`customLabel ?? label` → `name`）、`setupPins`
-   * 拷成純 `{ x, y }`、`sim` 帶滑桿原始值。`image` 見 `sourceImage`。
+   * 蒐集目前記憶體狀態成 `ClipState`（issue #57；issue #95 升 v2）——來源圖庫攤成
+   * `sources`（每張只存一份，貼圖不進檔）、Scene 直接取 `world.sceneSnapshot()`、
+   * `RecordedTrack` 攤成 `ClipTrack`（`groupIds` 的 `Set` → 陣列、`customLabel ?? label` →
+   * `name`）、`setupPins` 拷成純 `{ x, y }`、`sim` 帶滑桿原始值、四個流水號。
    */
   private buildClipState(): ClipState {
+    const sources: Record<string, ClipImage> = {};
+    for (const [id, source] of this.sources) {
+      sources[id] = { format: source.format, bytes: source.bytes };
+    }
     return {
-      image: this.sourceImage(),
-      meshParams: this.lastMeshParams,
-      importSize: this.lastImportSize,
+      sources,
+      scene: this.world.sceneSnapshot(),
       sim: {
         softness: this.softness,
-        tapStrength: this.sim.params.tapStrength,
+        tapStrength: this.world.params.tapStrength,
         boundary: this.boundaryMode,
-        gravity: this.sim.params.gravity,
+        gravity: this.world.params.gravity,
       },
       tracks: this.tracks.map((t): ClipTrack => ({
         id: t.id,
@@ -1599,7 +1773,12 @@ export class JellySandbox {
       })),
       groups: this.groups.map((g) => ({ id: g.id, name: g.name, enabled: g.enabled })),
       setupPins: this.setupPins.map((p) => ({ x: p.x, y: p.y })),
-      counters: { nextTrackNum: this.nextTrackNum, nextGroupNum: this.nextGroupNum },
+      counters: {
+        nextTrackNum: this.nextTrackNum,
+        nextGroupNum: this.nextGroupNum,
+        nextJellyNum: this.nextJellyNum,
+        nextSourceNum: this.nextSourceNum,
+      },
     };
   }
 
@@ -1608,7 +1787,7 @@ export class JellySandbox {
    * 解析／驗證失敗（非 JSON／版本不符／欄位缺或型別錯）就在這裡接住、顯示提示、
    * 目前場景**完全不動**（不進 `applyClipState`，不觸碰任何既有狀態）。解析成功
    * 才交給 `applyClipState` 走場景整包取代；`importing` 擋掉跟拖放／按鈕匯入圖片
-   * 重疊的呼叫（共用同一套「換 sim/renderer」機制，不能兩邊同時動）。
+   * 重疊的呼叫。
    */
   private onLoadClip = (text: string): void => {
     if (this.importing) return;
@@ -1633,33 +1812,41 @@ export class JellySandbox {
   };
 
   /**
-   * 「載入片段」整包取代場景（issue #58）：用存檔的影像位元組 + 完整 mesh 參數
-   * 決定性重算 mesh（不套目前的「網格密度」拉霸——存檔當下已經是實際生效的
-   * 完整參數，不該被目前拉霸或裝置的降級狀態動）、貼圖依存的格式重建，走跟「重新
-   * 匯入圖片」相同的收束路徑（`replaceJelly`：中斷播放／錄製、清空 Track／群組／
-   * 初始 Pin，換新 `SimCore` + `JellyRenderer`，鏡頭自動框住新果凍——即「剛匯入
-   * 一張圖」的鏡位，不保存存檔時的手動平移／縮放）。`replaceJelly` 成功後才把
-   * `ClipState` 其餘欄位灌回：軟硬度／輕拍力道／邊界模式（同時同步面板顯示，
-   * `setSoftness`/`setTapStrength`/`setGravity`/`setBoundaryMode` 只動 sim、不動面板 DOM）、
-   * 所有 Track（`hydrateClipTrack`：`groupIds` 陣列 → `Set`，`name` 同時填入
-   * `customLabel`／`label`——載入後顯示的就是存檔當下的名字）、所有群組、片段
-   * 初始 Pin、流水號。任何一步丟錯（壞影像位元組、mesh 建置失敗）都讓呼叫端
-   * `onLoadClip` 的 catch 接住，原本的 Jelly 已經在 `replaceJelly` 成功時被換掉，
-   * 但那一步失敗代表新 Jelly 根本沒建出來、舊的還在——跟 `importImage` 失敗時
-   * 的行為一致。
+   * 「載入片段」整包取代場景（issue #58；issue #95 升 v2）：先把所有來源圖的貼圖解碼、
+   * Scene 每塊的網格用存檔的完整 mesh 參數＋匯入尺寸決定性重算（不套目前的拉霸——
+   * 存檔當下已經是實際生效的值，不該被目前拉霸或裝置的降級狀態動）——這些都在
+   * 觸碰任何狀態**之前**做完，任何一步丟錯（壞影像位元組、mesh 建置失敗）都讓呼叫端
+   * `onLoadClip` 的 catch 接住、場上完全不動。都成功了才：中斷播放／錄製、換掉來源
+   * 圖庫與 memo、`setScene` + `reset()` 把場上換成片段的 Scene、鏡頭框住聯集（即「剛匯入」
+   * 的鏡位，不保存存檔時的手動平移／縮放）、其餘欄位灌回：軟硬度／輕拍力道／重力／
+   * 邊界模式（同時同步面板顯示）、所有 Track（`hydrateClipTrack`）、所有群組、片段初始
+   * Pin、流水號。拉霸 `importSize`／`meshDensity` 刻意不動：它們代表「下一次」。
+   * 「最近匯入的圖」= 最大的 `sourceId`，由 `sources` 本身決定，不另外記。
    */
   private async applyClipState(clip: ClipState): Promise<void> {
-    // 匯入尺寸依檔案值縮放、不套目前拉霸（載入是還原、不是重新匯入，issue #88）；
-    // 舊檔沒有此欄位 → `null` → 不縮放，果凍大小與 Track 座標跟存檔當下完全一樣。
-    const rawMesh = buildSimMesh(clip.image.bytes, clip.meshParams);
-    const mesh: SimMesh =
-      clip.importSize === null ? rawMesh : scaleMeshToLongestEdge(rawMesh, clip.importSize);
-    const texture = await decodeTextureImage(clip.image.bytes);
-    await this.replaceJelly(mesh, texture);
+    const decoded = new Map<string, SourceImage>();
+    for (const [id, image] of Object.entries(clip.sources)) {
+      decoded.set(id, { ...image, texture: await decodeTextureImage(image.bytes) });
+    }
+    // 網格先用一個暫時的圖庫建好（memo 也暫存），確定每塊都建得出來才動狀態。
+    const memo = new Map<string, SimMesh>();
+    for (const e of clip.scene) {
+      const key = `${e.sourceId}|${e.importSize}|${JSON.stringify(e.meshParams)}`;
+      if (memo.has(key)) continue;
+      const raw = buildSimMesh(decoded.get(e.sourceId)!.bytes, e.meshParams);
+      memo.set(key, e.importSize === null ? raw : scaleMeshToLongestEdge(raw, e.importSize));
+    }
 
-    this.lastImage = clip.image;
-    this.lastMeshParams = clip.meshParams;
-    this.lastImportSize = clip.importSize; // 拉霸 `importSize`／`meshDensity` 刻意不動：它們代表「下一次」
+    this.haltPlaybackAndRecording();
+    this.sources.clear();
+    for (const [id, source] of decoded) this.sources.set(id, source);
+    this.meshMemo.clear();
+    for (const [key, mesh] of memo) this.meshMemo.set(key, mesh);
+    this.world.setScene(clip.scene);
+    this.world.reset();
+    this.syncRenderer();
+    this.cameraState = createCameraState({ bbox: this.currentBbox() }, this.canvasSize());
+    this.cameraCommands = [];
 
     this.setSoftness(clip.sim.softness);
     this.controlPanel.setSoftness(clip.sim.softness);
@@ -1674,98 +1861,32 @@ export class JellySandbox {
     this.tracks = clip.tracks.map(hydrateClipTrack);
     this.nextTrackNum = clip.counters.nextTrackNum;
     this.nextGroupNum = clip.counters.nextGroupNum;
+    this.nextJellyNum = clip.counters.nextJellyNum;
+    this.nextSourceNum = clip.counters.nextSourceNum;
     this.soloState = null;
     this.setupPins = clip.setupPins.map((p) => ({ x: p.x, y: p.y }));
     this.syncPanelTracks();
   }
 
-  /**
-   * 建好新的一套（sim + renderer + camera）成功後才拆舊的——畫面不會有空檔。
-   * 新 `SimCore` 一律從 `DEFAULT_SIM_PARAMS` 起家，所以要把控制面板目前設定
-   * （Softness、輕拍力道、重力、Boundary 模式）重新套上去，面板才不會顯示跟實際物理
-   * 不一致的值（Pin 模式是 `JellySandbox` 層的路由旗標，不受換 `SimCore` 影響，
-   * 不用重套）。
-   */
-  private async replaceJelly(mesh: SimMesh, texture: HTMLImageElement): Promise<void> {
-    // 換網格時的場景收束跟「停止／重設」走同一條路（issue #38）：中斷疊加播放
-    // （排程中的舊座標事件不會砸進新網格）、解鎖播放鎖定的控制項、中斷仍在進行
-    // 中的錄製。
-    this.haltPlaybackAndRecording();
-    // 「停止／重設」到此為止；重新匯入 PNG 另外**清空**整份 Track／群組清單——座標
-    // 與鏡頭快照都是對著舊網格算的，套到新網格沒意義（issue #33 / #38；ADR-0007
-    // 生命週期）。
-    this.tracks = [];
-    this.nextTrackNum = 1;
-    this.setupPins = []; // 片段初始 Pin 座標是對著舊網格算的，套到新網格沒意義（issue #39）
-    this.groups = [createDefaultGroup()];
-    this.nextGroupNum = 1;
-    this.soloState = null;
-    // 「錄製目標」選擇器是按下錄製前選的 per-take 偏好、不是對著舊網格的狀態，
-    // 兩條收束路徑都刻意**不動**它的選值（`haltPlaybackAndRecording` 只還原它的
-    // 鎖定狀態，不改選值）。
-    this.syncPanelTracks();
-    const sim = new SimCore(mesh);
-    sim.params.cellFrac = this.sim.params.cellFrac;
-    sim.params.alphaSm = this.sim.params.alphaSm;
-    sim.params.tapStrength = this.sim.params.tapStrength;
-    sim.params.gravity = this.sim.params.gravity;
-    sim.rebuildRegions();
-    this.applyBoundaryMode(sim);
-
-    const renderer = await JellyRenderer.create({
-      width: this.root.clientWidth,
-      height: this.root.clientHeight,
-      mesh,
-      positions: sim.positions,
-      texture,
-      background: { color: 0x1a1a1a, alpha: 1 },
-    });
-
-    this.input.destroy();
-    this.cameraInput.destroy();
-    this.renderer.destroy();
-    this.root.appendChild(renderer.canvas); // dropHint 用 position:absolute + z-index，DOM 順序不影響疊放
-
-    this.sim = sim;
-    this.renderer = renderer;
-    this.cameraState = createCameraState({ bbox: sim.bbox() }, this.canvasSize());
-    this.cameraCommands = [];
-    ({ input: this.input, cameraInput: this.cameraInput } = this.attachInputHandlers(
-      renderer.canvas,
-    ));
-    this.renderer.setCamera(this.cameraState.transform);
-    this.applyPinModeVisuals(); // 新 canvas 是全新元素，游標樣式要重套
-    this.input.setActiveTool(this.activeTool); // 新 PointerInput 預設回一般操作，要重套
-    // 新 ToolRouter 的撒 Pin／移除 Pin 參數也回到預設值，一併重套（issue #69／#70）
-    // ——比照上一行。
-    this.input.setSprayParams({ radius: this.sprayRadius, spacing: this.spraySpacing });
-    this.input.setEraseParams({ radius: this.eraseRadius });
-    this.applyHintVisibility(); // 新 JellyRenderer 的線框預設隱藏，要按目前的提示狀態重套
-    this.renderer.setBoundaryFrame(this.boundaryFrame); // 新 JellyRenderer 預設沒有邊界外框，要重套
-  }
-
-  /** `PointerInput` + `CameraInput` 都吃同一組 project／hitTest；重新匯入後換綁到新 canvas。 */
+  /** `PointerInput` + `CameraInput` 都吃同一組 project／hitTest（picking 走 `World.pick`，跨所有塊）。 */
   private attachInputHandlers(canvas: HTMLCanvasElement): {
     input: PointerInput;
     cameraInput: CameraInput;
   } {
     const project = (sx: number, sy: number) =>
       screenToWorld(this.cameraState.transform, this.canvasSize(), sx, sy);
-    const hitTest = (world: { x: number; y: number }) => this.sim.pick(world.x, world.y) != null;
+    const hitTest = (world: { x: number; y: number }) => this.world.pick(world.x, world.y) != null;
 
     const input = new PointerInput(canvas, {
       screenToWorld: project,
       hitTest,
-      getFan: () => this.sim.fanState(),
+      getFan: () => this.world.fanState(),
       // 撒 Pin 的間距判定要跟場上既有的 Pin 也比一次（issue #69），不然在撒過的
       // 地方再撒一次會疊成一坨。
-      listPins: () => this.sim.listPins(),
+      listPins: () => this.world.listPins(),
       applyInput: (event) => {
         const routed = routeForPinMode(event, this.pinModeActive, this.pinModeContext());
-        if (routed) {
-          this.sim.applyInput(routed);
-          this.trackRecorder.record(routed); // no-op 除非正在錄製（issue #29）
-        }
+        if (routed) this.dispatchInput(routed); // 進 World + no-op 除非正在錄製（issue #29）
       },
     });
     const cameraInput = new CameraInput(canvas, {
@@ -1848,7 +1969,9 @@ export class JellySandbox {
     const clampedElapsed = Math.min(Math.max(elapsed, 0), CAMERA_MAX_DT);
 
     this.perfMonitor.sample(elapsedMs, clampedElapsed);
-    this.sim.params.substeps = this.perfMonitor.substeps;
+    if (this.world.params.substeps !== this.perfMonitor.substeps) {
+      this.world.applyParams({ substeps: this.perfMonitor.substeps });
+    }
     this.controlPanel.setPerfStatus(this.perfMonitor.substeps, this.perfMonitor.degraded);
     // 降級發生的那一幀把「網格密度」拉霸砍半（issue #89）——旗標一次性，不會每幀重砍。
     if (this.perfMonitor.consumeMeshFallbackPending()) this.applyMeshDensityFallback();
@@ -1856,10 +1979,10 @@ export class JellySandbox {
     const steps = this.accumulator.advance(elapsed);
     for (let i = 0; i < steps; i++) {
       this.demoRunner.advance(
-        (event) => this.sim.applyInput(event),
+        (event) => this.world.applyInput(event),
         (cmd) => this.cameraCommands.push(cmd),
       );
-      this.sim.step(STEP_SECONDS);
+      this.world.step(STEP_SECONDS);
       this.trackRecorder.tick(); // 跟 demoRunner 同一個 step 計數，錄下的時間戳記才能對得上重播（issue #29）
     }
     const playing = this.demoRunner.isRunning;
@@ -1872,9 +1995,10 @@ export class JellySandbox {
 
     const cmds = this.cameraCommands;
     this.cameraCommands = [];
+    // 相機跟隨吃所有塊的聯集 bbox；空場時 `currentBbox` 退回上一次的值 → 鏡頭停在原地（issue #95）。
     this.cameraState = updateCamera(
       this.cameraState,
-      { bbox: this.sim.bbox() },
+      { bbox: this.currentBbox() },
       this.canvasSize(),
       cmds,
       clampedElapsed,
@@ -1884,7 +2008,9 @@ export class JellySandbox {
     // 改動 `followEnabled`，不同步就會脫鉤。`setFollowLocked` 值沒變不寫 DOM。
     this.controlPanel.setFollowLocked(!this.cameraState.followEnabled);
 
-    this.renderer.setPositions(this.sim.positions);
+    // 算繪端跟 World 的塊集合同步（新增／移除／順序），再逐塊上傳位置（issue #95）。
+    this.syncRenderer();
+    for (const j of this.world.jellies()) this.renderer.setPositions(j.id, j.positions);
     this.renderer.setCamera(this.cameraState.transform);
     this.renderer.render();
 
@@ -1895,7 +2021,7 @@ export class JellySandbox {
       const canvasSize = this.canvasSize();
       if (hints.pins) {
         this.pinMarkers.update(
-          this.sim.listPins().map((pin) => {
+          this.world.listPins().map((pin) => {
             const screen = worldToScreen(
               this.cameraState.transform,
               canvasSize,
@@ -1907,7 +2033,7 @@ export class JellySandbox {
         );
       }
       if (hints.fanRange || hints.fanIcon) {
-        const fan = this.sim.fanState();
+        const fan = this.world.fanState();
         this.fanOverlay.update(
           fan && {
             corners: fanRectCorners(fan).map((c) =>
@@ -2026,6 +2152,8 @@ const ACTION_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
   clearPins: 'Pin',
   setFan: '電風扇',
   clearFan: '電風扇',
+  spawn: '生成',
+  remove: '移除',
 };
 const CAMERA_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
   panBy: '平移',
@@ -2094,6 +2222,23 @@ function firstEventStep(steps: Track): number {
 
 function lastEventStep(steps: Track): number {
   return steps[steps.length - 1]?.atStep ?? 0;
+}
+
+/** 網格 rest 座標的 bbox 中心——匯入時算 `offset` 用（讓新塊落在相機對準處）。 */
+function meshBboxCenter(mesh: SimMesh): Point {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < mesh.positions.length; i += 2) {
+    const x = mesh.positions[i]!;
+    const y = mesh.positions[i + 1]!;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
 }
 
 /**
