@@ -1668,3 +1668,57 @@ describe('SimCore — Region 依網格拓撲分組（issue #83）', () => {
     expect(bMoved).toBeLessThan(aMoved * 0.05);
   });
 });
+
+describe('SimCore — substep 拆段（issue #95 / V3 T3-2，給 World 與碰撞用的 seam）', () => {
+  /** 兩顆 sim 吃同一段輸入：抓右下角甩一段、放開、再等一秒——含 Grab／Fling／陣風以外的所有步驟。 */
+  function drive(sim: SimCore, stepOnce: (sim: SimCore) => void): void {
+    sim.params.gravity = 1500;
+    sim.setBoundary(new FloorBoundary({ floorY: 200, friction: 0.3 }));
+    sim.applyInput({ type: 'pin', id: 'p', x: 0, y: 0 });
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+    for (let step = 1; step <= 8; step++) {
+      sim.applyInput({ type: 'moveGrab', id: 'g', x: 96 + 30 * step, y: 96 + 10 * step });
+      stepOnce(sim);
+    }
+    sim.applyInput({ type: 'release', id: 'g' });
+    sim.applyInput({ type: 'tap', x: 48, y: 48 });
+    for (let f = 0; f < 60; f++) stepOnce(sim);
+  }
+
+  it('predict → solveInternal → finishSubstep 手動迴圈與 step() 位元相同', () => {
+    const a = new SimCore(MESH());
+    const b = new SimCore(MESH());
+    drive(a, (sim) => sim.step(1 / 60));
+    drive(b, (sim) => {
+      const subs = sim.params.substeps;
+      const h = 1 / 60 / subs;
+      for (let s = 0; s < subs; s++) {
+        sim.predict(h);
+        sim.solveInternal(h);
+        sim.finishSubstep(h);
+      }
+    });
+    expect(Array.from(b.positions)).toEqual(Array.from(a.positions));
+    expect(b.kineticEnergy()).toBe(a.kineticEnergy());
+  });
+
+  it('輪廓邊 = 只屬於一個三角形的邊，外法線朝外；輪廓 Particle 索引去重', () => {
+    const sim = new SimCore(gridMesh(3, 3, 10)); // 3×3 頂點、8 個三角形，正中間頂點 4 不在輪廓上
+    expect(sim.contour.length).toBe(8);
+    const surface = Array.from(sim.surfaceParticles).sort((p, q) => p - q);
+    expect(surface).toEqual([0, 1, 2, 3, 5, 6, 7, 8]);
+    const pos = sim.positions;
+    for (const e of sim.contour) {
+      const ax = pos[2 * e.a]!;
+      const ay = pos[2 * e.a + 1]!;
+      const bx = pos[2 * e.b]!;
+      const by = pos[2 * e.b + 1]!;
+      // 外法線 = nsign · perp(b − a)，perp(x, y) = (y, −x)；邊中點指向網格中心 (10, 10) 的向量要跟它反向。
+      const nx = e.nsign * (by - ay);
+      const ny = e.nsign * -(bx - ax);
+      const mx = (ax + bx) / 2 - 10;
+      const my = (ay + by) / 2 - 10;
+      expect(nx * mx + ny * my).toBeGreaterThan(0);
+    }
+  });
+});
