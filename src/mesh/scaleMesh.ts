@@ -20,7 +20,8 @@ import type { SimMesh } from './types';
  * 拷貝，呼叫端不必分辨「有沒有真的縮」。
  */
 export function scaleMeshToLongestEdge(mesh: SimMesh, targetLongestEdge: number): SimMesh {
-  const longest = longestBBoxEdge(mesh.positions);
+  const bb = positionsBbox(mesh.positions);
+  const longest = Math.max(bb.maxX - bb.minX, bb.maxY - bb.minY);
   const s = longest > 0 ? targetLongestEdge / longest : 1;
 
   const positions = new Float32Array(mesh.positions.length);
@@ -37,7 +38,16 @@ export function scaleMeshToLongestEdge(mesh: SimMesh, targetLongestEdge: number)
   };
 }
 
-function longestBBoxEdge(positions: Float32Array): number {
+/**
+ * 攤平座標 `[x0, y0, ...]` 的軸對齊包圍盒（空陣列時四邊為 ±Infinity）。匯入尺寸縮放與
+ * 沙盒算擺放 `offset`（issue #95）共用；求解器內部另有自己吃 `Float64Array` 的熱迴圈版本。
+ */
+export function positionsBbox(positions: ArrayLike<number>): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -50,5 +60,5 @@ function longestBBoxEdge(positions: Float32Array): number {
     if (x > maxX) maxX = x;
     if (y > maxY) maxY = y;
   }
-  return Math.max(maxX - minX, maxY - minY);
+  return { minX, minY, maxX, maxY };
 }

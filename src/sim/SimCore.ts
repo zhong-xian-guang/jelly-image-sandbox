@@ -66,6 +66,7 @@ import {
   type PointerId,
   type SimParams,
   type StretchStats,
+  substepCount,
   type SurfacePoint,
 } from './types';
 
@@ -710,18 +711,13 @@ export class SimCore {
    */
   step(dt: number): void {
     if (!(dt > 0)) return;
-    const subs = this.substepCount();
+    const subs = substepCount(this.params);
     const h = dt / subs;
     for (let s = 0; s < subs; s++) {
       this.predict(h);
       this.solveInternal(h);
       this.finishSubstep(h);
     }
-  }
-
-  /** `params.substeps` 取整、至少 1——`step()` 與 `World.step()` 切 substep 共用同一條規則。 */
-  substepCount(): number {
-    return Math.max(1, Math.floor(this.params.substeps));
   }
 
   /**
@@ -1029,7 +1025,7 @@ export class SimCore {
     return this.prev;
   }
 
-  /** Particle 數（= `positions.length / 2`）。 */
+  /** Particle 數（= `positions.length / 2`）。跨塊碰撞（V3 T3-3）的輸入 `count`；求解器內部不用它。 */
   get particleCount(): number {
     return this.n;
   }

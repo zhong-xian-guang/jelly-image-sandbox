@@ -15,7 +15,7 @@ export type {
 } from './boundary';
 export { softnessToParams } from './softness';
 export type { SoftnessParams } from './softness';
-export { DEFAULT_SIM_PARAMS, isPointInFanRect } from './types';
+export { DEFAULT_SIM_PARAMS, isPointInFanRect, substepCount } from './types';
 export type {
   SimParams,
   InputEvent,

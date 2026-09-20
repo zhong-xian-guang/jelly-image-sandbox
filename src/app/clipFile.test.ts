@@ -365,6 +365,19 @@ describe('parseClipFile', () => {
     expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
   });
 
+  it('Track 裡的 spawn 事件 meshParams 型別錯／remove 事件缺 jellyId → ClipFileError', () => {
+    const badSpawn = JSON.parse(serializeClip(fullClip())) as {
+      tracks: { steps: { event: { meshParams: Record<string, unknown> } }[] }[];
+    };
+    badSpawn.tracks[0]!.steps[2]!.event.meshParams.targetParticleCount = '200';
+    expect(() => parseClipFile(JSON.stringify(badSpawn))).toThrow(ClipFileError);
+    const badRemove = JSON.parse(serializeClip(fullClip())) as {
+      tracks: { steps: { event: Record<string, unknown> }[] }[];
+    };
+    delete badRemove.tracks[0]!.steps[3]!.event.jellyId;
+    expect(() => parseClipFile(JSON.stringify(badRemove))).toThrow(ClipFileError);
+  });
+
   it('scene[].offset 缺失或 importSize 非正數 → ClipFileError', () => {
     const noOffset = JSON.parse(serializeClip(fullClip())) as { scene: Record<string, unknown>[] };
     delete noOffset.scene[0]!.offset;

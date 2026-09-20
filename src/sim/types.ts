@@ -144,6 +144,14 @@ export interface SimParams {
   gravity: number;
 }
 
+/**
+ * `params.substeps` → 實際 substep 數：取整、至少 1。`SimCore.step()` 與 `World.step()` 切
+ * substep 共用同一條規則（issue #95 檢視回饋：兩邊各自寫一份會分岔）。
+ */
+export function substepCount(params: Pick<SimParams, 'substeps'>): number {
+  return Math.max(1, Math.floor(params.substeps));
+}
+
 export const DEFAULT_SIM_PARAMS: SimParams = {
   cellFrac: 0.15,
   alphaSm: 0.7,

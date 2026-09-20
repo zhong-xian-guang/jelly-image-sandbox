@@ -152,6 +152,7 @@ import {
   buildSimMesh,
   DEFAULT_PARAMS,
   imageFormatToMime,
+  positionsBbox,
   scaleMeshToLongestEdge,
   sniffImageFormat,
   type BuildSimMeshParams,
@@ -1638,17 +1639,19 @@ export class JellySandbox {
       this.setPlaybackLocked(false);
     }
     const sourceId = `src/${this.nextSourceNum}`;
-    // 先在圖庫外建網格：失敗會丟到 runImport 的 catch，來源不會被半註冊。
+    // 網格先建（`meshFor` 要從圖庫查位元組，所以先暫時登記）；建不出來就撤掉登記、
+    // 丟到 runImport 的 catch——流水號不前進、來源不會被半註冊。
     this.sources.set(sourceId, { format, bytes: imageBytes, texture });
+    let mesh: SimMesh;
     try {
-      this.meshFor(sourceId, meshParams, importSize);
+      mesh = this.meshFor(sourceId, meshParams, importSize);
     } catch (err) {
       this.sources.delete(sourceId);
       throw err;
     }
     this.nextSourceNum++;
-    const mesh = this.meshFor(sourceId, meshParams, importSize);
-    const center = meshBboxCenter(mesh);
+    const bb = positionsBbox(mesh.positions);
+    const center = { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
     this.spawnJelly(sourceId, meshParams, importSize, {
       x: this.cameraState.transform.x - center.x,
       y: this.cameraState.transform.y - center.y,
@@ -1682,13 +1685,12 @@ export class JellySandbox {
     meshParams: BuildSimMeshParams,
     importSize: number | null,
   ): SimMesh {
-    const key = `${sourceId}|${importSize}|${JSON.stringify(meshParams)}`;
+    const key = meshKey(sourceId, meshParams, importSize);
     const cached = this.meshMemo.get(key);
     if (cached) return cached;
     const source = this.sources.get(sourceId);
     if (!source) throw new Error(`來源圖「${sourceId}」不存在`);
-    const raw = buildSimMesh(source.bytes, meshParams);
-    const mesh = importSize === null ? raw : scaleMeshToLongestEdge(raw, importSize);
+    const mesh = buildScaledMesh(source.bytes, meshParams, importSize);
     this.meshMemo.set(key, mesh);
     return mesh;
   }
@@ -1840,13 +1842,12 @@ export class JellySandbox {
     for (const [id, image] of Object.entries(clip.sources)) {
       decoded.set(id, { ...image, texture: await decodeTextureImage(image.bytes) });
     }
-    // 網格先用一個暫時的圖庫建好（memo 也暫存），確定每塊都建得出來才動狀態。
+    // 網格先建好放在暫時的 memo，確定每塊都建得出來才動狀態（同 `meshFor` 的 key 與建法）。
     const memo = new Map<string, SimMesh>();
     for (const e of clip.scene) {
-      const key = `${e.sourceId}|${e.importSize}|${JSON.stringify(e.meshParams)}`;
+      const key = meshKey(e.sourceId, e.meshParams, e.importSize);
       if (memo.has(key)) continue;
-      const raw = buildSimMesh(decoded.get(e.sourceId)!.bytes, e.meshParams);
-      memo.set(key, e.importSize === null ? raw : scaleMeshToLongestEdge(raw, e.importSize));
+      memo.set(key, buildScaledMesh(decoded.get(e.sourceId)!.bytes, e.meshParams, e.importSize));
     }
 
     this.haltPlaybackAndRecording();
@@ -2007,14 +2008,20 @@ export class JellySandbox {
 
     const cmds = this.cameraCommands;
     this.cameraCommands = [];
-    // 相機跟隨吃所有塊的聯集 bbox；空場時 `currentBbox` 退回上一次的值 → 鏡頭停在原地（issue #95）。
-    this.cameraState = updateCamera(
-      this.cameraState,
-      { bbox: this.currentBbox() },
-      this.canvasSize(),
-      cmds,
-      clampedElapsed,
-    );
+    // 相機跟隨吃所有塊的聯集 bbox（issue #95）。空場（`World.bbox()` 為 `null`）時鏡頭
+    // 不動：沒有手動指令就整個跳過 `updateCamera`（連閒置回歸的計時都不前進，不會飄回
+    // 舊 bbox）；有手動平移／縮放／框住時才跑一次，目標用上一次的 bbox。
+    const bbox = this.world.bbox();
+    if (bbox) this.lastBbox = bbox;
+    if (bbox || cmds.length > 0) {
+      this.cameraState = updateCamera(
+        this.cameraState,
+        { bbox: this.lastBbox },
+        this.canvasSize(),
+        cmds,
+        clampedElapsed,
+      );
+    }
     // 「鎖定跟隨」勾選框同步到相機實際狀態（issue #36）——相機軌播放的 `setState`
     // 硬切、錄進去的 `setFollow`，或 `playAll` 重設鏡頭都會在使用者沒點勾選框時
     // 改動 `followEnabled`，不同步就會脫鉤。`setFollowLocked` 值沒變不寫 DOM。
@@ -2236,21 +2243,23 @@ function lastEventStep(steps: Track): number {
   return steps[steps.length - 1]?.atStep ?? 0;
 }
 
-/** 網格 rest 座標的 bbox 中心——匯入時算 `offset` 用（讓新塊落在相機對準處）。 */
-function meshBboxCenter(mesh: SimMesh): Point {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (let i = 0; i < mesh.positions.length; i += 2) {
-    const x = mesh.positions[i]!;
-    const y = mesh.positions[i + 1]!;
-    if (x < minX) minX = x;
-    if (y < minY) minY = y;
-    if (x > maxX) maxX = x;
-    if (y > maxY) maxY = y;
-  }
-  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+/** `meshFor` memo 的 key：來源 + 匯入尺寸 + 完整網格參數（同 key ⇒ 決定性同一張網格）。 */
+function meshKey(
+  sourceId: string,
+  meshParams: BuildSimMeshParams,
+  importSize: number | null,
+): string {
+  return `${sourceId}|${importSize}|${JSON.stringify(meshParams)}`;
+}
+
+/** 影像位元組 → `buildSimMesh`（決定性，ADR-0005）→ 匯入尺寸縮放（`null` = 不縮放，舊片段遷移的塊）。 */
+function buildScaledMesh(
+  bytes: Uint8Array,
+  meshParams: BuildSimMeshParams,
+  importSize: number | null,
+): SimMesh {
+  const raw = buildSimMesh(bytes, meshParams);
+  return importSize === null ? raw : scaleMeshToLongestEdge(raw, importSize);
 }
 
 /**

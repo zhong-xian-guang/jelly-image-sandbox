@@ -163,6 +163,7 @@ export class JellyRenderer {
     });
     const tex = texture instanceof Texture ? texture : Texture.from(texture);
     const pixiMesh = new Mesh({ geometry, texture: tex });
+    pixiMesh.label = id; // `jellyIds()` 直接讀子節點的 label，不用反查 Map
     this.jellyLayer.addChild(pixiMesh);
     this.jellies.set(id, {
       mesh: pixiMesh,
@@ -173,27 +174,24 @@ export class JellyRenderer {
     this.wireframeDirty = true;
   }
 
-  /** 移除一塊並釋放它的幾何（貼圖不釋放——可能被別塊共用）。不存在 → no-op。 */
+  /**
+   * 移除一塊並釋放它的幾何（貼圖不釋放——可能被別塊共用）。不存在 → no-op。
+   * PixiJS v8 的 `Mesh.destroy()` 只把幾何參照設成 null、**不**呼叫 `geometry.destroy()`
+   * （issue #95 檢視回饋），要自己釋放，不然每次重建／移除都留一份 GPU buffer。
+   */
   removeJelly(id: string): void {
     const entry = this.jellies.get(id);
     if (!entry) return;
     this.jellies.delete(id);
     this.jellyLayer.removeChild(entry.mesh);
     entry.mesh.destroy({ texture: false, textureSource: false });
+    entry.geometry.destroy();
     this.wireframeDirty = true;
-  }
-
-  hasJelly(id: string): boolean {
-    return this.jellies.has(id);
   }
 
   /** 目前有哪些塊（依繪製順序，先畫的在前）。 */
   jellyIds(): string[] {
-    const ids: string[] = [];
-    for (const child of this.jellyLayer.children) {
-      for (const [id, entry] of this.jellies) if (entry.mesh === child) ids.push(id);
-    }
-    return ids;
+    return this.jellyLayer.children.map((child) => child.label);
   }
 
   /**

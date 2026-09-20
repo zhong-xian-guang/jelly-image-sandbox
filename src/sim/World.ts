@@ -46,6 +46,7 @@ import {
   type PointerId,
   type SceneEntry,
   type SimParams,
+  substepCount,
   type SurfacePoint,
 } from './types';
 
@@ -413,7 +414,7 @@ export class World {
    */
   step(dt: number): void {
     if (!(dt > 0) || this.sorted.length === 0) return;
-    const subs = Math.max(1, Math.floor(this.params.substeps));
+    const subs = substepCount(this.params);
     const h = dt / subs;
     for (let s = 0; s < subs; s++) {
       for (const j of this.sorted) j.core.predict(h);

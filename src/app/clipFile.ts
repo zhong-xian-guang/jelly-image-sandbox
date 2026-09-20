@@ -347,14 +347,24 @@ function parseCameraState(v: unknown, field: string): CameraState {
   };
 }
 
+/**
+ * `spawn`／`remove`（issue #95）是第一批帶巢狀結構的 Track 事件——`spawn` 的 `meshParams`／
+ * `offset` 重播時直接進 `meshProvider`，壞欄位不在這裡擋就會到播放中途才炸，所以這兩種
+ * 走完整驗證；其餘事件維持只驗外殼（見 `parseClipFile` 說明）。
+ */
 function parseDemoStep(v: unknown, field: string): DemoStep {
   const obj = requireObject(v, field);
-  const event = requireObject(obj.event, `${field}.event`);
-  requireString(event.type, `${field}.event.type`);
-  return {
-    atStep: requireNumber(obj.atStep, `${field}.atStep`),
-    event: event as unknown as DemoEvent,
-  };
+  const raw = requireObject(obj.event, `${field}.event`);
+  const type = requireString(raw.type, `${field}.event.type`);
+  let event: DemoEvent;
+  if (type === 'spawn') {
+    event = { type, ...parseSceneEntry(raw, `${field}.event`) };
+  } else if (type === 'remove') {
+    event = { type, jellyId: requireString(raw.jellyId, `${field}.event.jellyId`) };
+  } else {
+    event = raw as unknown as DemoEvent;
+  }
+  return { atStep: requireNumber(obj.atStep, `${field}.atStep`), event };
 }
 
 function parseTrackSteps(v: unknown, field: string): Track {
