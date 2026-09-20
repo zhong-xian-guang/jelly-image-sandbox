@@ -8,7 +8,7 @@
  * `src/camera/`）；v2 錄製器在外層把兩條流併起來錄放。
  */
 
-import type { Point } from '../mesh';
+import type { BuildSimMeshParams, Point } from '../mesh';
 
 export type { Point };
 
@@ -47,6 +47,13 @@ export type PointerId = number | string;
  *   （沿用 Tap 的正規化距離冪次慣例）；中間完全無風。見 `SimCore.applyFan`。
  *   取代即整包覆蓋，不用先送 `clearFan`。
  * - `clearFan`：移除場上的電風扇（若有）。無 `id`。
+ * - `spawn`／`remove`（issue #95 / V3 T3-2；ADR-0013）：**多塊容器 `World` 層級**的
+ *   事件——在場上新增一塊 Jelly（`jellyId` 已存在 → no-op；網格由 `World` 注入的
+ *   `meshProvider(sourceId, meshParams, importSize)` 給、座標加 `offset` 成為那塊的 rest）
+ *   ／移除一塊（連同它上面的 Grab／Pin；不存在 → no-op）。跟其他事件走同一條
+ *   `applyInput` 是為了錄製中的生成／移除能進 Action Track 重播（spec #87）；單塊的
+ *   `SimCore.applyInput` 收到它們一律忽略。用 `jellyId` 而非 `id`：`mergeTracks` 只對
+ *   `id` 加軌別前綴，塊的識別碼跨軌必須保持原樣。
  */
 export type InputEvent =
   | { type: 'grab'; id: PointerId; x: number; y: number; radius?: number }
@@ -69,7 +76,23 @@ export type InputEvent =
       falloffExponent: number;
       frequency: number;
     }
-  | { type: 'clearFan' };
+  | { type: 'clearFan' }
+  | ({ type: 'spawn' } & SceneEntry)
+  | { type: 'remove'; jellyId: string };
+
+/**
+ * Scene（場景，ADR-0013）裡的一塊 Jelly：片段第 0 步就存在的塊。也是 `spawn` 事件的
+ * 內容——`World.sceneSnapshot()` 吐出的就是每塊當初 `spawn` 時的這組參數。`offset`
+ * 是加到網格座標上的平移量（不是中心點：v1 片段的網格原本就在 mask 原點，遷移時
+ * `offset = (0, 0)` 即可完全重現）；`importSize` 為 `null` = 未縮放（舊片段）。
+ */
+export interface SceneEntry {
+  jellyId: string;
+  sourceId: string;
+  meshParams: BuildSimMeshParams;
+  importSize: number | null;
+  offset: Point;
+}
 
 /** 求解器的手感參數。全部有預設值，建構時可只帶想改的欄位。 */
 export interface SimParams {

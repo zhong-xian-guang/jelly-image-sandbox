@@ -434,6 +434,11 @@ export class SimCore {
       case 'clearFan':
         this.fan = null;
         break;
+      case 'spawn':
+      case 'remove':
+        // 多塊容器層級的事件（issue #95），單塊求解器不認得——`World` 在轉送前就
+        // 消化掉了，這裡只是讓直接拿 `SimCore` 當 `applyInput` 目標的呼叫端不會炸。
+        break;
     }
   }
 
@@ -524,9 +529,33 @@ export class SimCore {
     return this.fan;
   }
 
-  /** Grab／Pin 框外退路的吸附半徑：呼叫端指定值，否則靜止 bbox 對角線 × 0.1。 */
-  private grabRadius(explicit?: number): number {
+  /**
+   * Grab／Pin 框外退路的吸附半徑：呼叫端指定值，否則靜止 bbox 對角線 × 0.1。公開給
+   * `World`（issue #95）做「跨塊最近 Particle 在半徑內」的吸附比較——半徑用該塊自己
+   * 的對角線（ADR-0013）。
+   */
+  grabRadius(explicit?: number): number {
     return explicit ?? this.restDiag * 0.1;
+  }
+
+  /**
+   * 離世界座標 `(x, y)` 最近的 Particle 與距離（目前變形後的位置；不限半徑）。`World`
+   * 用它在所有塊都沒 `pick` 命中時挑「哪一塊離指標最近」再轉送事件（issue #95）——
+   * 是否真的在吸附半徑內仍由該塊的 `doGrab`／`doTap` 自己判定。
+   */
+  nearestParticle(x: number, y: number): { index: number; distance: number } {
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < this.n; i++) {
+      const dx = this.pos[2 * i]! - x;
+      const dy = this.pos[2 * i + 1]! - y;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return { index: best, distance: Math.sqrt(bestD) };
   }
 
   /**
