@@ -4,6 +4,8 @@ export { SimCore } from './SimCore';
 export { compareJellyIds, World } from './World';
 export type { JellyView, MeshProvider, WorldPinInfo, WorldSurfacePoint } from './World';
 export { contourEdges, surfaceParticles } from './contour';
+export { DEFAULT_COLLISION_PARAMS, resolveCollisions } from './collision';
+export type { CollisionBody, CollisionParams, CollisionStats } from './collision';
 export type { ContourEdge } from './contour';
 export { BOUNDARY_MODES, FloorBoundary, InfiniteBoundary, WalledBoundary } from './boundary';
 export type {

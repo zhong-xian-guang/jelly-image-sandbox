@@ -17,7 +17,8 @@ export const WALLED_SIZE_FACTOR = 4;
 
 /**
  * 牆與地板的切線摩擦（issue #93 / V3 T2-3；ADR-0012：固定手感值、不給拉霸、不進
- * 片段檔）。語意見 `ContactOptions.friction`；Walled 與 Floor 共用同一個值。實測
+ * 片段檔）。語意見 `ContactOptions.friction`；Walled 與 Floor 共用同一個值，Jelly
+ * 互撞的 Coulomb 摩擦係數（issue #96，`CollisionParams.friction`）也沿用它。實測
  * 見 `docs/design/simulation-and-mesh.md` 參數表。
  */
 export const BOUNDARY_FRICTION = 0.3;

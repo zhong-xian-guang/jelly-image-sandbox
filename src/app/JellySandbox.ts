@@ -557,8 +557,11 @@ export class JellySandbox {
     this.root = root;
     this.renderer = renderer;
     // `World` 的 `meshProvider` 綁到沙盒的 `meshFor`（來源圖庫 + memo），所以在這裡建。
-    this.world = new World((sourceId, meshParams, importSize) =>
-      this.meshFor(sourceId, meshParams, importSize),
+    // 跨塊碰撞的摩擦係數沿用牆／地板的 app 層常數（issue #96；其餘碰撞參數用求解器預設）。
+    this.world = new World(
+      (sourceId, meshParams, importSize) => this.meshFor(sourceId, meshParams, importSize),
+      {},
+      { friction: BOUNDARY_FRICTION },
     );
     this.registerDefaultSource();
     this.spawnJelly(DEFAULT_SOURCE_ID, this.currentMeshParams(), DEFAULT_IMPORT_SIZE, {

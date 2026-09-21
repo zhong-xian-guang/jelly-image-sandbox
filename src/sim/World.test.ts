@@ -4,6 +4,7 @@ import { DEFAULT_PARAMS, type BuildSimMeshParams } from '../mesh';
 import { gridMesh } from './testFixtures';
 import type { InputEvent } from './types';
 import { WalledBoundary } from './boundary';
+import { SimCore } from './SimCore';
 import { type MeshProvider, type SceneEntry, World } from './World';
 
 /**
@@ -128,12 +129,15 @@ describe('World — 事件路由', () => {
     world.applyInput({ type: 'grab', id: 'g', x: 25, y: 25 });
     world.applyInput({ type: 'moveGrab', id: 'g', x: 25, y: -60 });
     run(world, 30);
-    // 被拉走的是 jelly/2：它的 bbox 往上（−y）伸出去、jelly/1 沒動。
-    const [a, b] = world.jellies();
+    // 被拉走的是 jelly/2：它的 bbox 往上（−y）伸出去（jelly/1 只會被互撞推一下，
+    // issue #96），而且移除 jelly/2 之後 Grab 跟著消失。
+    const b = world.jellies()[1]!;
     const minY = (p: Float64Array) =>
       Math.min(...Array.from({ length: p.length / 2 }, (_, i) => p[2 * i + 1]!));
-    expect(minY(b!.positions)).toBeLessThan(0);
-    expect(minY(a!.positions)).toBeCloseTo(0, 6);
+    expect(minY(b.positions)).toBeLessThan(0);
+    expect(world.grabCount).toBe(1);
+    world.applyInput({ type: 'remove', jellyId: 'jelly/2' });
+    expect(world.grabCount).toBe(0);
   });
 
   it('塊外近處 grab 吸附到跨塊最近的 Particle；離所有塊都太遠則 no-op', () => {
@@ -344,5 +348,79 @@ describe('World — 全域參數與決定性', () => {
       return world.jellies().map((j) => Array.from(j.positions));
     };
     expect(script(new World(fixtureProvider()))).toEqual(script(new World(fixtureProvider())));
+  });
+});
+
+describe('World — 跨塊碰撞（issue #96 / V3 T3-3）', () => {
+  it('兩塊重疊 spawn 後 step 若干次 → 兩塊 bbox 分開、之後靜止', () => {
+    const provider = fixtureProvider();
+    const world = new World(provider);
+    world.applyInput(spawnEvent('jelly/1', { x: 0, y: 0 }));
+    world.applyInput(spawnEvent('jelly/2', { x: 32, y: 0 })); // 40×40 兩塊、x 重疊 8
+    run(world, 120);
+    const [a, b] = world.jellies();
+    const bbox = (positions: Float64Array) => {
+      let minX = Infinity;
+      let maxX = -Infinity;
+      for (let i = 0; i < positions.length; i += 2) {
+        minX = Math.min(minX, positions[i]!);
+        maxX = Math.max(maxX, positions[i]!);
+      }
+      return { minX, maxX };
+    };
+    expect(bbox(a!.positions).maxX).toBeLessThanOrEqual(bbox(b!.positions).minX + 1e-6);
+    // 推開後靜止（阻尼 + 沒有持續的推力）：再跑一秒位置幾乎不變。
+    const before = world.jellies().map((j) => Array.from(j.positions));
+    run(world, 60);
+    world.jellies().forEach((j, k) => {
+      for (let i = 0; i < j.positions.length; i++) {
+        expect(Math.abs(j.positions[i]! - before[k]![i]!)).toBeLessThan(0.05);
+      }
+    });
+  });
+
+  it('同輸入兩次跑（含互撞）位置位元相同', () => {
+    const script = (world: World) => {
+      world.applyInput(spawnEvent('jelly/1', { x: 0, y: 0 }));
+      world.applyInput(spawnEvent('jelly/2', { x: 60, y: 5 }));
+      world.applyInput({ type: 'grab', id: 'g', x: 20, y: 20 });
+      for (let f = 0; f < 20; f++) {
+        world.applyInput({ type: 'moveGrab', id: 'g', x: 20 + 4 * f, y: 20 });
+        world.step(1 / 60);
+      }
+      world.applyInput({ type: 'release', id: 'g' });
+      run(world, 60);
+      return world.jellies().map((j) => Array.from(j.positions));
+    };
+    expect(script(new World(fixtureProvider()))).toEqual(script(new World(fixtureProvider())));
+  });
+
+  it('單塊時 step 結果與該塊自己 SimCore.step 位元相同（碰撞不介入）', () => {
+    const world = new World(fixtureProvider());
+    world.applyInput(spawnEvent('jelly/1', { x: 0, y: 0 }));
+    const solo = new SimCore(gridMesh(5, 5, 10));
+    const drive = (grab: (e: InputEvent) => void, step: () => void) => {
+      grab({ type: 'grab', id: 'g', x: 5, y: 5 });
+      for (let f = 0; f < 15; f++) {
+        grab({ type: 'moveGrab', id: 'g', x: 5 - 3 * f, y: 5 - 2 * f });
+        step();
+      }
+      grab({ type: 'release', id: 'g' });
+      for (let f = 0; f < 30; f++) step();
+    };
+    drive(
+      (e) => world.applyInput(e),
+      () => world.step(1 / 60),
+    );
+    drive(
+      (e) => solo.applyInput(e),
+      () => solo.step(1 / 60),
+    );
+    expect(Array.from(world.jellies()[0]!.positions)).toEqual(Array.from(solo.positions));
+  });
+
+  it('碰撞參數可注入：friction 由建構子第三個參數覆寫、其餘用預設', () => {
+    const world = new World(fixtureProvider(), {}, { friction: 0.7 });
+    expect(world.collision).toEqual({ friction: 0.7, impactAbsorb: 0.75, particleShare: 0.5 });
   });
 });
