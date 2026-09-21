@@ -7,22 +7,33 @@
  * 同輸出（ADR-0005）。`World.step` 在每個 substep 對每塊 `solveInternal` 之後、
  * `finishSubstep` 之前呼叫一次；走訪順序 = 呼叫端給的陣列順序（`World` 依 id 排序）。
  *
- * 每個 bbox 相交的無序塊對 (A, B)：
- *  1. **A → B**：A 的每個**輪廓** Particle（內部 Particle 只在表面已深陷時才可能進別塊，
- *     不測）若落在 B 的輪廓多邊形內（even-odd 射線法，與最近輪廓邊查詢併成同一趟迴圈
- *     ——不需要每 substep 重建三角形 bbox 網格，prototype 實測那是 10 塊時 75% 的碰撞
- *     成本），沿「朝最近表面點」的方向推到最近輪廓邊上（不信任靜止繞向算的外法線：
- *     高速撞擊時 B 的表層三角形會被壓到翻面、法線反向）。修正量依 PBD 權重分：
- *     Particle `share`、邊兩端點 `(1 − share)(1 − t)`／`(1 − share) t`，分母
- *     `share + (1 − share)((1 − t)² + t²)` 讓推完後 Particle 剛好在邊上（字面的「一半
- *     一半」會留 25% 穿透）。接著 **Coulomb 位置式摩擦**：直接抵銷這個 substep A 點與
- *     邊上接觸點的**相對**切線位移，上限 `μ × depth`（Macklin 2019 小步長 PBD 摩擦）
- *     ——有靜摩擦，疊放不滑落；spec 原案的「切線速度衰減」砍不掉已發生的橫向位移。
- *  2. **B → A** 同上。
- *  3. **整體非彈性衝量**（每無序塊對一次）：兩段 pass 有任何接觸時，沿接觸平均法線把
- *     兩塊**質心**的趨近速度扣掉 `impactAbsorb`——平移全體 `prev`（依 Particle 數配重、
- *     動量守恆、只扣趨近不拉回），延後到本次呼叫結束一次套用。柔體的動量靠 shape
- *     matching 擴散太慢，沒有這步高處落下會把 B 表層壓翻、坍成一團。
+ * 每個 bbox 相交的無序塊對 (A, B) 分三段：
+ *  1. **偵測**（A → B、B → A 各一趟，只記錄不動位置）：A 的每個**輪廓** Particle（內部
+ *     Particle 只在表面已深陷時才可能進別塊，不測）若落在 B 的輪廓多邊形內（even-odd
+ *     射線法，與最近輪廓邊查詢併成同一趟迴圈——不需要每 substep 重建三角形 bbox 網格，
+ *     prototype 實測那是 10 塊時 75% 的碰撞成本），記下「哪顆、B 的哪條邊、朝最近表面點
+ *     的方向」，並把方向 × 深度累加成這對的接觸平均法線（A 視角）。
+ *  2. **整體非彈性衝量**（每無序塊對一次）：有接觸時，沿接觸平均法線算兩塊**質心**的
+ *     趨近速度（以 `pos − prev` 表示），把它的 `impactAbsorb` 比例當作剛體式的位置分離
+ *     ——A 全體 `pos` 沿法線退 `Δ_A`、B 退 `Δ_B`（依 Particle 數配重、動量守恆、只扣趨近
+ *     不拉回）。**在表面推出之前**做：柔體的動量靠 shape matching 擴散太慢，高速撞擊時
+ *     這個 substep 的穿透量若全靠表層變形吃掉，表層三角形會被壓到零厚度甚至翻面
+ *     （撞速 ≈ 每 substep 一個網格邊長就會發生；#94 prototype 的「推出後平移 `prev`」
+ *     版本在降級到 2 substep 時 10 塊堆疊會坍成一團）；先剛體式退開，表層只剩殘餘要
+ *     處理。速度變化跟平移 `prev` 的版本一樣（`v = (pos − prev) / h`），差在位置也真的
+ *     分開了。靜置級的微小趨近（`< separationThreshold × 輪廓邊長`）仍走平移 `prev`、
+ *     且排在推出**之後**（#94 prototype 的順序）——位置分離在疊放靜置時會讓底塊每
+ *     substep 被推進地板一點點再彈回，微震不停；先平移 `prev` 再推出也停不下來。
+ *     趨近 ≤ 0 → 這段不做。
+ *  3. **推出**：對每筆接觸重算目前深度（分離或前面的推出後可能已在外面 → 跳過），沿
+ *     「朝最近表面點」的方向推到輪廓邊上（不信任靜止繞向算的外法線：表層翻面時它會
+ *     反向）。撞擊級沿偵測時記下的邊與方向、靜置級重跑最近邊查詢（理由見 `applyContacts`）。
+ *     修正量依 PBD 權重分：Particle `share`、邊兩端點 `(1 − share)(1 − t)`／
+ *     `(1 − share) t`，分母 `share + (1 − share)((1 − t)² + t²)` 讓推完後 Particle 剛好在
+ *     邊上（字面的「一半一半」會留 25% 穿透）。接著 **Coulomb 位置式摩擦**：直接抵銷這個
+ *     substep A 點與邊上接觸點的**相對**切線位移，上限 `μ × depth`（Macklin 2019 小步長
+ *     PBD 摩擦）——有靜摩擦，疊放不滑落；spec 原案的「切線速度衰減」砍不掉已發生的橫向
+ *     位移。接觸依偵測順序逐筆套用（Gauss–Seidel，後面的看得到前面的修正）。
  *
  * 一個 substep 一輪；Small Steps 靠多 substep 收斂。skin = 0：只推「在裡面」的
  * Particle。沒有自碰撞。
@@ -52,11 +63,20 @@ export interface CollisionParams {
   friction: number;
   /**
    * 整體非彈性衝量比例（0–1）：每個有接觸的無序塊對，沿接觸平均法線扣掉兩塊質心趨近
-   * 速度的這個比例。`0` = 關；`1` = 一次完全非彈性。
+   * 速度的這個比例（以剛體式位置分離實現，見檔頭第 2 段）。`0` = 關；`1` = 一次完全
+   * 非彈性。
    */
   impactAbsorb: number;
   /** 推出修正量分給被推 Particle 的 PBD 權重（0–1）；其餘依重心權重分給邊兩端點。 */
   particleShare: number;
+  /**
+   * 整體衝量改用「位置分離」的門檻，單位 = 這對塊中較細那塊的輪廓平均邊長：一次要扣的
+   * 趨近位移 ≥ 門檻 × 邊長（撞擊級）→ 平移全體 `pos`（位置真的退開，表層不會被壓翻）；
+   * 小於門檻（靜置級，疊放時每 substep 只有 `g·h²` 那麼一點）→ 平移全體 `prev`（只改速度，
+   * #94 prototype 原案）。靜置時若也平移位置，會把底塊每 substep 往地板推一小段、地板再
+   * 彈回，變成不會停的微震（實測 KE 停在 ~4e3 而非 0）。
+   */
+  separationThreshold: number;
 }
 
 /** issue #94 prototype 四情境實測定案的組合（見 `docs/design/simulation-and-mesh.md` 參數表）。 */
@@ -64,6 +84,7 @@ export const DEFAULT_COLLISION_PARAMS: CollisionParams = {
   friction: 0.3,
   impactAbsorb: 0.75,
   particleShare: 0.5,
+  separationThreshold: 0.1,
 };
 
 /** `resolveCollisions` 的統計讀出（診斷／測試用；不影響模擬）。 */
@@ -76,14 +97,51 @@ export interface CollisionStats {
   maxDepth: number;
 }
 
-/** 每塊在一次呼叫內的暫存：bbox、質心位移快取、待套用的整體 `prev` 平移。 */
+/** 每塊在一次呼叫內的暫存：bbox、質心位移（`pos − prev` 平均）快取、輪廓平均邊長快取。 */
 interface Scratch {
   bb: Bbox;
   meanDx: number;
   meanDy: number;
   meanValid: boolean;
-  shiftX: number;
-  shiftY: number;
+  /** 目前位置下的輪廓平均邊長；`< 0` = 尚未算。 */
+  edgeLen: number;
+}
+
+/**
+ * 這對塊在偵測段記下的接觸（模組層級可增長的平行陣列，重用免配置；單執行緒）：
+ * `side` 0 = A 的 Particle 在 B 裡、1 = B 的在 A 裡；`i` Particle 索引；`edge` 對方
+ * 輪廓邊索引；`nx/ny` 偵測當下朝最近表面點的單位方向（撞擊級推出用；靜置級重查）。
+ */
+const CONTACTS = {
+  count: 0,
+  side: new Int8Array(256),
+  i: new Int32Array(256),
+  edge: new Int32Array(256),
+  nx: new Float64Array(256),
+  ny: new Float64Array(256),
+};
+
+function pushContact(side: number, i: number, edge: number, nx: number, ny: number): void {
+  const c = CONTACTS;
+  if (c.count === c.side.length) {
+    const n = c.side.length * 2;
+    c.side = grow(c.side, new Int8Array(n));
+    c.i = grow(c.i, new Int32Array(n));
+    c.edge = grow(c.edge, new Int32Array(n));
+    c.nx = grow(c.nx, new Float64Array(n));
+    c.ny = grow(c.ny, new Float64Array(n));
+  }
+  c.side[c.count] = side;
+  c.i[c.count] = i;
+  c.edge[c.count] = edge;
+  c.nx[c.count] = nx;
+  c.ny[c.count] = ny;
+  c.count++;
+}
+
+function grow<T extends Int8Array | Int32Array | Float64Array>(from: T, to: T): T {
+  to.set(from as never);
+  return to;
 }
 
 /** 最近輪廓邊查詢結果（模組層級重用，免配置；單執行緒）。 */
@@ -177,9 +235,6 @@ function pushOut(
   stats: CollisionStats,
 ): void {
   if (depth > stats.maxDepth) stats.maxDepth = depth;
-  PASS.nx += near.nx * depth;
-  PASS.ny += near.ny * depth;
-  PASS.count++;
   const e = b.contour[near.edge]!;
   const share = p.particleShare;
   const t = near.t;
@@ -224,13 +279,17 @@ function pushOut(
   bp[2 * e.b + 1] = bp[2 * e.b + 1]! + ty * k * wb;
 }
 
-/** 有序塊對 (A, B)：A 的輪廓 Particle 對 B。接觸法線累加進 `PASS`。 */
-function solvePair(
+/**
+ * 偵測段：有序塊對 (A, B)，A 的輪廓 Particle 對 B——落在 B 裡的記進 `CONTACTS`
+ * （`side` 標示方向），方向 × 深度累加進 `PASS`（`sign` 把 B → A 的方向翻到 A 視角）。
+ * 不動位置。
+ */
+function collectContacts(
   a: CollisionBody,
   b: CollisionBody,
   bb: Bbox,
-  p: CollisionParams,
-  stats: CollisionStats,
+  side: number,
+  sign: number,
 ): void {
   const ap = a.positions;
   const list = a.surfaceParticles;
@@ -247,7 +306,66 @@ function solvePair(
       near.nx = (near.qx - x) / near.dist;
       near.ny = (near.qy - y) / near.dist;
     }
-    pushOut(a, i, b, near, near.dist, p, stats);
+    PASS.nx += sign * near.nx * near.dist;
+    PASS.ny += sign * near.ny * near.dist;
+    PASS.count++;
+    pushContact(side, i, near.edge, near.nx, near.ny);
+  }
+}
+
+/**
+ * 推出段：對偵測段記下的每筆接觸重算目前的深度再 `pushOut`（前面的接觸或整體衝量已把它
+ * 推到外面 → 跳過）。兩種語意，各自只在被驗證過的情境用：
+ * - `recorded = false`（靜置級）：以目前位置重跑完整的最近邊＋內外查詢——前面的推出移動了
+ *   對方的邊、最近邊可能換一條（Gauss–Seidel，跟 #94 prototype 一樣）。用記下的邊在角落會
+ *   把 Particle 沿舊方向推，疊放靜置在某些落點會變成停不下來的微震（實測 KE 停在 ~2e3）。
+ * - `recorded = true`（撞擊級）：沿偵測時記下的那條邊與方向重算——剛體分離與前面的推出
+ *   改變幾何後，「最近邊」可能翻到另一側，把深陷的 Particle 推向相反方向而互相卡住
+ *   （實測 10 塊 g = 10000 落箱：重查 7% Particle 永久穿透，記錄邊恢復到 < 1%）。
+ */
+function applyContacts(
+  a: CollisionBody,
+  b: CollisionBody,
+  p: CollisionParams,
+  stats: CollisionStats,
+  recorded: boolean,
+): void {
+  const c = CONTACTS;
+  const near = NEAREST;
+  for (let k = 0; k < c.count; k++) {
+    const from = c.side[k] === 0 ? a : b;
+    const into = c.side[k] === 0 ? b : a;
+    const i = c.i[k]!;
+    const x = from.positions[2 * i]!;
+    const y = from.positions[2 * i + 1]!;
+    if (recorded) {
+      const e = into.contour[c.edge[k]!]!;
+      const ip = into.positions;
+      const ax = ip[2 * e.a]!;
+      const ay = ip[2 * e.a + 1]!;
+      const dx = ip[2 * e.b]! - ax;
+      const dy = ip[2 * e.b + 1]! - ay;
+      const len2 = dx * dx + dy * dy;
+      let t = len2 > 0 ? ((x - ax) * dx + (y - ay) * dy) / len2 : 0;
+      if (t < 0) t = 0;
+      else if (t > 1) t = 1;
+      const qx = ax + dx * t;
+      const qy = ay + dy * t;
+      const d = Math.sqrt((x - qx) * (x - qx) + (y - qy) * (y - qy));
+      // 仍在偵測時那個方向的內側才算還在裡面（`(Q − P)·n_偵測 > 0`）。
+      if (d <= 1e-9 || (qx - x) * c.nx[k]! + (qy - y) * c.ny[k]! <= 0) continue;
+      near.edge = c.edge[k]!;
+      near.t = t;
+      near.qx = qx;
+      near.qy = qy;
+      near.dist = d;
+    } else {
+      if (!nearestContourEdgeAndInside(into, x, y)) continue;
+      if (near.edge < 0 || near.dist <= 1e-9) continue;
+    }
+    near.nx = (near.qx - x) / near.dist;
+    near.ny = (near.qy - y) / near.dist;
+    pushOut(from, i, into, near, near.dist, p, stats);
     stats.contacts++;
   }
 }
@@ -267,55 +385,88 @@ function ensureMean(b: CollisionBody, s: Scratch): void {
   s.meanValid = true;
 }
 
+function contourEdgeLen(b: CollisionBody, s: Scratch): number {
+  if (s.edgeLen >= 0) return s.edgeLen;
+  const pos = b.positions;
+  let sum = 0;
+  for (const e of b.contour) {
+    sum += Math.hypot(pos[2 * e.b]! - pos[2 * e.a]!, pos[2 * e.b + 1]! - pos[2 * e.a + 1]!);
+  }
+  s.edgeLen = b.contour.length ? sum / b.contour.length : 0;
+  return s.edgeLen;
+}
+
+/** 這對塊要做的整體衝量（`planImpact` 算好、模組層級重用）：法線、兩塊各退多少、撞擊級與否。 */
+const IMPACT = { active: false, rigid: false, nx: 0, ny: 0, dA: 0, dB: 0 };
+
 /**
- * 塊對 (A, B) 沿接觸平均法線 `n`（指向 A 外側 = 把 A 推離 B）做一次整體非彈性衝量。
- * 質心速度以 `pos − prev` 表示；趨近速度 `s = (v_B − v_A)·n`（> 0 才處理）。A 全體
- * `prev −= n·Δ_A`（速度沿 n 增加 Δ_A/h）、B 全體 `prev += n·Δ_B`，`Δ_A·N_A = Δ_B·N_B`。
- * 平移延後到 `flushShift` 一次套用；快取的質心位移立即更新（之後的塊對看得到）。
+ * 塊對 (A, B) 沿接觸平均法線 `n`（指向 A 外側 = 把 A 推離 B）規劃一次整體非彈性衝量，
+ * 結果放 `IMPACT`。質心速度以 `pos − prev` 表示；趨近速度 `s = (v_B − v_A)·n`（> 0 才
+ * 處理）；要扣的位移 `Δ_A·N_A = Δ_B·N_B`。`rigid` = 撞擊級（≥ `separationThreshold` ×
+ * 輪廓邊長）。快取的質心位移在這裡就更新（之後的塊對看得到）。
  */
-function absorbImpact(
+function planImpact(
   a: CollisionBody,
   sa: Scratch,
   b: CollisionBody,
   sb: Scratch,
-  absorb: number,
+  p: CollisionParams,
 ): void {
+  IMPACT.active = false;
   const len = Math.hypot(PASS.nx, PASS.ny);
-  if (len === 0 || absorb <= 0) return;
+  if (len === 0 || p.impactAbsorb <= 0) return;
   const nx = PASS.nx / len;
   const ny = PASS.ny / len;
   ensureMean(a, sa);
   ensureMean(b, sb);
   const approach = (sb.meanDx - sa.meanDx) * nx + (sb.meanDy - sa.meanDy) * ny;
   if (approach <= 0) return;
-  const total = approach * absorb;
+  const total = approach * p.impactAbsorb;
   const na = a.particleCount;
   const nb = b.particleCount;
   const dA = (total * nb) / (na + nb);
   const dB = (total * na) / (na + nb);
-  sa.shiftX -= nx * dA;
-  sa.shiftY -= ny * dA;
+  const edge = Math.min(contourEdgeLen(a, sa), contourEdgeLen(b, sb));
+  IMPACT.active = true;
+  IMPACT.rigid = total >= p.separationThreshold * edge;
+  IMPACT.nx = nx;
+  IMPACT.ny = ny;
+  IMPACT.dA = dA;
+  IMPACT.dB = dB;
   sa.meanDx += nx * dA;
   sa.meanDy += ny * dA;
-  sb.shiftX += nx * dB;
-  sb.shiftY += ny * dB;
   sb.meanDx -= nx * dB;
   sb.meanDy -= ny * dB;
 }
 
-function flushShift(b: CollisionBody, s: Scratch): void {
-  if (s.shiftX === 0 && s.shiftY === 0) return;
-  const prev = b.prevPositions;
-  for (let i = 0; i < b.particleCount; i++) {
-    prev[2 * i] = prev[2 * i]! + s.shiftX;
-    prev[2 * i + 1] = prev[2 * i + 1]! + s.shiftY;
+/**
+ * 套用 `IMPACT`：撞擊級平移全體 `pos`（A `+= n·Δ_A`、B `−= n·Δ_B`：速度沿 n 各增 Δ/h、
+ * 位置也退開）；靜置級平移全體 `prev`（A `−= n·Δ_A`、B `+= n·Δ_B`：速度變化一樣、位置
+ * 不動）。呼叫時機見 `resolveCollisions`。
+ */
+function applyImpact(a: CollisionBody, b: CollisionBody): void {
+  const { nx, ny, dA, dB } = IMPACT;
+  if (IMPACT.rigid) {
+    translate(a.positions, a.particleCount, nx * dA, ny * dA);
+    translate(b.positions, b.particleCount, -nx * dB, -ny * dB);
+  } else {
+    translate(a.prevPositions, a.particleCount, -nx * dA, -ny * dA);
+    translate(b.prevPositions, b.particleCount, nx * dB, ny * dB);
+  }
+}
+
+function translate(buf: Float64Array, count: number, dx: number, dy: number): void {
+  for (let i = 0; i < count; i++) {
+    buf[2 * i] = buf[2 * i]! + dx;
+    buf[2 * i + 1] = buf[2 * i + 1]! + dy;
   }
 }
 
 /**
  * 一個 substep 的跨塊碰撞：就地改各塊的 `positions`／`prevPositions`。呼叫前每塊都已
  * `solveInternal(h)`。塊對依 `jellies` 的順序走訪（呼叫端負責決定性排序）；每個 bbox
- * 相交的無序塊對跑 A→B、B→A 各一段，再做一次整體衝量。少於兩塊為 no-op。
+ * 相交的無序塊對：偵測（A→B、B→A）→ 整體衝量 → 推出（見檔頭）。少於兩塊為 no-op。
+ * bbox 在呼叫開始時算一次（整體衝量的平移只會讓兩塊分開，不重算）。
  */
 export function resolveCollisions(
   jellies: readonly CollisionBody[],
@@ -331,8 +482,7 @@ export function resolveCollisions(
       meanDx: 0,
       meanDy: 0,
       meanValid: false,
-      shiftX: 0,
-      shiftY: 0,
+      edgeLen: -1,
     });
   }
   for (let i = 0; i < n; i++) {
@@ -346,18 +496,26 @@ export function resolveCollisions(
       PASS.nx = 0;
       PASS.ny = 0;
       PASS.count = 0;
-      solvePair(a, b, sb.bb, p, stats);
-      // B→A 的接觸法線指向 B 外側；翻到 A 視角累加。
-      const axSum = PASS.nx;
-      const aySum = PASS.ny;
-      PASS.nx = 0;
-      PASS.ny = 0;
-      solvePair(b, a, sa.bb, p, stats);
-      PASS.nx = axSum - PASS.nx;
-      PASS.ny = aySum - PASS.ny;
-      if (PASS.count > 0) absorbImpact(a, sa, b, sb, p.impactAbsorb);
+      CONTACTS.count = 0;
+      collectContacts(a, b, sb.bb, 0, 1);
+      collectContacts(b, a, sa.bb, 1, -1); // B→A 的方向指向 B 外側，翻到 A 視角累加。
+      if (PASS.count === 0) continue;
+      planImpact(a, sa, b, sb, p);
+      if (IMPACT.active && IMPACT.rigid) {
+        // 撞擊級：先剛體式分開位置，再推出殘餘穿透。
+        applyImpact(a, b);
+        applyContacts(a, b, p, stats, true);
+      } else {
+        // 靜置級：先推出，再以推出**後**的質心位移重算趨近、平移 `prev`（#94 prototype 的
+        // 順序）。用推出前的趨近會在疊放靜置時落入「每 substep 互踢 0.04 單位」的極限環
+        // （KE 停在 2e4、質心不動）；推出後重算則趨近 ≤ 0、不啟動，靜置 KE 歸零。
+        applyContacts(a, b, p, stats, false);
+        sa.meanValid = false;
+        sb.meanValid = false;
+        planImpact(a, sa, b, sb, p);
+        if (IMPACT.active && !IMPACT.rigid) applyImpact(a, b);
+      }
     }
   }
-  for (let i = 0; i < n; i++) flushShift(jellies[i]!, scratch[i]!);
   return stats;
 }

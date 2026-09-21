@@ -5,7 +5,7 @@
 ## 情境前提
 
 - **預設俯視、無重力；重力 > 0 視為側視**（[ADR-0012](../adr/0012-gravity-is-a-slider-not-a-mode.md)、issue #91）。重力 = 0 時 Jelly 靜置即靜止，Fling 給初速、靠阻尼收斂；重力 > 0 時所有 Particle 持續被往 +y（畫面下方）拉，落到邊界的地板上壓扁、回彈、靜止。
-- 桌上可以同時有**多塊** Jelly（[ADR-0013](../adr/0013-multi-jelly-scene-is-setup-spawn-while-recording-is-an-event.md)、issue #95）：每次匯入在畫面中央新增一塊、既有的都留著；`停止／重設` 回到 Scene（片段第 0 步就存在的那組塊）。每塊是一個獨立的求解器（`SimCore`），Softness／Tap 力道／重力全域共用；Region 邊長、Tap 半徑、Grab 吸附半徑等「對角線 × 係數」的參數用**各塊自己**的對角線。Multi-grab 的多個 Grab 可以落在不同塊上。塊與塊之間的碰撞見 V3 T3-3（issue #96）；本階段重疊就互相穿過。
+- 桌上可以同時有**多塊** Jelly（[ADR-0013](../adr/0013-multi-jelly-scene-is-setup-spawn-while-recording-is-an-event.md)、issue #95）：每次匯入在畫面中央新增一塊、既有的都留著；`停止／重設` 回到 Scene（片段第 0 步就存在的那組塊）。每塊是一個獨立的求解器（`SimCore`），Softness／Tap 力道／重力全域共用；Region 邊長、Tap 半徑、Grab 吸附半徑等「對角線 × 係數」的參數用**各塊自己**的對角線。Multi-grab 的多個 Grab 可以落在不同塊上。塊與塊之間會碰撞（issue #96）：推開、不穿透、貼著有摩擦、不黏著；一塊對折仍會穿過自己（沒有自碰撞）。深度重疊（例如沒平移相機就連續匯入兩塊，兩塊完全疊在同一位置）不保證能自己推開——拖開後才互撞。
 - 目標裝置：2020 後中階手機 60fps；更弱裝置降 substep。
 
 ## 匯入 → 網格管線
@@ -61,6 +61,12 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
    - **摩擦（issue #93、ADR-0012）**：Walled 與 Floor 共用 `friction`（0–1，app 層常數 `BOUNDARY_FRICTION`，不進面板、不進片段檔）。語意：這個 substep 被某個面 clamp 的 Particle，`prev` 沿該面切線往 `pos` 靠——`prev_t = pos_t − (pos_t − prev_t) × (1 − friction)`，回推的切線速度乘 `(1 − friction)`；法線維持 restitution 規則。「接觸」= 這個 substep 被 clamp，所以有重力靜置在地板上的 Jelly 每步都在接觸、摩擦持續作用；沒重力時只有真的撞上才作用，俯視手感不變。`friction = 0` 整段跳過（`pos − (pos − prev)` 不保證位元等於 `prev`），既有無摩擦行為位元不變。**既有片段的影響**：摩擦不進片段檔、也沒有 0 的退路，所以 #93 之前錄的片段若是 Walled／Floor 且有撞牆或貼地，重播結果會跟錄製當時不同（無重力、沒撞牆的片段不受影響）——ADR-0012 接受這點（固定手感值、不給拉霸），與 #91 守住阻尼不同。實測（真瀏覽器、400×200 平底果凍、g = 5000、抓右下角貼地快甩，放開後質心 x 位移）：friction 0 → 274 單位、0.7 s 停（靠阻尼）；0.3 → 160（58%）、0.4 s；0.6 → 93（34%）、0.3 s；1 → 68（25%）、0.3 s。太黏（≥ 0.6）拖著貼地的果凍走也會被明顯拖住，故定 0.3。抓上緣或中段甩出去 Jelly 會前傾翻滾、底邊離地，摩擦幾乎無從作用（0 vs 1 只差 ~15%）——圓形 Jelly 在有摩擦地板上被側甩會從滑變滾，是正確物理。
    - **Infinite**：no-op。
    - 執行期可切換；重新匯入／重建／載入片段換新求解器時依記住的模式重套（Walled／Floor 都依新 Jelly 的 bbox 重算）。
+   - **跨塊碰撞插在這之後、回推速度之前**（issue #96，`World.step` 對每塊跑完 1–5 才做一次 `resolveCollisions`；單塊時不跑、位元不變）。演算法依 #94 prototype 定案（primary source：分支 `prototype/jelly-collision`、#87 留言），正式版在 `src/sim/collision.ts`。每個 bbox 相交的無序塊對 (A, B) 分三段：
+     1. **偵測**（A→B、B→A 各一趟，不動位置）：只拿 A 的**輪廓** Particle 去測 B；內外判定用 B 輪廓的 even-odd 射線法，與最近輪廓邊查詢併成同一趟迴圈（不需要三角形 bbox 網格——prototype 實測那是 10 塊時 75% 的碰撞成本）。記下在裡面的 Particle、最近邊與「朝最近表面點」的方向，方向 × 深度累加成這對的接觸平均法線。
+     2. **整體非彈性衝量**（每無序塊對一次）：沿接觸平均法線把兩塊質心的趨近速度（以 `pos − prev` 表示）扣掉 `impactAbsorb = 0.75`，依 Particle 數配重、動量守恆、只扣趨近不拉回。柔體的動量靠 shape matching 擴散太慢，沒有這步高處落下會把被撞那塊的表層壓翻、坍成一團。**撞擊級**（要扣的位移 ≥ `separationThreshold = 0.1` × 輪廓平均邊長）在推出**之前**平移全體 `pos`（剛體式先退開，表層只剩殘餘要吃——prototype「推出後平移 `prev`」的版本在降級到 2 substep 時撞速 ≈ 每 substep 一個邊長，10 塊堆疊會永久坍成一團）；**靜置級**在推出**之後**、以推出後的質心位移重算，平移全體 `prev`（只改速度，prototype 原序；靜置時趨近 ≤ 0 根本不啟動，KE 歸零。先平移 `prev` 再推出、或靜置也平移位置，疊放都會變成停不下來的微震）。
+     3. **推出**：對每筆接觸重算目前深度（分離或前面的推出後已在外面 → 跳過），沿「朝最近表面點」的方向推到輪廓邊上——**不信任靜止繞向算的外法線**（高速撞擊時表層三角形被壓翻、法線反向）。修正量依 PBD 權重分：Particle `particleShare = 0.5`、邊兩端點 `(1 − share)(1 − t)`／`(1 − share) t`，分母 `share + (1 − share)((1 − t)² + t²)`（字面「一半一半」會留 25% 穿透）。接著 **Coulomb 位置式摩擦**：直接抵銷這個 substep A 點與邊上接觸點的**相對**切線位移，上限 `μ × depth`（Macklin 2019；`μ = BOUNDARY_FRICTION = 0.3`）——有靜摩擦，疊放不滑落；spec 原案的「切線速度衰減」砍不掉已發生的橫向位移。撞擊級沿偵測時記下的邊與方向推（剛體分離後「最近邊」可能翻到另一側，把深陷的 Particle 推向反方向互相卡住）；靜置級以目前位置重跑最近邊查詢（Gauss–Seidel，prototype 原案；用記下的邊在角落會沿舊方向推，某些落點疊放靜置會微震不停）。
+   - 一個 substep 一輪、skin = 0（只推「在裡面」的）；Small Steps 靠多 substep 收斂。塊對依 id 順序走訪，決定性（同輸入重播位元相同）。
+   - **實測與已知限制**（真瀏覽器、平底磚 ~470–510 Particle）：拖一塊撞另一塊 → 被撞的推走變形、放開 3 s 內兩塊 KE 歸零、穿透 0 顆；g = 5000 一塊從 3.5 個身高落到另一塊上 → 撞擊 stretch 峰 1.3、疊放靜置 KE 歸零、殘餘穿透 2–7 顆（浮點邊界，視覺無感）、上塊把軟的底塊壓出約 12% 身高的凹陷（柔體正常行為）；三顆 Pin 釘住的塊被硬 Grab 塞進來時**撞擊中**會短暫 stretch 到 7–8、三角形翻面，放開後完全復原、Pin 塊質心不動；10 塊（4700 Particle）同時從 1.3 個身高落進 Walled 箱：4 substep 時 g ≤ 8000 穿透 ≤ 21 顆，**g = 10000（拉霸上限）會有約 15% Particle 永久互相穿透**；降級到 2 substep 時 g ≤ 4000 可恢復（撞擊瞬間數百顆、靜止後 < 15 顆），**g ≥ 6000 會坍成一團解不開**——深度穿透是「最近表面」類方法的固有限制，撞速 ≥ 每 substep 一個網格邊長就進入這個區間。碰撞成本 10 塊時 `World.step` 合計 ~5–8 ms／幀（headless），瓶頸仍是求解器本身。
 6. **回推速度**：`v = (x − x_prev) / dt_substep`。**被抓的三頂點也照推** → 它們帶著拖曳速度，放開時直接就是 Fling，不需另外賦速。
 7. **阻尼**：全域速度阻尼 `v *= (1 − k_damp)`。`k_damp` 調到放手後約 **1–2 秒**靜止。有重力時它同時給落體一個終端速度 `≈ g·h/k_damp`（`k_damp = 0.02`、240 Hz → `g / 4.8`）；issue #91 實測決定**不動阻尼**（改它舊片段重播就變），改把重力拉霸上限拉高（見參數表）。
    - **側視拆內部／整體（issue #106）**：`gravity ≠ 0` 時空中沒有桌面摩擦，全域阻尼套在落體上等於終端速度 `g / 4.8`、0.2 s 就到，看起來沒有加速度。改把每個 Particle 的速度拆成「質心平移」（等權平均 `v̄`）與「相對質心的內部運動」（抖動、拉伸、自轉）：`v = v̄·(1 − k_air) + (v − v̄)·(1 − k_damp)`。內部運動維持 `k_damp = 0.02`（放手後仍 1–2 s 靜止），質心只吃很小的 `k_air`（`airDamping`，預設 0.001：終端速度 `g / 0.24`、63% 要 ~4 s），自由落體看得到先慢後快；停下來交給牆／地板摩擦（issue #93）與牆的 restitution。`gravity = 0` 走原路徑（每個浮點運算不變，舊片段重播不變），`airDamping` 完全不參與。副作用（接受）：側視 + Infinite 甩出去的 Jelly 不會自己減速；落地速度比 #91 時高 2–4 倍（不再被終端速度壓住），著地壓扁與回彈明顯變大。實測（真瀏覽器、512×256 平底果凍）：g = 5000 自由落體每 0.5 s 落差 686 → 1785 → 2762 → 3628（舊路徑全程 ~520 等速）；Floor + 摩擦 0.3 快甩放開後滑 607 單位、1.3 s 停（舊 185／0.6 s）；Walled 箱（4× 身長）g = 5000 落 ~768 單位著地 ~2800／秒、壓扁到 0.75、回彈約一個身高、~2.5 s 靜止（舊：終端速度 1040、壓扁 0.86、不回彈、2.3 s）；g = 10000 壓扁到 0.45、空中拉長 1.3。13×13 fixture 輕甩（離地 ~50）落地後 ~1.3 s 靜止、用力甩（飛 2 倍身高）翻滾＋回彈 ~3 s 才靜止。重力拉霸的手感範圍因此整體變重（同一 g 落地速度 2–4 倍），要不要調整拉霸預設／上限另議。
@@ -73,7 +79,8 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 - **Grab／Pin 是 `(世界座標點) → {三角形, 重心座標}` 的 picking + 一條位置約束**。輸入層負責 picking（點擊命中哪個三角形），求解器只認 `{三角形, 重心座標, 目標點, locked}`。
 - **輸入走 `applyInput(event)` 單一介面**（見上「輸入介面」）。即時輸入層、Demo、v2 錄製器都經由它，不繞過。
 - **`World` 是多塊容器**（`src/sim/World.ts`，issue #95）：對外契約與 `SimCore` 同形（`applyInput`／`step`／`pick`／`bbox` 聯集／`listPins` 帶 `jellyId`／`reset` …），沙盒只對它說話。每塊一個 `SimCore`；網格由注入的 `meshProvider(sourceId, meshParams, importSize)` 給（`World` 不認得影像位元組，`spawn` 才能同步、在 Track 重播裡生成）。事件路由：`grab`／帶座標的 `pin`／`tap` 依 picking（id 倒序、先命中先贏；都沒中則跨塊最近 Particle 吸附）；`moveGrab`／`release`／`unpin`／`movePin` 依「約束 id → jellyId」表；`setFan`／`clearFan`／`clearPins` 廣播。`spawn`／`remove` 是 `World` 層級的事件（`jellyId` 而非 `id`，`mergeTracks` 不加前綴）。塊的迭代依 id 排序（決定性）。
-- **`SimCore` 的 substep 拆成三段**（issue #95）：`predict(h)`（步驟 1–2）／`solveInternal(h)`（3–6）／`finishSubstep(h)`（7），`step(dt)` = 三者迴圈。`World.step(dt)` 每個 substep 對每塊各跑三段，跨塊碰撞（V3 T3-3）插在第二與第三段之間；`SimCore` 另公開輪廓邊清單（`contour`，只屬於一個三角形的邊，含外法線正負號）、輪廓 Particle 索引（`surfaceParticles`）與 `prevPositions` 給碰撞讀寫。
+- **`SimCore` 的 substep 拆成三段**（issue #95）：`predict(h)`（步驟 1–2）／`solveInternal(h)`（3–6）／`finishSubstep(h)`（7），`step(dt)` = 三者迴圈。`World.step(dt)` 每個 substep 對每塊各跑三段，跨塊碰撞插在第二與第三段之間；`SimCore` 另公開輪廓邊清單（`contour`，只屬於一個三角形的邊，含外法線正負號）、輪廓 Particle 索引（`surfaceParticles`）與 `prevPositions` 給碰撞讀寫。
+- **跨塊碰撞是純函式**（`src/sim/collision.ts`，issue #96）：`resolveCollisions(jellies, params)` 吃 `CollisionBody[]`（`positions`／`prevPositions`／`particleCount`／`contour`／`surfaceParticles`——`SimCore` 結構上就滿足，`World` 直接把各塊的 core 依 id 順序傳進來）就地改 `positions`／`prevPositions`，回傳統計（塊對數、接觸數、最大深度）。不認得 `SimCore`、`World` 或邊界；參數 `CollisionParams`（`friction`／`impactAbsorb`／`particleShare`／`separationThreshold`）由 `World` 建構時注入，沙盒只覆寫 `friction = BOUNDARY_FRICTION`。固定手感值：不進面板、不進片段檔。
 - **Camera 與求解器無關**：Camera 吃所有 Jelly 的聯集 bbox（`World.bbox()`，空場 `null` → 鏡頭不動）+ `cameraMove` event，吐世界→螢幕變換；求解器不知道 Camera 存在。
 
 ## 輸入介面
@@ -139,6 +146,11 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
 | Tap 脈衝 strength | 6000（向內；prototype 實測） |
 | 重力 `gravity` | **使用者可調**（「重力」拉霸 0–10000、步進 100，預設 0 = 俯視無重力；issue #91）。實測（阻尼 0.02、512 高的平底果凍落 ~830 單位到 Walled 箱底）：spec 初訂上限 2000 中段只有 ~200 單位／秒、4 秒才落地，像糖漿；5000 → 1.2 s 落地、終端速度 ≈ 1000（約 2 倍身高／秒）、著地壓扁到 0.83、靜置下陷 3%；10000 → 0.6 s、壓扁到 0.7、下陷 6%；任何值落地後 ≤ 2 s 靜止。圓形果凍（預設 Pac-Man）在無摩擦地板上會慢慢滾到重心最低的姿態，是正確物理、不是抖動 |
 | 邊界摩擦 `friction` | **0.3**（`BOUNDARY_FRICTION`，Walled／Floor 共用；issue #93。0 = 冰面、1 = 貼地那步切線速度歸零；實測數據見上「邊界」節） |
+| 跨塊碰撞摩擦 `μ` | **0.3**（沿用 `BOUNDARY_FRICTION`；issue #96。Coulomb 位置式：一次接觸最多抵銷 `μ × depth` 的相對切線位移；#94 實測 0.3 疊放即不滑） |
+| 跨塊碰撞整體衝量 `impactAbsorb` | **0.75**（每無序塊對一次扣掉的質心趨近速度比例；#94 實測 0.5–1 都可） |
+| 跨塊碰撞推出配比 `particleShare` | **0.5**（PBD 權重：被推 Particle 0.5、邊兩端點依重心權重分 0.5；0.8 會讓兩塊被推開滑走） |
+| 跨塊碰撞位置分離門檻 `separationThreshold` | **0.1** × 輪廓平均邊長（要扣的趨近位移達此值 = 撞擊級 → 平移 `pos`；否則靜置級 → 平移 `prev`。靜置時趨近 ≈ `0.75·g·h²`，4 substep、g = 10000 也只有 0.13，遠低於門檻） |
+| 跨塊碰撞輪數 / substep | 1（skin 0；只測輪廓 Particle） |
 | Tap 影響半徑 | Jelly bbox 對角線 × 0.2 |
 | Tap 判定 | pointerdown→up ≤ 250ms 且位移 < 6px |
 | Pin 硬度 β | 1.0（絕對硬鎖，不可調） |

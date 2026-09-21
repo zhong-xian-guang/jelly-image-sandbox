@@ -421,6 +421,11 @@ describe('World — 跨塊碰撞（issue #96 / V3 T3-3）', () => {
 
   it('碰撞參數可注入：friction 由建構子第三個參數覆寫、其餘用預設', () => {
     const world = new World(fixtureProvider(), {}, { friction: 0.7 });
-    expect(world.collision).toEqual({ friction: 0.7, impactAbsorb: 0.75, particleShare: 0.5 });
+    expect(world.collision).toEqual({
+      friction: 0.7,
+      impactAbsorb: 0.75,
+      particleShare: 0.5,
+      separationThreshold: 0.1,
+    });
   });
 });

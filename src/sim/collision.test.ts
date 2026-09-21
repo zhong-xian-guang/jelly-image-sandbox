@@ -146,8 +146,8 @@ describe('resolveCollisions — 摩擦與整體衝量', () => {
     expect(relTangential(a, b)).toBeCloseTo(5 - 0.6, 12);
   });
 
-  it('兩塊趨近時整體衝量扣掉 75% 質心趨近速度：平移全體 prev、動量守恆、只扣趨近', () => {
-    // A 整體以每 substep 4 單位往 +x 撞向靜止的 B。
+  it('兩塊趨近時整體衝量扣掉 75% 質心趨近速度：先剛體式分開位置、動量守恆、prev 不動', () => {
+    // A 整體以每 substep 4 單位往 +x 撞向靜止的 B，tip 深 2。
     const a = body(
       [-10, 5, -20, 0, -20, 10],
       [0, 1, 2],
@@ -155,19 +155,64 @@ describe('resolveCollisions — 摩擦與整體衝量', () => {
       [-2, 5, -24, 0, -24, 10],
     );
     const b = square();
-    resolveCollisions([a, b], { ...P, friction: 0 });
-    // 推出後：A 質心位移 x = 4 − (4/3)/3、B = (4/3)/4；趨近 = 差 × 0.75，依 Particle 數配重。
-    const approach = 4 - 4 / 9 - 1 / 3;
-    const total = approach * 0.75;
-    const dA = (total * 4) / 7;
-    const dB = (total * 3) / 7;
+    const stats = resolveCollisions([a, b], { ...P, friction: 0 });
+    // 趨近 4 × 0.75 = 3，依 Particle 數配重：A 退 3·4/7、B 退 3·3/7（沿 −x／+x）。
+    const dA = (3 * 4) / 7;
+    const dB = (3 * 3) / 7;
+    // 分開 3 > 深度 2 → tip 已在 B 外，沒有表面推出：所有 Particle 只吃剛體平移。
+    expect(stats.contacts).toBe(0);
     for (let i = 0; i < 3; i++)
-      expect(a.prevPositions[2 * i]! - [-2, -24, -24][i]!).toBeCloseTo(dA, 12);
+      expect(a.positions[2 * i]! - [2, -20, -20][i]!).toBeCloseTo(-dA, 12);
     for (let i = 0; i < 4; i++)
-      expect(b.prevPositions[2 * i]! - [0, 10, 10, 0][i]!).toBeCloseTo(-dB, 12);
-    // y 方向的 prev 不動。
-    expect(Array.from(a.prevPositions).filter((_, k) => k % 2 === 1)).toEqual([5, 0, 10]);
-    // 動量守恆：Σ Δprev = 0（等質量）。
+      expect(b.positions[2 * i]! - [0, 10, 10, 0][i]!).toBeCloseTo(dB, 12);
+    // y 不動、prev 完全不動（速度變化由位置平移表達）。
+    expect(Array.from(a.positions).filter((_, k) => k % 2 === 1)).toEqual([5, 0, 10]);
+    expect(Array.from(a.prevPositions)).toEqual([-2, 5, -24, 0, -24, 10]);
+    expect(Array.from(b.prevPositions)).toEqual([0, 0, 10, 0, 10, 10, 0, 10]);
+    // 動量守恆：Σ Δpos = 0（等質量）。
+    expect(3 * dA - 4 * dB).toBeCloseTo(0, 12);
+  });
+
+  it('趨近量小於深度時：先剛體分開、殘餘穿透再由表面推出補完', () => {
+    // A 整體以每 substep 2 單位撞向 B，tip 深 2 → 分開 1.5，剩 0.5 靠推出。
+    const a = body(
+      [-10, 5, -20, 0, -20, 10],
+      [0, 1, 2],
+      [2, 5, -20, 0, -20, 10],
+      [0, 5, -22, 0, -22, 10],
+    );
+    const b = square();
+    const stats = resolveCollisions([a, b], { ...P, friction: 0 });
+    expect(stats.contacts).toBe(1);
+    expect(stats.maxDepth).toBeCloseTo(0.5, 12);
+    // 推完 tip 剛好在（移動後的）B 左邊上。
+    expect(a.positions[0]).toBeCloseTo(b.positions[0]!, 12);
+    expect(b.positions[0]).toBeCloseTo(b.positions[6]!, 12);
+    // 遠處 Particle 只吃剛體平移：A 退 1.5·4/7。
+    expect(a.positions[2]).toBeCloseTo(-20 - (1.5 * 4) / 7, 12);
+  });
+
+  it('靜置級的微小趨近（< 門檻 × 輪廓邊長）：先推出、再依推出後的質心位移平移 prev', () => {
+    // A 整體以每 substep 1 單位趨近，tip 深 2（B 邊長 10、門檻 0.1 → 1 單位；0.75 < 1 → 靜置級）。
+    const a = body(
+      [-10, 5, -20, 0, -20, 10],
+      [0, 1, 2],
+      [2, 5, -20, 0, -20, 10],
+      [1, 5, -21, 0, -21, 10],
+    );
+    const b = square();
+    const stats = resolveCollisions([a, b], { ...P, friction: 0 });
+    // 表面推出照舊處理整個深度 2：tip 移 −4/3、B 左邊兩端點各 +2/3。
+    expect(stats.contacts).toBe(1);
+    expect(stats.maxDepth).toBeCloseTo(2, 12);
+    expect(a.positions[0]).toBeCloseTo(b.positions[0]!, 12);
+    expect(a.positions[2]).toBe(-20); // 遠處 Particle 位置不動
+    // 推出後：A 質心位移 = 1 − (4/3)/3、B = (2/3 × 2)/4；趨近 × 0.75 依 Particle 數配重平移 prev。
+    const approach = 1 - 4 / 9 - 1 / 3;
+    const dA = (approach * 0.75 * 4) / 7;
+    const dB = (approach * 0.75 * 3) / 7;
+    expect(a.prevPositions[2]).toBeCloseTo(-21 + dA, 12); // A 速度朝 −x 增加
+    expect(b.prevPositions[2]).toBeCloseTo(10 - dB, 12); // B 速度朝 +x 增加
     expect(3 * dA - 4 * dB).toBeCloseTo(0, 12);
   });
 
