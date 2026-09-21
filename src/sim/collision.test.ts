@@ -216,6 +216,23 @@ describe('resolveCollisions — 摩擦與整體衝量', () => {
     expect(3 * dA - 4 * dB).toBeCloseTo(0, 12);
   });
 
+  it('撞擊級剛體分離後殘餘深度為 0 仍套摩擦，上限用偵測時的深度', () => {
+    // A 整體以每 substep (+4, +1) 撞向 B：法向趨近 4（分離 3 > 深度 2 → 不推），切向相對位移 1。
+    const a = body(
+      [-10, 5, -20, 0, -20, 10],
+      [0, 1, 2],
+      [2, 5, -20, 0, -20, 10],
+      [-2, 4, -24, -1, -24, 9],
+    );
+    const b = square();
+    const stats = resolveCollisions([a, b], { ...P, friction: 1 });
+    expect(stats.contacts).toBe(0);
+    // μ·深度 = 2 ≥ 1 → 相對切線位移整個抵銷（靜摩擦）。
+    expect(relTangential(a, b)).toBeCloseTo(0, 12);
+    // 法向仍只有剛體分離：tip x = 2 − 3·4/7。
+    expect(a.positions[0]).toBeCloseTo(2 - 12 / 7, 12);
+  });
+
   it('impactAbsorb = 0：prev 只受摩擦影響（這裡 friction = 0 → 完全不動）', () => {
     const a = probe([2, 5], [-2, 5]);
     const b = square();
