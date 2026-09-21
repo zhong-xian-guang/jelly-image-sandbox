@@ -1,59 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { SimMesh } from '../mesh';
 import { type Boundary, FloorBoundary, InfiniteBoundary, WalledBoundary } from './boundary';
 import { SimCore } from './SimCore';
+import { gridMesh } from './testFixtures';
 import type { InputEvent, SurfacePoint } from './types';
-
-/**
- * 手搭一張規則三角網格當測試 fixture（不經 mesh pipeline，讓求解器測試獨立）。
- * `nx × ny` 個頂點、間距 `s`，每個 cell 切兩個三角形（CCW，y 向下）。
- * 可選 `keepCell(i, j)`：只保留遮罩內的 cell（沒被任何三角形用到的頂點一併
- * 剔除、索引重編），用來刻凹形 fixture。
- */
-function gridMesh(
-  nx: number,
-  ny: number,
-  s: number,
-  keepCell: (i: number, j: number) => boolean = () => true,
-): SimMesh {
-  const idx = (i: number, j: number) => j * nx + i;
-  const rawInd: number[] = [];
-  for (let j = 0; j < ny - 1; j++)
-    for (let i = 0; i < nx - 1; i++) {
-      if (!keepCell(i, j)) continue;
-      rawInd.push(idx(i, j), idx(i + 1, j), idx(i + 1, j + 1));
-      rawInd.push(idx(i, j), idx(i + 1, j + 1), idx(i, j + 1));
-    }
-
-  // 未用到的頂點剔除、其餘保持 row-major 順序重編（全保留時索引 = `j * nx + i`）。
-  const used = new Set(rawInd);
-  const remap = new Map<number, number>();
-  const pos: number[] = [];
-  for (let raw = 0; raw < nx * ny; raw++) {
-    if (!used.has(raw)) continue;
-    remap.set(raw, remap.size);
-    pos.push((raw % nx) * s, Math.floor(raw / nx) * s);
-  }
-  const ind = rawInd.map((raw) => remap.get(raw)!);
-
-  const positions = new Float32Array(pos);
-  const indices = new Uint32Array(ind);
-  const restAreas = new Float64Array(indices.length / 3);
-  for (let t = 0; t < indices.length; t += 3) {
-    const a = indices[t]!;
-    const b = indices[t + 1]!;
-    const c = indices[t + 2]!;
-    restAreas[t / 3] =
-      0.5 *
-      ((positions[2 * b]! - positions[2 * a]!) * (positions[2 * c + 1]! - positions[2 * a + 1]!) -
-        (positions[2 * b + 1]! - positions[2 * a + 1]!) * (positions[2 * c]! - positions[2 * a]!));
-  }
-  const uv = new Float32Array(positions.length);
-  for (let k = 0; k < positions.length; k++) uv[k] = positions[k]! / (Math.max(nx, ny) * s);
-
-  return { positions, indices, uv, restAreas };
-}
 
 function allFinite(xs: ArrayLike<number>): boolean {
   for (let i = 0; i < xs.length; i++) if (!Number.isFinite(xs[i]!)) return false;
@@ -1666,5 +1616,59 @@ describe('SimCore — Region 依網格拓撲分組（issue #83）', () => {
     // 修前 B 跟著走 ≈ 55%；修後剩下的是兩齒根部經底部那列邊真的相連、落在同一
     // 格時合法成為一個 Region 的微量耦合（≈ 2%）。
     expect(bMoved).toBeLessThan(aMoved * 0.05);
+  });
+});
+
+describe('SimCore — substep 拆段（issue #95 / V3 T3-2，給 World 與碰撞用的 seam）', () => {
+  /** 兩顆 sim 吃同一段輸入：抓右下角甩一段、放開、再等一秒——含 Grab／Fling／陣風以外的所有步驟。 */
+  function drive(sim: SimCore, stepOnce: (sim: SimCore) => void): void {
+    sim.params.gravity = 1500;
+    sim.setBoundary(new FloorBoundary({ floorY: 200, friction: 0.3 }));
+    sim.applyInput({ type: 'pin', id: 'p', x: 0, y: 0 });
+    sim.applyInput({ type: 'grab', id: 'g', x: 96, y: 96 });
+    for (let step = 1; step <= 8; step++) {
+      sim.applyInput({ type: 'moveGrab', id: 'g', x: 96 + 30 * step, y: 96 + 10 * step });
+      stepOnce(sim);
+    }
+    sim.applyInput({ type: 'release', id: 'g' });
+    sim.applyInput({ type: 'tap', x: 48, y: 48 });
+    for (let f = 0; f < 60; f++) stepOnce(sim);
+  }
+
+  it('predict → solveInternal → finishSubstep 手動迴圈與 step() 位元相同', () => {
+    const a = new SimCore(MESH());
+    const b = new SimCore(MESH());
+    drive(a, (sim) => sim.step(1 / 60));
+    drive(b, (sim) => {
+      const subs = sim.params.substeps;
+      const h = 1 / 60 / subs;
+      for (let s = 0; s < subs; s++) {
+        sim.predict(h);
+        sim.solveInternal(h);
+        sim.finishSubstep(h);
+      }
+    });
+    expect(Array.from(b.positions)).toEqual(Array.from(a.positions));
+    expect(b.kineticEnergy()).toBe(a.kineticEnergy());
+  });
+
+  it('輪廓邊 = 只屬於一個三角形的邊，外法線朝外；輪廓 Particle 索引去重', () => {
+    const sim = new SimCore(gridMesh(3, 3, 10)); // 3×3 頂點、8 個三角形，正中間頂點 4 不在輪廓上
+    expect(sim.contour.length).toBe(8);
+    const surface = Array.from(sim.surfaceParticles).sort((p, q) => p - q);
+    expect(surface).toEqual([0, 1, 2, 3, 5, 6, 7, 8]);
+    const pos = sim.positions;
+    for (const e of sim.contour) {
+      const ax = pos[2 * e.a]!;
+      const ay = pos[2 * e.a + 1]!;
+      const bx = pos[2 * e.b]!;
+      const by = pos[2 * e.b + 1]!;
+      // 外法線 = nsign · perp(b − a)，perp(x, y) = (y, −x)；邊中點指向網格中心 (10, 10) 的向量要跟它反向。
+      const nx = e.nsign * (by - ay);
+      const ny = e.nsign * -(bx - ax);
+      const mx = (ax + bx) / 2 - 10;
+      const my = (ay + by) / 2 - 10;
+      expect(nx * mx + ny * my).toBeGreaterThan(0);
+    }
   });
 });

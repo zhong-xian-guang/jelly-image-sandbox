@@ -41,13 +41,20 @@
  *   6. Boundary（`setBoundary`，可換）：clamp 進 Walled AABB／Floor 地板以上／Infinite no-op。
  *   7. 回推速度（被抓的 Particle 也照推 → 放開即 Fling）→ 全域阻尼。
  *
+ * 這七步公開成三段方法（issue #95 / V3 T3-2，spec #87）：`predict(h)` = 1–2、
+ * `solveInternal(h)` = 3–6、`finishSubstep(h)` = 7；`step(dt)` 只是切 substep 後依序呼叫
+ * 三者。多塊容器 `World` 用同一個 `h` 對每塊各跑三段、把跨塊碰撞插在第二與第三段之間
+ * （V3 T3-3）；另公開 `contour`（輪廓邊）／`surfaceParticles`／`prevPositions` 給碰撞讀寫。
+ *
  * picking（世界座標 → 三角形 + 重心座標）暫時放在這裡（藍本 jelly-core 也是），
  * 未來 Input layer（issue #11）接手後改由它命中、只餵求解器 `{三角形, 重心座標,
  * 目標點}`——見 `docs/design/simulation-and-mesh.md` 模組邊界。
  */
 
 import { mulberry32, type SimMesh } from '../mesh';
+
 import { type Boundary, InfiniteBoundary } from './boundary';
+import { type ContourEdge, contourEdges, surfaceParticles } from './contour';
 import {
   DEFAULT_SIM_PARAMS,
   type AreaStats,
@@ -59,6 +66,7 @@ import {
   type PointerId,
   type SimParams,
   type StretchStats,
+  substepCount,
   type SurfacePoint,
 } from './types';
 
@@ -130,6 +138,13 @@ export class SimCore {
   private readonly restAreas: Float64Array;
   /** 靜止 bbox 對角線長。Grab 框外退路的預設吸附半徑由它導出。 */
   private readonly restDiag: number;
+  /**
+   * 輪廓邊清單（issue #95；spec #87 substep 拆段）——只屬於一個三角形的邊，建構時
+   * 從 `indices` 算一次（見 `./contour`）。跨塊碰撞（V3 T3-3）用；求解器本身不讀它。
+   */
+  readonly contour: readonly ContourEdge[];
+  /** 輪廓上的 Particle 索引（去重）。碰撞只拿這些去測別塊（內部 Particle 只在表面已深陷時才會進別塊）。 */
+  readonly surfaceParticles: Uint32Array;
 
   /** 作用中的 Grab / Pin，鍵為輸入 `id`（Grab 與 Pin 共用命名空間）。 */
   private readonly constraints = new Map<PointerId, Constraint>();
@@ -175,6 +190,8 @@ export class SimCore {
     this.goalY = new Float64Array(this.n);
     this.goalCount = new Float64Array(this.n);
     this.restDiag = this.diag(this.bounds(this.rest));
+    this.contour = contourEdges(this.tris, this.rest);
+    this.surfaceParticles = surfaceParticles(this.contour);
     this.rng = mulberry32(this.rngSeed);
     this.rebuildRegions();
   }
@@ -418,6 +435,11 @@ export class SimCore {
       case 'clearFan':
         this.fan = null;
         break;
+      case 'spawn':
+      case 'remove':
+        // 多塊容器層級的事件（issue #95），單塊求解器不認得——`World` 在轉送前就
+        // 消化掉了，這裡只是讓直接拿 `SimCore` 當 `applyInput` 目標的呼叫端不會炸。
+        break;
     }
   }
 
@@ -508,9 +530,33 @@ export class SimCore {
     return this.fan;
   }
 
-  /** Grab／Pin 框外退路的吸附半徑：呼叫端指定值，否則靜止 bbox 對角線 × 0.1。 */
-  private grabRadius(explicit?: number): number {
+  /**
+   * Grab／Pin 框外退路的吸附半徑：呼叫端指定值，否則靜止 bbox 對角線 × 0.1。公開給
+   * `World`（issue #95）做「跨塊最近 Particle 在半徑內」的吸附比較——半徑用該塊自己
+   * 的對角線（ADR-0013）。
+   */
+  grabRadius(explicit?: number): number {
     return explicit ?? this.restDiag * 0.1;
+  }
+
+  /**
+   * 離世界座標 `(x, y)` 最近的 Particle 與距離（目前變形後的位置；不限半徑）。`World`
+   * 用它在所有塊都沒 `pick` 命中時挑「哪一塊離指標最近」再轉送事件（issue #95）——
+   * 是否真的在吸附半徑內仍由該塊的 `doGrab`／`doTap` 自己判定。
+   */
+  nearestParticle(x: number, y: number): { index: number; distance: number } {
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < this.n; i++) {
+      const dx = this.pos[2 * i]! - x;
+      const dy = this.pos[2 * i + 1]! - y;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return { index: best, distance: Math.sqrt(bestD) };
   }
 
   /**
@@ -657,76 +703,100 @@ export class SimCore {
   /**
    * 推進 `dt` 秒（切成 `params.substeps` 個 substep）。`dt <= 0` 為 no-op。
    * accumulator 累積與上限 clamp 由呼叫端負責。
+   *
+   * 每個 substep = `predict(h)` → `solveInternal(h)` → `finishSubstep(h)` 三段
+   * （issue #95 / V3 T3-2 依 spec #87 拆開）：`World` 用同一個 `h` 對每塊各呼叫這
+   * 三段、把跨塊碰撞插在 `solveInternal` 與 `finishSubstep` 之間（V3 T3-3）。這裡的
+   * 迴圈與 `World` 對單塊做的事逐浮點運算相同，舊片段重播結果不變。
    */
   step(dt: number): void {
     if (!(dt > 0)) return;
-    const subs = Math.max(1, Math.floor(this.params.substeps));
+    const subs = substepCount(this.params);
     const h = dt / subs;
-    const alphaSm = this.params.alphaSm;
+    for (let s = 0; s < subs; s++) {
+      this.predict(h);
+      this.solveInternal(h);
+      this.finishSubstep(h);
+    }
+  }
+
+  /**
+   * substep 第一段（步驟 1–2）：外力烤進 `vel`、symplectic Euler 預測。`h` 是這個
+   * substep 的秒數（`dt / substeps`）。單獨呼叫只在 `World` 的 substep 迴圈裡有意義；
+   * 一般呼叫端用 `step(dt)`。
+   */
+  predict(h: number): void {
+    const gravity = this.params.gravity;
+    // 1. 電風扇（沒有時 no-op）：對目前位置落在矩形內的 Particle 把它的加速度
+    //    烤進 vel。**必須在預測之前**——vel 在這個 substep 尾端（步驟 7）會整個
+    //    依位置差重算，這裡若排在預測之後才改 vel，這股力這一 substep 完全不會
+    //    移動任何位置、下一行就被蓋掉，等於沒發生過。
+    if (this.fan) this.applyFan(this.fan, h);
+    //    重力同一步驟、同一理由（issue #91）：`gravity = 0` 時整段跳過，讓沒有
+    //    重力的 step 每個浮點運算跟以前完全一樣（舊片段重播結果不變）。
+    if (gravity !== 0) {
+      const dv = gravity * h;
+      for (let i = 0; i < this.n; i++) this.vel[2 * i + 1] = this.vel[2 * i + 1]! + dv;
+    }
+    // 2. 預測：symplectic Euler，把（可能已含電風扇／重力）的 vel 積分進
+    //    pos——被抓 Particle 也照常積分。
+    for (let i = 0; i < this.n; i++) {
+      this.prev[2 * i] = this.pos[2 * i]!;
+      this.prev[2 * i + 1] = this.pos[2 * i + 1]!;
+      this.pos[2 * i] = this.pos[2 * i]! + this.vel[2 * i]! * h;
+      this.pos[2 * i + 1] = this.pos[2 * i + 1]! + this.vel[2 * i + 1]! * h;
+    }
+  }
+
+  /** substep 第二段（步驟 3–6）：shape matching → XPBD → Grab/Pin → Boundary。碰撞（V3 T3-3）排在這之後。 */
+  solveInternal(h: number): void {
+    const gravity = this.params.gravity;
+    // 3. shape-matching 脊椎（有重力時開動量守恆，見方法說明）。
+    this.solveShapeMatching(this.params.alphaSm, gravity !== 0);
+    // 4. XPBD 細節層（疊加；補局部拉伸擠壓的彈性 + 第二道防翻面）。
+    if (this.params.xpbd) this.solveXpbd(h);
+    // 5. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
+    this.solveConstraints();
+    // 6. Boundary：clamp 進邊界（Walled AABB／Floor 地板）、調 prev 讓回推速度不指向界外（Infinite 為 no-op）。
+    this.boundary.resolveBoundary(this.pos, this.prev, this.n, h);
+  }
+
+  /** substep 第三段（步驟 7）：由 `pos − prev` 回推速度 + 阻尼。 */
+  finishSubstep(h: number): void {
     const keep = 1 - this.params.damping;
     const keepAir = 1 - this.params.airDamping;
     const gravity = this.params.gravity;
-
-    for (let s = 0; s < subs; s++) {
-      // 1. 電風扇（沒有時 no-op）：對目前位置落在矩形內的 Particle 把它的加速度
-      //    烤進 vel。**必須在預測之前**——vel 在這個 substep 尾端（步驟 7）會整個
-      //    依位置差重算，這裡若排在預測之後才改 vel，這股力這一 substep 完全不會
-      //    移動任何位置、下一行就被蓋掉，等於沒發生過。
-      if (this.fan) this.applyFan(this.fan, h);
-      //    重力同一步驟、同一理由（issue #91）：`gravity = 0` 時整段跳過，讓沒有
-      //    重力的 step 每個浮點運算跟以前完全一樣（舊片段重播結果不變）。
-      if (gravity !== 0) {
-        const dv = gravity * h;
-        for (let i = 0; i < this.n; i++) this.vel[2 * i + 1] = this.vel[2 * i + 1]! + dv;
-      }
-      // 2. 預測：symplectic Euler，把（可能已含電風扇／重力）的 vel 積分進
-      //    pos——被抓 Particle 也照常積分。
+    // 7. 回推速度 + 阻尼。
+    if (gravity === 0) {
+      // 俯視：全域阻尼套在完整速度上（桌面摩擦感）。這條路徑的每個浮點運算跟
+      // issue #106 之前完全一樣——舊片段重播結果不變。
       for (let i = 0; i < this.n; i++) {
-        this.prev[2 * i] = this.pos[2 * i]!;
-        this.prev[2 * i + 1] = this.pos[2 * i + 1]!;
-        this.pos[2 * i] = this.pos[2 * i]! + this.vel[2 * i]! * h;
-        this.pos[2 * i + 1] = this.pos[2 * i + 1]! + this.vel[2 * i + 1]! * h;
+        this.vel[2 * i] = ((this.pos[2 * i]! - this.prev[2 * i]!) / h) * keep;
+        this.vel[2 * i + 1] = ((this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h) * keep;
       }
-      // 3. shape-matching 脊椎（有重力時開動量守恆，見方法說明）。
-      this.solveShapeMatching(alphaSm, gravity !== 0);
-      // 4. XPBD 細節層（疊加；補局部拉伸擠壓的彈性 + 第二道防翻面）。
-      if (this.params.xpbd) this.solveXpbd(h);
-      // 5. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
-      this.solveConstraints();
-      // 6. Boundary：clamp 進邊界（Walled AABB／Floor 地板）、調 prev 讓回推速度不指向界外（Infinite 為 no-op）。
-      this.boundary.resolveBoundary(this.pos, this.prev, this.n, h);
-      // 7. 回推速度 + 阻尼。
-      if (gravity === 0) {
-        // 俯視：全域阻尼套在完整速度上（桌面摩擦感）。這條路徑的每個浮點運算跟
-        // issue #106 之前完全一樣——舊片段重播結果不變。
-        for (let i = 0; i < this.n; i++) {
-          this.vel[2 * i] = ((this.pos[2 * i]! - this.prev[2 * i]!) / h) * keep;
-          this.vel[2 * i + 1] = ((this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h) * keep;
-        }
-      } else {
-        // 側視（issue #106）：空中沒有桌面摩擦。速度拆成「質心平移」（只吃很小的
-        // airDamping，落體看得到加速）+「相對質心的內部運動」（維持 damping，放手後
-        // 抖動仍 1–2 s 靜止）。等權平均 = 等質量質心速度；Pin 住的 Particle 速度 0
-        // 也算進去，被 Pin 住的 Jelly 質心速度自然被拉向 0。
-        let sumX = 0;
-        let sumY = 0;
-        for (let i = 0; i < this.n; i++) {
-          const vx = (this.pos[2 * i]! - this.prev[2 * i]!) / h;
-          const vy = (this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h;
-          this.vel[2 * i] = vx;
-          this.vel[2 * i + 1] = vy;
-          sumX += vx;
-          sumY += vy;
-        }
-        const meanX = sumX / this.n;
-        const meanY = sumY / this.n;
-        const airX = meanX * keepAir;
-        const airY = meanY * keepAir;
-        for (let i = 0; i < this.n; i++) {
-          this.vel[2 * i] = airX + (this.vel[2 * i]! - meanX) * keep;
-          this.vel[2 * i + 1] = airY + (this.vel[2 * i + 1]! - meanY) * keep;
-        }
-      }
+      return;
+    }
+    // 側視（issue #106）：空中沒有桌面摩擦。速度拆成「質心平移」（只吃很小的
+    // airDamping，落體看得到加速）+「相對質心的內部運動」（維持 damping，放手後
+    // 抖動仍 1–2 s 靜止）。等權平均 = 等質量質心速度；Pin 住的 Particle 速度 0
+    // 也算進去，被 Pin 住的 Jelly 質心速度自然被拉向 0。
+    let sumX = 0;
+    let sumY = 0;
+    for (let i = 0; i < this.n; i++) {
+      const vx = (this.pos[2 * i]! - this.prev[2 * i]!) / h;
+      const vy = (this.pos[2 * i + 1]! - this.prev[2 * i + 1]!) / h;
+      this.vel[2 * i] = vx;
+      this.vel[2 * i + 1] = vy;
+      sumX += vx;
+      sumY += vy;
+    }
+    const meanX = sumX / this.n;
+    const meanY = sumY / this.n;
+    const airX = meanX * keepAir;
+    const airY = meanY * keepAir;
+    for (let i = 0; i < this.n; i++) {
+      this.vel[2 * i] = airX + (this.vel[2 * i]! - meanX) * keep;
+      this.vel[2 * i + 1] = airY + (this.vel[2 * i + 1]! - meanY) * keep;
     }
   }
 
@@ -944,6 +1014,20 @@ export class SimCore {
    */
   get positions(): Float64Array {
     return this.pos;
+  }
+
+  /**
+   * 上一個 substep 的位置（`finishSubstep` 用 `pos − prev` 回推速度），同樣是內部活動
+   * 緩衝區（issue #95）。跨塊碰撞（V3 T3-3）就地改它來套摩擦與整體衝量；其餘呼叫端
+   * **不要改動**。
+   */
+  get prevPositions(): Float64Array {
+    return this.prev;
+  }
+
+  /** Particle 數（= `positions.length / 2`）。跨塊碰撞（V3 T3-3）的輸入 `count`；求解器內部不用它。 */
+  get particleCount(): number {
+    return this.n;
   }
 
   /** 所有 Particle 位置的平均。 */

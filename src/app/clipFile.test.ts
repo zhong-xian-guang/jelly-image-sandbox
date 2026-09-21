@@ -1,14 +1,15 @@
 /**
- * `clipFile` 的單元測試——`serializeClip`（issue #57 / V2 T2-4）：產出合法
- * `version: 1` JSON、涵蓋所有欄位、`image.bytes` 走 base64 逐位元組還原、不改動
- * 傳入的 `ClipState`。`parseClipFile`（issue #58 / V2 T2-5）：`serializeClip` →
- * `parseClipFile` round-trip 深度相等，以及各類壞檔（非 JSON／版本不符／欄位缺或
- * 型別錯）丟 `ClipFileError`。prior art：`src/app/track/groups.test.ts`、
- * `src/app/demos/overlay.test.ts`。
+ * `clipFile` 的單元測試——`serializeClip`（issue #57 / V2 T2-4；issue #95 升 v2）：產出合法
+ * `version: 2` JSON、涵蓋所有欄位、每張來源圖 `bytes` 走 base64 逐位元組還原、多塊共用同一
+ * `sourceId` 只存一份、不改動傳入的 `ClipState`。`parseClipFile`（issue #58 / V2 T2-5）：
+ * `serializeClip` → `parseClipFile` round-trip 深度相等、v1 字串遷移成單塊 Scene、各類壞檔
+ * （非 JSON／版本不符／欄位缺或型別錯／Scene 引用不存在的來源）丟 `ClipFileError`。
+ * prior art：`src/app/track/groups.test.ts`、`src/app/demos/overlay.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';
 
+import type { BuildSimMeshParams } from '../mesh';
 import {
   CLIP_FILE_VERSION,
   ClipFileError,
@@ -18,7 +19,7 @@ import {
   type ClipState,
 } from './clipFile';
 
-/** test-only：base64 → bytes（模組本身只做編碼，解碼由 issue #58 補）。 */
+/** test-only：base64 → bytes。 */
 function decodeBase64(b64: string): Uint8Array {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -26,26 +27,52 @@ function decodeBase64(b64: string): Uint8Array {
   return out;
 }
 
-/** 涵蓋所有欄位的 `ClipState`：改過名的 Track、多群組、非空 setupPins、砍半的 targetParticleCount、walled 邊界。 */
+const MESH_PARAMS: BuildSimMeshParams = {
+  maxMaskEdge: 1024,
+  alphaThreshold: 0.5,
+  simplifyTolerance: 1.5,
+  targetParticleCount: 175, // 效能退路砍半後的值
+  minTriangleArea: 0.5,
+  minTriangleAngleDeg: 15,
+  refineMinAngleDeg: 25,
+  refineMaxAreaFactor: 2,
+  refineMaxPasses: 30,
+};
+
+/**
+ * 涵蓋所有欄位的 `ClipState`：兩張來源圖、三塊 Scene（其中兩塊共用 `src/1`）、改過名的
+ * Track、多群組、非空 setupPins、砍半的 targetParticleCount、walled 邊界。
+ */
 function fullClip(): ClipState {
   return {
-    image: {
-      format: 'gif',
+    sources: {
       // 含 0 與 255，確保 base64 邊界值也逐位元組還原。
-      bytes: new Uint8Array([0, 1, 2, 127, 128, 200, 253, 254, 255]),
+      'src/1': { format: 'gif', bytes: new Uint8Array([0, 1, 2, 127, 128, 200, 253, 254, 255]) },
+      'src/2': { format: 'png', bytes: new Uint8Array([137, 80, 78, 71]) },
     },
-    meshParams: {
-      maxMaskEdge: 1024,
-      alphaThreshold: 0.5,
-      simplifyTolerance: 1.5,
-      targetParticleCount: 175, // 效能退路砍半後的值
-      minTriangleArea: 0.5,
-      minTriangleAngleDeg: 15,
-      refineMinAngleDeg: 25,
-      refineMaxAreaFactor: 2,
-      refineMaxPasses: 30,
-    },
-    importSize: 512,
+    scene: [
+      {
+        jellyId: 'jelly/1',
+        sourceId: 'src/1',
+        meshParams: MESH_PARAMS,
+        importSize: 512,
+        offset: { x: 0, y: 0 },
+      },
+      {
+        jellyId: 'jelly/2',
+        sourceId: 'src/2',
+        meshParams: { ...MESH_PARAMS, targetParticleCount: 350 },
+        importSize: 256,
+        offset: { x: 300.5, y: -12 },
+      },
+      {
+        jellyId: 'jelly/3',
+        sourceId: 'src/1',
+        meshParams: MESH_PARAMS,
+        importSize: null, // 從 v1 檔遷移、未重建的塊
+        offset: { x: -80, y: 40 },
+      },
+    ],
     sim: { softness: 0.73, tapStrength: 4200, boundary: 'walled', gravity: 0 },
     tracks: [
       {
@@ -58,6 +85,18 @@ function fullClip(): ClipState {
         steps: [
           { atStep: 0, event: { type: 'grab', id: 1, x: 3, y: 4 } },
           { atStep: 30, event: { type: 'release', id: 1 } },
+          {
+            atStep: 40,
+            event: {
+              type: 'spawn',
+              jellyId: 'jelly/4',
+              sourceId: 'src/2',
+              meshParams: MESH_PARAMS,
+              importSize: 128,
+              offset: { x: 1, y: 2 },
+            },
+          },
+          { atStep: 50, event: { type: 'remove', jellyId: 'jelly/4' } },
         ],
         startCamera: null,
         groupIds: ['default', 'g1'],
@@ -87,33 +126,77 @@ function fullClip(): ClipState {
       { x: 10.5, y: -20.25 },
       { x: 0, y: 0 },
     ],
-    counters: { nextTrackNum: 3, nextGroupNum: 2 },
+    counters: { nextTrackNum: 3, nextGroupNum: 2, nextJellyNum: 5, nextSourceNum: 3 },
+  };
+}
+
+/** 一份 V2 時期（issue #57–#91）存出的 v1 片段檔文件（`image`／`meshParams`／`importSize` 在頂層）。 */
+function v1Document(): Record<string, unknown> {
+  return {
+    version: 1,
+    image: { format: 'jpeg', bytes: btoa(String.fromCharCode(0, 255, 128, 1, 254)) },
+    meshParams: MESH_PARAMS,
+    importSize: 384,
+    sim: { softness: 0.4, tapStrength: 6000, boundary: 'floor', gravity: 2000 },
+    tracks: [
+      {
+        id: 't1',
+        kind: 'action',
+        name: '動作軌 1（拖曳）',
+        startStep: 0,
+        inStep: 0,
+        outStep: 30,
+        steps: [
+          { atStep: 0, event: { type: 'grab', id: 1, x: 3, y: 4 } },
+          { atStep: 30, event: { type: 'release', id: 1 } },
+        ],
+        startCamera: null,
+        groupIds: ['default'],
+      },
+    ],
+    groups: [{ id: 'default', name: '預設', enabled: true }],
+    setupPins: [{ x: 5, y: 6 }],
+    counters: { nextTrackNum: 2, nextGroupNum: 1 },
   };
 }
 
 describe('serializeClip', () => {
-  it('產出合法 JSON，帶 version: 1', () => {
+  it('產出合法 JSON，帶 version: 2', () => {
     const parsed = JSON.parse(serializeClip(fullClip()));
     expect(parsed.version).toBe(CLIP_FILE_VERSION);
-    expect(CLIP_FILE_VERSION).toBe(1);
+    expect(CLIP_FILE_VERSION).toBe(2);
   });
 
-  it('image：格式原樣，bytes 走 base64、逐位元組還原', () => {
+  it('sources：每張來源圖格式原樣、bytes 走 base64 逐位元組還原；共用同一 sourceId 的塊只存一份', () => {
     const clip = fullClip();
     const parsed = JSON.parse(serializeClip(clip));
-    expect(parsed.image.format).toBe('gif');
-    expect(typeof parsed.image.bytes).toBe('string');
-    expect(Array.from(decodeBase64(parsed.image.bytes))).toEqual(Array.from(clip.image.bytes));
+    expect(Object.keys(parsed.sources)).toEqual(['src/1', 'src/2']);
+    expect(parsed.sources['src/1'].format).toBe('gif');
+    expect(typeof parsed.sources['src/1'].bytes).toBe('string');
+    expect(Array.from(decodeBase64(parsed.sources['src/1'].bytes))).toEqual(
+      Array.from(clip.sources['src/1']!.bytes),
+    );
+    expect(Array.from(decodeBase64(parsed.sources['src/2'].bytes))).toEqual([137, 80, 78, 71]);
+    // 三塊 Scene 只引用兩張圖：檔案裡沒有第三份影像。
+    expect(JSON.stringify(parsed).split(parsed.sources['src/1'].bytes).length - 1).toBe(1);
   });
 
-  it('meshParams：完整九欄原樣保留（含砍半的 targetParticleCount）', () => {
+  it('scene：每塊的 jellyId／sourceId／完整 meshParams／importSize（含 null）／offset 原樣保留', () => {
     const clip = fullClip();
     const parsed = JSON.parse(serializeClip(clip));
-    expect(parsed.meshParams).toEqual(clip.meshParams);
-    expect(parsed.meshParams.targetParticleCount).toBe(175);
+    expect(parsed.scene).toEqual(clip.scene);
+    expect(parsed.scene[0].meshParams.targetParticleCount).toBe(175);
+    expect(parsed.scene[2].importSize).toBeNull();
   });
 
-  it('sim：軟硬度 0–1 值、輕拍力道、邊界模式原樣保留', () => {
+  it('頂層不再有 v1 的 image／meshParams／importSize', () => {
+    const parsed = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
+    expect('image' in parsed).toBe(false);
+    expect('meshParams' in parsed).toBe(false);
+    expect('importSize' in parsed).toBe(false);
+  });
+
+  it('sim：軟硬度 0–1 值、輕拍力道、邊界模式、重力原樣保留', () => {
     const parsed = JSON.parse(serializeClip(fullClip()));
     expect(parsed.sim).toEqual({
       softness: 0.73,
@@ -123,11 +206,10 @@ describe('serializeClip', () => {
     });
   });
 
-  it('tracks：含名字、起始、頭尾修剪、steps、相機軌起點快照、groupIds（陣列）', () => {
+  it('tracks：含名字、起始、頭尾修剪、steps（含 spawn／remove 事件）、相機軌起點快照、groupIds（陣列）', () => {
     const clip = fullClip();
     const parsed = JSON.parse(serializeClip(clip));
     expect(parsed.tracks).toEqual(clip.tracks);
-    // groupIds 是陣列而非 Set 的序列化殘骸
     expect(Array.isArray(parsed.tracks[0].groupIds)).toBe(true);
     expect(parsed.tracks[0].groupIds).toEqual(['default', 'g1']);
     expect(parsed.tracks[1].startCamera.transform).toEqual({ x: 1, y: 2, scale: 3 });
@@ -149,35 +231,43 @@ describe('serializeClip', () => {
     ]);
   });
 
-  it('counters：流水號原樣保留', () => {
+  it('counters：四個流水號原樣保留', () => {
     const parsed = JSON.parse(serializeClip(fullClip()));
-    expect(parsed.counters).toEqual({ nextTrackNum: 3, nextGroupNum: 2 });
+    expect(parsed.counters).toEqual({
+      nextTrackNum: 3,
+      nextGroupNum: 2,
+      nextJellyNum: 5,
+      nextSourceNum: 3,
+    });
   });
 
   it('不改動傳入的 ClipState，且冪等', () => {
     const clip = fullClip();
     const first = serializeClip(clip);
     const second = serializeClip(clip);
-    expect(second).toBe(first); // 冪等：第二次呼叫結果不變
-    expect(Array.from(clip.image.bytes)).toEqual([0, 1, 2, 127, 128, 200, 253, 254, 255]);
+    expect(second).toBe(first);
+    expect(Array.from(clip.sources['src/1']!.bytes)).toEqual([
+      0, 1, 2, 127, 128, 200, 253, 254, 255,
+    ]);
     expect(clip.tracks[0]!.groupIds).toEqual(['default', 'g1']);
-    expect(clip).toEqual(fullClip()); // 整體與一份全新的 fullClip() 深度相等
+    expect(clip).toEqual(fullClip());
   });
 
-  it('空 tracks / groups / setupPins 也能序列化（預設果凍剛啟動的狀態）', () => {
+  it('空 scene / tracks / groups / setupPins 也能序列化（「清空全部」後的空桌面）', () => {
     const clip = fullClip();
     const empty: ClipState = {
       ...clip,
-      image: { format: 'png', bytes: new Uint8Array([137, 80, 78, 71]) },
+      sources: { 'src/1': { format: 'png', bytes: new Uint8Array([137, 80, 78, 71]) } },
+      scene: [],
       tracks: [],
       groups: [{ id: 'default', name: '預設', enabled: true }],
       setupPins: [],
     };
     const parsed = JSON.parse(serializeClip(empty));
+    expect(parsed.scene).toEqual([]);
     expect(parsed.tracks).toEqual([]);
     expect(parsed.setupPins).toEqual([]);
-    expect(parsed.image.format).toBe('png');
-    expect(Array.from(decodeBase64(parsed.image.bytes))).toEqual([137, 80, 78, 71]);
+    expect(Array.from(decodeBase64(parsed.sources['src/1'].bytes))).toEqual([137, 80, 78, 71]);
   });
 });
 
@@ -186,148 +276,206 @@ describe('parseClipFile', () => {
     const clip = fullClip();
     const parsed = parseClipFile(serializeClip(clip));
     expect(parsed).toEqual(clip);
-    expect(Array.from(parsed.image.bytes)).toEqual(Array.from(clip.image.bytes));
+    expect(Array.from(parsed.sources['src/1']!.bytes)).toEqual(
+      Array.from(clip.sources['src/1']!.bytes),
+    );
   });
 
-  it('round-trip：空 tracks / groups / setupPins（預設果凍剛啟動的狀態）', () => {
+  it('round-trip：空 scene / tracks / groups / setupPins', () => {
     const clip: ClipState = {
       ...fullClip(),
-      image: { format: 'png', bytes: new Uint8Array([137, 80, 78, 71]) },
+      sources: { 'src/1': { format: 'png', bytes: new Uint8Array([137, 80, 78, 71]) } },
+      scene: [],
       tracks: [],
       groups: [{ id: 'default', name: '預設', enabled: true }],
       setupPins: [],
     };
-    const parsed = parseClipFile(serializeClip(clip));
-    expect(parsed).toEqual(clip);
+    expect(parseClipFile(serializeClip(clip))).toEqual(clip);
   });
 
-  it('round-trip：image.bytes 含 0 與 255 邊界值逐位元組還原', () => {
+  it('round-trip：sources bytes 含 0 與 255 邊界值逐位元組還原', () => {
     const clip: ClipState = {
       ...fullClip(),
-      image: { format: 'jpeg', bytes: new Uint8Array([0, 255, 128, 1, 254]) },
+      sources: {
+        'src/1': { format: 'jpeg', bytes: new Uint8Array([0, 255, 128, 1, 254]) },
+        'src/2': { format: 'png', bytes: new Uint8Array([1]) },
+      },
     };
-    const parsed = parseClipFile(serializeClip(clip));
-    expect(Array.from(parsed.image.bytes)).toEqual([0, 255, 128, 1, 254]);
+    expect(Array.from(parseClipFile(serializeClip(clip)).sources['src/1']!.bytes)).toEqual([
+      0, 255, 128, 1, 254,
+    ]);
   });
 
   it('非 JSON → ClipFileError', () => {
     expect(() => parseClipFile('這不是 JSON {{{')).toThrow(ClipFileError);
   });
 
-  it('version 不是已知值 → ClipFileError', () => {
-    const doc = { ...JSON.parse(serializeClip(fullClip())), version: 2 };
-    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  it('version 不是已知值（3、0、字串）→ ClipFileError', () => {
+    for (const bad of [3, 0, '2']) {
+      const doc = { ...JSON.parse(serializeClip(fullClip())), version: bad };
+      expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+    }
   });
 
   it('頂層不是物件（例如陣列）→ ClipFileError', () => {
     expect(() => parseClipFile('[1, 2, 3]')).toThrow(ClipFileError);
   });
 
-  it('image 欄位缺失 → ClipFileError', () => {
+  it('sources 欄位缺失 → ClipFileError', () => {
     const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
-    delete doc.image;
+    delete doc.sources;
     expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
   });
 
-  it('image.bytes 不是合法 base64 → ClipFileError', () => {
-    const doc = JSON.parse(serializeClip(fullClip())) as { image: { bytes: string } };
-    doc.image.bytes = '不是 base64！！！';
-    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
-  });
-
-  it('image.format 不是已知格式 → ClipFileError', () => {
-    const doc = JSON.parse(serializeClip(fullClip())) as { image: { format: string } };
-    doc.image.format = 'webp';
-    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
-  });
-
-  it('meshParams 欄位型別錯（字串取代數字）→ ClipFileError', () => {
+  it('sources[].bytes 不是合法 base64 → ClipFileError', () => {
     const doc = JSON.parse(serializeClip(fullClip())) as {
-      meshParams: Record<string, unknown>;
+      sources: Record<string, { bytes: string }>;
     };
-    doc.meshParams.targetParticleCount = '350';
+    doc.sources['src/2']!.bytes = '不是 base64！！！';
     expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('sources[].format 不是已知格式 → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as {
+      sources: Record<string, { format: string }>;
+    };
+    doc.sources['src/1']!.format = 'webp';
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('scene[].meshParams 欄位型別錯（字串取代數字）→ ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as {
+      scene: { meshParams: Record<string, unknown> }[];
+    };
+    doc.scene[1]!.meshParams.targetParticleCount = '350';
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('scene 引用不存在的 sourceId → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as { scene: { sourceId: string }[] };
+    doc.scene[2]!.sourceId = 'src/9';
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('Track 裡的 spawn 事件引用不存在的 sourceId → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as {
+      tracks: { steps: { event: Record<string, unknown> }[] }[];
+    };
+    doc.tracks[0]!.steps[2]!.event.sourceId = 'src/9';
+    expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+  });
+
+  it('Track 裡的 spawn 事件 meshParams 型別錯／remove 事件缺 jellyId → ClipFileError', () => {
+    const badSpawn = JSON.parse(serializeClip(fullClip())) as {
+      tracks: { steps: { event: { meshParams: Record<string, unknown> } }[] }[];
+    };
+    badSpawn.tracks[0]!.steps[2]!.event.meshParams.targetParticleCount = '200';
+    expect(() => parseClipFile(JSON.stringify(badSpawn))).toThrow(ClipFileError);
+    const badRemove = JSON.parse(serializeClip(fullClip())) as {
+      tracks: { steps: { event: Record<string, unknown> }[] }[];
+    };
+    delete badRemove.tracks[0]!.steps[3]!.event.jellyId;
+    expect(() => parseClipFile(JSON.stringify(badRemove))).toThrow(ClipFileError);
+  });
+
+  it('scene[].offset 缺失或 importSize 非正數 → ClipFileError', () => {
+    const noOffset = JSON.parse(serializeClip(fullClip())) as { scene: Record<string, unknown>[] };
+    delete noOffset.scene[0]!.offset;
+    expect(() => parseClipFile(JSON.stringify(noOffset))).toThrow(ClipFileError);
+    for (const bad of [0, -1, '512', true]) {
+      const doc = JSON.parse(serializeClip(fullClip())) as { scene: Record<string, unknown>[] };
+      doc.scene[0]!.importSize = bad;
+      expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+    }
   });
 
   it("sim.boundary: 'floor' round-trip（issue #92）", () => {
     const clip = fullClip();
     clip.sim.boundary = 'floor';
-    const parsed = parseClipFile(serializeClip(clip));
-    expect(parsed.sim.boundary).toBe('floor');
+    expect(parseClipFile(serializeClip(clip)).sim.boundary).toBe('floor');
   });
 
   it('sim.boundary 不是已知值 → ClipFileError', () => {
     const doc = JSON.parse(serializeClip(fullClip())) as { sim: Record<string, unknown> };
-    doc.sim.boundary = 'open';
+    doc.sim.boundary = 'bouncy';
     expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
   });
 
   it('tracks 不是陣列 → ClipFileError', () => {
     const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
-    doc.tracks = {};
+    doc.tracks = { t1: {} };
     expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
   });
 
   it('tracks[].kind 不是已知值 → ClipFileError', () => {
     const doc = JSON.parse(serializeClip(fullClip())) as { tracks: Record<string, unknown>[] };
-    doc.tracks[0]!.kind = 'weird';
+    doc.tracks[0]!.kind = 'audio';
     expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
   });
 
-  it('counters 欄位缺失 → ClipFileError', () => {
-    const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
-    delete doc.counters;
+  it('counters 欄位缺失（含新的 nextJellyNum）→ ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as { counters: Record<string, unknown> };
+    delete doc.counters.nextJellyNum;
     expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
   });
 });
 
-describe('importSize（issue #88 / V3 T1-1）', () => {
-  it('serializeClip：importSize 數字原樣寫出', () => {
-    const doc = JSON.parse(serializeClip(fullClip())) as { importSize: unknown };
-    expect(doc.importSize).toBe(512);
+describe('v1 片段檔遷移（issue #95 / V3 T3-2；ADR-0013）', () => {
+  it('v1 字串 → 單塊 Scene：sources = { src/1: image }、jelly/1 用頂層 meshParams／importSize、offset (0,0)、流水號 2', () => {
+    const parsed = parseClipFile(JSON.stringify(v1Document()));
+    expect(Object.keys(parsed.sources)).toEqual(['src/1']);
+    expect(parsed.sources['src/1']!.format).toBe('jpeg');
+    expect(Array.from(parsed.sources['src/1']!.bytes)).toEqual([0, 255, 128, 1, 254]);
+    expect(parsed.scene).toEqual([
+      {
+        jellyId: 'jelly/1',
+        sourceId: 'src/1',
+        meshParams: MESH_PARAMS,
+        importSize: 384,
+        offset: { x: 0, y: 0 },
+      },
+    ]);
+    expect(parsed.counters).toEqual({
+      nextTrackNum: 2,
+      nextGroupNum: 1,
+      nextJellyNum: 2,
+      nextSourceNum: 2,
+    });
+    // 其餘欄位原樣。
+    expect(parsed.sim).toEqual({
+      softness: 0.4,
+      tapStrength: 6000,
+      boundary: 'floor',
+      gravity: 2000,
+    });
+    expect(parsed.tracks).toEqual(v1Document().tracks);
+    expect(parsed.groups).toEqual([{ id: 'default', name: '預設', enabled: true }]);
+    expect(parsed.setupPins).toEqual([{ x: 5, y: 6 }]);
   });
 
-  it('serializeClip：importSize 為 null 也照寫（欄位永遠存在）', () => {
-    const doc = JSON.parse(serializeClip({ ...fullClip(), importSize: null })) as Record<
-      string,
-      unknown
-    >;
-    expect('importSize' in doc).toBe(true);
-    expect(doc.importSize).toBeNull();
-  });
-
-  it('round-trip：數字', () => {
-    const clip: ClipState = { ...fullClip(), importSize: 384 };
-    expect(parseClipFile(serializeClip(clip)).importSize).toBe(384);
-  });
-
-  it('round-trip：null', () => {
-    const clip: ClipState = { ...fullClip(), importSize: null };
-    expect(parseClipFile(serializeClip(clip)).importSize).toBeNull();
-  });
-
-  it('舊版 v1 字串沒有 importSize 欄位 → null（未縮放）', () => {
-    const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
+  it('v1 檔沒有 importSize → 那塊 importSize 為 null（未縮放）；沒有 sim.gravity → 0', () => {
+    const doc = v1Document();
     delete doc.importSize;
+    delete (doc.sim as Record<string, unknown>).gravity;
     const parsed = parseClipFile(JSON.stringify(doc));
-    expect(parsed.importSize).toBeNull();
-    expect(parsed).toEqual({ ...fullClip(), importSize: null });
+    expect(parsed.scene[0]!.importSize).toBeNull();
+    expect(parsed.sim.gravity).toBe(0);
   });
 
-  it('非正數 → ClipFileError', () => {
-    for (const bad of [0, -1, -512]) {
-      const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
-      doc.importSize = bad;
-      expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
-    }
+  it('遷移後再存永遠是 v2（round-trip 穩定）', () => {
+    const migrated = parseClipFile(JSON.stringify(v1Document()));
+    const text = serializeClip(migrated);
+    expect(JSON.parse(text).version).toBe(2);
+    expect(parseClipFile(text)).toEqual(migrated);
   });
 
-  it('非數字（字串／布林／物件）→ ClipFileError', () => {
-    for (const bad of ['512', true, {}]) {
-      const doc = JSON.parse(serializeClip(fullClip())) as Record<string, unknown>;
-      doc.importSize = bad;
-      expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
-    }
+  it('v1 檔壞掉（image 缺失／meshParams 型別錯）仍 → ClipFileError', () => {
+    const noImage = v1Document();
+    delete noImage.image;
+    expect(() => parseClipFile(JSON.stringify(noImage))).toThrow(ClipFileError);
+    const badMesh = v1Document();
+    (badMesh.meshParams as Record<string, unknown>) = { ...MESH_PARAMS, maxMaskEdge: 'big' };
+    expect(() => parseClipFile(JSON.stringify(badMesh))).toThrow(ClipFileError);
   });
 });
 
@@ -337,12 +485,10 @@ describe('sim.gravity（issue #91 / V3 T2-1）', () => {
     expect(parseClipFile(serializeClip(clip)).sim.gravity).toBe(1500);
   });
 
-  it('舊版 v1 字串沒有 sim.gravity 欄位 → 0（俯視無重力，重播結果不變）', () => {
+  it('v2 檔沒有 sim.gravity 欄位 → 0', () => {
     const doc = JSON.parse(serializeClip(fullClip())) as { sim: Record<string, unknown> };
     delete doc.sim.gravity;
-    const parsed = parseClipFile(JSON.stringify(doc));
-    expect(parsed.sim.gravity).toBe(0);
-    expect(parsed).toEqual(fullClip());
+    expect(parseClipFile(JSON.stringify(doc))).toEqual(fullClip());
   });
 
   it('負數 → ClipFileError', () => {

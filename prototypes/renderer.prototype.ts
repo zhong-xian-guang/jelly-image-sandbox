@@ -160,7 +160,7 @@ let frames = 0;
 let fpsT0 = performance.now();
 
 function loop(): void {
-  renderer.setPositions(livePos);
+  renderer.setPositions('jelly', livePos);
   renderer.render();
   drawWire();
 
@@ -178,11 +178,9 @@ async function main(): Promise<void> {
   renderer = await JellyRenderer.create({
     width: stage.clientWidth,
     height: stage.clientHeight,
-    mesh,
-    positions: livePos,
-    texture,
     background: { color: 0x101614, alpha: 1 },
   });
+  renderer.addJelly('jelly', mesh, livePos, texture); // issue #95 起 Renderer 多網格，這裡只放一塊
   stage.insertBefore(renderer.canvas, wire);
   backendEl.textContent = 'WebGL';
   resize();

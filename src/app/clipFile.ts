@@ -2,35 +2,43 @@
  * 片段存檔（Clip file）——issue #57 / V2 T2-4（序列化端）、issue #58 / V2 T2-5
  * （反序列化端），見 spec #53 與 CONTEXT.md「片段」。
  *
- * `ClipState` 是 `JellySandbox` 記憶體狀態的**可序列化投影**：一塊果凍（原始影像
- * 位元組 + 格式）、匯入當下實際餵給 `buildSimMesh` 的完整解析後參數、匯入尺寸、
- * 軟硬度／輕拍力道／邊界模式／重力、所有 Track（含自訂名、起始、頭尾修剪、分群、相機軌起點快照）、
- * 所有群組、片段初始 Pin、流水號。`JellySandbox` 負責把記憶體狀態攤成 `ClipState`
- * （`RecordedTrack.groupIds` 的 `Set` → 陣列、`customLabel ?? label` → `name`），
- * 或反向把 `ClipState` 灌回記憶體狀態（`applyClipState`）。
+ * `ClipState` 是 `JellySandbox` 記憶體狀態的**可序列化投影**（issue #95 / V3 T3-2 升成
+ * **v2**，ADR-0013）：來源圖庫 `sources`（`sourceId` → 原始影像位元組 + 格式，多塊共用
+ * 同一張只存一份）、Scene 清單（每塊的 `jellyId`／`sourceId`／匯入當下實際餵給
+ * `buildSimMesh` 的完整解析後參數／匯入尺寸／擺放 `offset`）、軟硬度／輕拍力道／邊界
+ * 模式／重力、所有 Track（含自訂名、起始、頭尾修剪、分群、相機軌起點快照；動作軌裡可
+ * 有帶 `sourceId` 的 `spawn` 事件）、所有群組、片段初始 Pin、四個流水號。`JellySandbox`
+ * 負責把記憶體狀態攤成 `ClipState`（`RecordedTrack.groupIds` 的 `Set` → 陣列、
+ * `customLabel ?? label` → `name`），或反向把 `ClipState` 灌回記憶體狀態（`applyClipState`）。
  *
- * `serializeClip` 產出帶 `version: 1` 的 JSON 字串，`image.bytes` 走 base64（編碼在
+ * `serializeClip` 產出帶 `version: 2` 的 JSON 字串，每張來源圖的 `bytes` 走 base64（編碼在
  * 本模組內，用瀏覽器 `btoa`、不依賴 Node `Buffer`）。`parseClipFile` 是反向：解析＋
- * 結構驗證，壞檔（非 JSON／版本不符／必要欄位缺或型別錯）丟具名的 `ClipFileError`，
- * 不做部分還原；後來才加的**可選欄位**（`importSize`、`sim.gravity`）缺失時補預設值，
- * 讓舊檔照常載入——呼叫端（`JellySandbox.onLoadClip`）接住後場景完全不動（比照圖片
- * 匯入失敗）。兩者都是純函式、決定性、不碰 DOM。
+ * 結構驗證，壞檔（非 JSON／版本不符／必要欄位缺或型別錯／Scene 或 `spawn` 事件引用
+ * 不存在的 `sourceId`）丟具名的 `ClipFileError`，不做部分還原；後來才加的**可選欄位**
+ * （`sim.gravity`）缺失時補預設值——呼叫端（`JellySandbox.onLoadClip`）接住後場景完全
+ * 不動（比照圖片匯入失敗）。**v1 檔（V2 時期存的，頂層 `image`／`meshParams`／
+ * `importSize`）照常載入**：遷移成「一塊 Jelly 的 Scene」——`sources = { 'src/1': image }`、
+ * `scene = [{ 'jelly/1', 'src/1', meshParams, importSize ?? null, offset (0, 0) }]`、
+ * 兩個新流水號 = 2；`offset (0, 0)` 讓網格跟 v1 一樣留在 mask 原點，Track 座標零誤差
+ * 對上。寫檔永遠是 v2。兩者都是純函式、決定性、不碰 DOM。
  */
 
 import type { CameraState } from '../camera';
 import type { BuildSimMeshParams, ImageFormat } from '../mesh';
-import { type BoundaryMode, BOUNDARY_MODES } from '../sim';
+import { type BoundaryMode, BOUNDARY_MODES, type SceneEntry } from '../sim';
 import type { DemoEvent, DemoStep } from './demos/types';
 import type { Track } from './track';
 
 /**
- * 存檔格式版本。`parseClipFile`（issue #58）只認得這個值；日後改結構才 bump，
- * 舊檔載入時據此被擋下。向後相容的新增欄位（缺失時有明確預設值，如 `importSize`、
- * `sim.gravity`）**不** bump。
+ * 存檔格式版本。`serializeClip` 永遠寫這個值；`parseClipFile` 認得它與
+ * `LEGACY_CLIP_FILE_VERSION`（v1，讀入時遷移）。改結構才 bump；向後相容的新增欄位
+ * （缺失時有明確預設值，如 `sim.gravity`）**不** bump。
  */
-export const CLIP_FILE_VERSION = 1;
+export const CLIP_FILE_VERSION = 2;
+/** V2 時期（issue #57–#91）的格式：單塊果凍，`image`／`meshParams`／`importSize` 在頂層。 */
+const LEGACY_CLIP_FILE_VERSION = 1;
 
-/** 片段裡那塊果凍的來源影像。內建預設果凍存檔當下用 `canvasToPng` 拍成 `'png'`。 */
+/** 一張來源影像（`sources` 的值）。內建預設果凍在啟動時用 `canvasToPng` 拍成 `'png'` 註冊。 */
 export interface ClipImage {
   format: ImageFormat;
   /** 原始影像位元組（序列化成 base64 字串）。 */
@@ -79,19 +87,25 @@ export interface ClipPoint {
 export interface ClipCounters {
   nextTrackNum: number;
   nextGroupNum: number;
+  /** 下一塊 Jelly 的流水號（`jelly/<N>`，issue #95）。v1 檔遷移後 = 2。 */
+  nextJellyNum: number;
+  /** 下一張來源圖的流水號（`src/<N>`，issue #95）。v1 檔遷移後 = 2。 */
+  nextSourceNum: number;
 }
 
 export interface ClipState {
-  image: ClipImage;
-  /** 匯入當下實際餵給 `buildSimMesh` 的**解析後完整**參數（含可能被效能退路砍半的 `targetParticleCount`）。 */
-  meshParams: BuildSimMeshParams;
   /**
-   * 實際套用的匯入尺寸（issue #88 / V3 T1-1）——`buildSimMesh` 之後把網格 bbox 最長邊
-   * 縮到多少世界單位（見 `scaleMeshToLongestEdge`）。`null` = 未縮放：加此欄位之前存
-   * 的舊檔沒有它，載入時網格維持 mask 像素座標，Track 座標才對得上；從舊檔載入而
-   * 未重建就存回去仍是 `null`。序列化時 `null` 也照寫（欄位永遠存在，方便人工檢視）。
+   * 來源圖庫（issue #95）：`sourceId` → 影像。未被任何 Scene 條目或 Track 事件引用的來源
+   * 仍保留（「最近匯入的圖」= 最大的 `sourceId`，切換片段後生成工具才找得到它）。
    */
-  importSize: number | null;
+  sources: Readonly<Record<string, ClipImage>>;
+  /**
+   * Scene（ADR-0013）：片段第 0 步就存在的每塊 Jelly——`meshParams` 是匯入當下實際餵給
+   * `buildSimMesh` 的**解析後完整**參數（含可能被效能退路砍半的 `targetParticleCount`）；
+   * `importSize`（issue #88）為 `null` = 未縮放（從 v1 舊檔遷移、尚未重建的塊，網格維持
+   * mask 像素座標）；`offset` 是加到網格座標上的平移量。
+   */
+  scene: readonly SceneEntry[];
   sim: ClipSim;
   tracks: readonly ClipTrack[];
   groups: readonly ClipGroup[];
@@ -100,20 +114,17 @@ export interface ClipState {
 }
 
 /**
- * `ClipState` → 可下載的 JSON 字串（`version: 1`，兩格縮排讓檔案可人工檢視）。
+ * `ClipState` → 可下載的 JSON 字串（`version: 2`，兩格縮排讓檔案可人工檢視）。
  * `ClipState` 已是純資料投影（`JellySandbox.buildClipState` 負責攤平），所以這裡
- * 只加 `version` 外包裝、把 `image.bytes` 換成 base64；其餘欄位原樣帶過。
+ * 只加 `version` 外包裝、把每張來源圖的 `bytes` 換成 base64；其餘欄位原樣帶過。
  * `JSON.stringify` 不改動傳入的 `clip`。
  */
 export function serializeClip(clip: ClipState): string {
-  const doc = {
-    version: CLIP_FILE_VERSION,
-    ...clip,
-    image: {
-      format: clip.image.format,
-      bytes: bytesToBase64(clip.image.bytes),
-    },
-  };
+  const sources: Record<string, { format: ImageFormat; bytes: string }> = {};
+  for (const [id, image] of Object.entries(clip.sources)) {
+    sources[id] = { format: image.format, bytes: bytesToBase64(image.bytes) };
+  }
+  const doc = { version: CLIP_FILE_VERSION, ...clip, sources };
   return JSON.stringify(doc, null, 2);
 }
 
@@ -157,19 +168,64 @@ export function parseClipFile(text: string): ClipState {
     throw new ClipFileError('這不是合法的 JSON 檔案');
   }
   const root = requireObject(doc, '片段檔案');
-  if (root.version !== CLIP_FILE_VERSION) {
-    throw new ClipFileError(`不支援的片段版本：${String(root.version)}`);
-  }
-  return {
-    image: parseImage(root.image),
-    meshParams: parseMeshParams(root.meshParams),
-    importSize: parseImportSize(root.importSize),
+  const shared = {
     sim: parseSim(root.sim),
     tracks: parseTracks(root.tracks),
     groups: parseGroups(root.groups),
     setupPins: parsePoints(root.setupPins, 'setupPins'),
-    counters: parseCounters(root.counters),
   };
+  let clip: ClipState;
+  if (root.version === LEGACY_CLIP_FILE_VERSION) {
+    // v1 → 一塊 Jelly 的 Scene（見檔頭）。
+    const legacyCounters = requireObject(root.counters, 'counters');
+    clip = {
+      ...shared,
+      sources: { 'src/1': parseImage(root.image, 'image') },
+      scene: [
+        {
+          jellyId: 'jelly/1',
+          sourceId: 'src/1',
+          meshParams: parseMeshParams(root.meshParams, 'meshParams'),
+          importSize: parseImportSize(root.importSize, 'importSize'),
+          offset: { x: 0, y: 0 },
+        },
+      ],
+      counters: {
+        nextTrackNum: requireNumber(legacyCounters.nextTrackNum, 'counters.nextTrackNum'),
+        nextGroupNum: requireNumber(legacyCounters.nextGroupNum, 'counters.nextGroupNum'),
+        nextJellyNum: 2,
+        nextSourceNum: 2,
+      },
+    };
+  } else if (root.version === CLIP_FILE_VERSION) {
+    clip = {
+      ...shared,
+      sources: parseSources(root.sources),
+      scene: parseScene(root.scene),
+      counters: parseCounters(root.counters),
+    };
+  } else {
+    throw new ClipFileError(`不支援的片段版本：${String(root.version)}`);
+  }
+  checkSourceReferences(clip);
+  return clip;
+}
+
+/** Scene 條目與 Track 裡的 `spawn` 事件引用的 `sourceId` 都必須在 `sources` 裡——載入後生成時才找得到圖。 */
+function checkSourceReferences(clip: ClipState): void {
+  const check = (sourceId: unknown, field: string): void => {
+    if (typeof sourceId !== 'string' || !(sourceId in clip.sources)) {
+      throw new ClipFileError(`欄位「${field}」引用了不存在的來源圖：${String(sourceId)}`);
+    }
+  };
+  clip.scene.forEach((entry, i) => check(entry.sourceId, `scene[${i}].sourceId`));
+  clip.tracks.forEach((track, t) => {
+    track.steps.forEach((step, i) => {
+      if (step.event.type === 'spawn') {
+        check(step.event.sourceId, `tracks[${t}].steps[${i}].event.sourceId`);
+      }
+    });
+  });
 }
 
 function requireObject(v: unknown, field: string): Record<string, unknown> {
@@ -201,31 +257,53 @@ function requireBoolean(v: unknown, field: string): boolean {
   return v;
 }
 
-function parseImage(v: unknown): ClipImage {
-  const obj = requireObject(v, 'image');
-  const format = requireString(obj.format, 'image.format');
+function parseImage(v: unknown, field: string): ClipImage {
+  const obj = requireObject(v, field);
+  const format = requireString(obj.format, `${field}.format`);
   if (!KNOWN_IMAGE_FORMATS.has(format)) {
-    throw new ClipFileError(`欄位「image.format」不是已知格式：${format}`);
+    throw new ClipFileError(`欄位「${field}.format」不是已知格式：${format}`);
   }
   return {
     format: format as ImageFormat,
-    bytes: base64ToBytes(requireString(obj.bytes, 'image.bytes')),
+    bytes: base64ToBytes(requireString(obj.bytes, `${field}.bytes`), `${field}.bytes`),
   };
 }
 
-function parseMeshParams(v: unknown): BuildSimMeshParams {
-  const obj = requireObject(v, 'meshParams');
-  const out = {} as Record<(typeof MESH_PARAM_KEYS)[number], number>;
-  for (const key of MESH_PARAM_KEYS) out[key] = requireNumber(obj[key], `meshParams.${key}`);
+function parseSources(v: unknown): Record<string, ClipImage> {
+  const obj = requireObject(v, 'sources');
+  const out: Record<string, ClipImage> = {};
+  for (const [id, image] of Object.entries(obj)) out[id] = parseImage(image, `sources.${id}`);
   return out;
 }
 
-/** 欄位缺失（舊檔）或 `null` → `null`（未縮放）；存在則必須是正數。 */
-function parseImportSize(v: unknown): number | null {
+function parseMeshParams(v: unknown, field: string): BuildSimMeshParams {
+  const obj = requireObject(v, field);
+  const out = {} as Record<(typeof MESH_PARAM_KEYS)[number], number>;
+  for (const key of MESH_PARAM_KEYS) out[key] = requireNumber(obj[key], `${field}.${key}`);
+  return out;
+}
+
+/** 欄位缺失（v1 舊檔）或 `null` → `null`（未縮放）；存在則必須是正數。 */
+function parseImportSize(v: unknown, field: string): number | null {
   if (v === undefined || v === null) return null;
-  const n = requireNumber(v, 'importSize');
-  if (n <= 0) throw new ClipFileError('欄位「importSize」必須是正數');
+  const n = requireNumber(v, field);
+  if (n <= 0) throw new ClipFileError(`欄位「${field}」必須是正數`);
   return n;
+}
+
+function parseSceneEntry(v: unknown, field: string): SceneEntry {
+  const obj = requireObject(v, field);
+  return {
+    jellyId: requireString(obj.jellyId, `${field}.jellyId`),
+    sourceId: requireString(obj.sourceId, `${field}.sourceId`),
+    meshParams: parseMeshParams(obj.meshParams, `${field}.meshParams`),
+    importSize: parseImportSize(obj.importSize, `${field}.importSize`),
+    offset: parsePoint(obj.offset, `${field}.offset`),
+  };
+}
+
+function parseScene(v: unknown): SceneEntry[] {
+  return requireArray(v, 'scene').map((e, i) => parseSceneEntry(e, `scene[${i}]`));
 }
 
 function isBoundaryMode(v: string): v is BoundaryMode {
@@ -269,14 +347,24 @@ function parseCameraState(v: unknown, field: string): CameraState {
   };
 }
 
+/**
+ * `spawn`／`remove`（issue #95）是第一批帶巢狀結構的 Track 事件——`spawn` 的 `meshParams`／
+ * `offset` 重播時直接進 `meshProvider`，壞欄位不在這裡擋就會到播放中途才炸，所以這兩種
+ * 走完整驗證；其餘事件維持只驗外殼（見 `parseClipFile` 說明）。
+ */
 function parseDemoStep(v: unknown, field: string): DemoStep {
   const obj = requireObject(v, field);
-  const event = requireObject(obj.event, `${field}.event`);
-  requireString(event.type, `${field}.event.type`);
-  return {
-    atStep: requireNumber(obj.atStep, `${field}.atStep`),
-    event: event as unknown as DemoEvent,
-  };
+  const raw = requireObject(obj.event, `${field}.event`);
+  const type = requireString(raw.type, `${field}.event.type`);
+  let event: DemoEvent;
+  if (type === 'spawn') {
+    event = { type, ...parseSceneEntry(raw, `${field}.event`) };
+  } else if (type === 'remove') {
+    event = { type, jellyId: requireString(raw.jellyId, `${field}.event.jellyId`) };
+  } else {
+    event = raw as unknown as DemoEvent;
+  }
+  return { atStep: requireNumber(obj.atStep, `${field}.atStep`), event };
 }
 
 function parseTrackSteps(v: unknown, field: string): Track {
@@ -339,6 +427,8 @@ function parseCounters(v: unknown): ClipCounters {
   return {
     nextTrackNum: requireNumber(obj.nextTrackNum, 'counters.nextTrackNum'),
     nextGroupNum: requireNumber(obj.nextGroupNum, 'counters.nextGroupNum'),
+    nextJellyNum: requireNumber(obj.nextJellyNum, 'counters.nextJellyNum'),
+    nextSourceNum: requireNumber(obj.nextSourceNum, 'counters.nextSourceNum'),
   };
 }
 
@@ -346,12 +436,12 @@ function parseCounters(v: unknown): ClipCounters {
  * base64 → `Uint8Array`（`bytesToBase64` 的反向）。瀏覽器 `atob` 對非法 base64
  * 字元丟 `DOMException`，這裡一律轉成具名 `ClipFileError`。
  */
-function base64ToBytes(b64: string): Uint8Array {
+function base64ToBytes(b64: string, field: string): Uint8Array {
   let binary: string;
   try {
     binary = atob(b64);
   } catch {
-    throw new ClipFileError('欄位「image.bytes」不是合法的 base64');
+    throw new ClipFileError(`欄位「${field}」不是合法的 base64`);
   }
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
