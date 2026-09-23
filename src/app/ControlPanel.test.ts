@@ -78,7 +78,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onHideHintsDuringPlaybackChange: vi.fn(),
     onImportSizeChange: vi.fn(),
     onMeshDensityChange: vi.fn(),
-    onRebuild: vi.fn(),
+    onRebuildAll: vi.fn(),
     onClearAll: vi.fn(),
     onBoundaryChange: vi.fn(),
     onSoftnessChange: vi.fn(),
@@ -604,6 +604,7 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
       'erase',
       'spawn',
       'removeJelly',
+      'rebuildJelly',
     ]);
   });
 
@@ -621,7 +622,17 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
     expect(opts.onToolChange).toHaveBeenCalledWith('removeJelly');
   });
 
-  it('播放中「生成 Jelly」／「移除 Jelly」兩個選項變灰，其餘工具照常可選（issue #97）', () => {
+  it('切到「重建 Jelly」→ onToolChange 收到 "rebuildJelly"（issue #98）', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const select = findToolSelect(panel);
+
+    select.value = 'rebuildJelly';
+    select.dispatchEvent(new Event('change'));
+    expect(opts.onToolChange).toHaveBeenCalledWith('rebuildJelly');
+  });
+
+  it('播放中三個 Jelly 工具都變灰，其餘工具照常可選（issue #97 / #98）', () => {
     const panel = new ControlPanel(makeOptions());
     const select = findToolSelect(panel);
     const disabledValues = () => [...select.options].filter((o) => o.disabled).map((o) => o.value);
@@ -629,19 +640,23 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
     expect(disabledValues()).toEqual([]);
 
     panel.setPlaybackControlsEnabled(false);
-    expect(disabledValues()).toEqual(['spawn', 'removeJelly']);
+    expect(disabledValues()).toEqual(['spawn', 'removeJelly', 'rebuildJelly']);
     expect(select.disabled).toBe(false);
 
     panel.setPlaybackControlsEnabled(true);
     expect(disabledValues()).toEqual([]);
   });
 
-  it('錄製中兩個工具仍可用——生成／移除本來就要錄進 Track（issue #97）', () => {
+  it('錄製中只有「重建 Jelly」變灰——生成／移除本來就要錄進 Track（issue #97 / #98）', () => {
     const panel = new ControlPanel(makeOptions());
     const select = findToolSelect(panel);
+    const disabledValues = () => [...select.options].filter((o) => o.disabled).map((o) => o.value);
 
     panel.setRecordingActive(true);
-    expect([...select.options].some((o) => o.disabled)).toBe(false);
+    expect(disabledValues()).toEqual(['rebuildJelly']);
+
+    panel.setRecordingActive(false);
+    expect(disabledValues()).toEqual([]);
   });
 
   it('切換選項 → onToolChange 收到新值', () => {
@@ -1325,23 +1340,23 @@ describe('ControlPanel — 匯入區塊：網格密度拉霸（issue #89 / V3 T1
   });
 });
 
-describe('ControlPanel — 匯入區塊：「重建」按鈕（issue #90 / V3 T1-3）', () => {
+describe('ControlPanel — 匯入區塊：「全部重建」按鈕（issue #90 / #98）', () => {
   function rebuildButton(panel: ControlPanel): HTMLButtonElement {
     const button = [...panel.element.querySelectorAll('button')].find(
-      (b) => b.textContent === '重建',
+      (b) => b.textContent === '全部重建',
     );
     expect(button).toBeDefined();
     return button!;
   }
 
-  it('面板有一顆「重建」按鈕，點擊呼叫 onRebuild', () => {
+  it('面板有一顆「全部重建」按鈕，點擊呼叫 onRebuildAll（issue #98）', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     rebuildButton(panel).click();
-    expect(opts.onRebuild).toHaveBeenCalledTimes(1);
+    expect(opts.onRebuildAll).toHaveBeenCalledTimes(1);
   });
 
-  it('「重建」列在「匯入」區塊最後（小標題 → 匯入尺寸 → 網格密度 → 重建）', () => {
+  it('「全部重建」列在「匯入」區塊最後（小標題 → 匯入尺寸 → 網格密度 → 全部重建）', () => {
     const panel = new ControlPanel(makeOptions());
     const heading = [...panel.element.querySelectorAll('.jelly-control-heading')].find(
       (h) => h.textContent === '匯入',

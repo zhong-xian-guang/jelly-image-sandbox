@@ -41,6 +41,12 @@
  */
 
 import type { ToolId } from '../input';
+
+/**
+ * 「目前工具」下拉裡某個選項什麼時候要變灰（issue #97 / #98）——`'none'` 永遠可選、
+ * `'playback'` 只在播放中鎖、`'busy'` 錄製中也鎖。見 `lockedToolOptions`。
+ */
+type ToolLock = 'none' | 'playback' | 'busy';
 import type { BoundaryMode } from '../sim';
 import type { RecordTarget } from './track';
 
@@ -277,13 +283,14 @@ export interface ControlPanelOptions {
    */
   onMeshDensityChange: (density: number) => void;
   /**
-   * 「重建」按鈕被按（issue #90 / V3 T1-3，見 CONTEXT.md「重建」）——用最近一次匯入
-   * 的來源圖＋目前兩條拉霸，重新生成場上的果凍（走跟匯入完全相同的換網格路徑）。
+   * 「全部重建」按鈕被按（issue #90 / V3 T1-3，見 CONTEXT.md「重建」）——對場上
+   * **每一塊**用它自己的來源圖＋目前兩條拉霸重新生成網格（位置不變、Pin 掉光）。
    * 跟兩條拉霸不同，這顆**會**被 `setPlaybackControlsEnabled`／`setRecordingActive`
    * 鎖住（比照片段初始 Pin 兩顆鈕）：重建只改 Scene、不是 Track 事件（ADR-0013），
-   * 錄製中／播放中按下沒意義。issue #95 起對場上**每一塊**重建、不再清空 Track。
+   * 錄製中／播放中按下沒意義。issue #95 起對每一塊重建、不再清空 Track；issue #98
+   * 起面板文字是「全部重建」，跟只重建一塊的「重建 Jelly」工具成對。
    */
-  onRebuild: () => void;
+  onRebuildAll: () => void;
   /**
    * 「清空全部」按鈕被按（issue #95 / V3 T3-2；ADR-0013）——把 Scene、Track、群組、片段
    * 初始 Pin、來源圖庫一起清成一個新片段（空桌面）。匯入／生成／移除本身不再清任何
@@ -361,18 +368,20 @@ export class ControlPanel {
   private readonly setupPinsCountEl: HTMLElement;
   private readonly setupPinsSnapshotButton: HTMLButtonElement;
   private readonly setupPinsClearButton: HTMLButtonElement;
-  /** 「重建」鈕（issue #90）——錄製中／播放中鎖住，見 `updateTrackControlsState`。 */
+  /** 「全部重建」鈕（issue #90）——錄製中／播放中鎖住，見 `updateTrackControlsState`。 */
   private readonly rebuildButton: HTMLButtonElement;
   /** 「清空全部」鈕（issue #95）——同上鎖法。 */
   private readonly clearAllButton: HTMLButtonElement;
   /**
-   * 「目前工具」下拉裡**播放中要鎖住**的選項（issue #97：生成 Jelly／移除 Jelly）
-   * ——只在播放中變灰（`updateTrackControlsState`），錄製中照常可用：那兩個工具在
-   * 錄製中本來就要錄成 `spawn`／`remove` 事件（ADR-0013），跟「重建」／「清空全部」
-   * 那種只改 Scene、錄製中按下沒意義的按鈕不同。鎖的是選項而不是整個下拉：播放中
-   * 仍要能切到其他工具。
+   * 「目前工具」下拉裡**會被鎖住**的選項，附各自的鎖法（issue #97 / #98）——鎖的是
+   * 選項而不是整個下拉：播放中仍要能切到其他工具。兩種鎖法對應兩種語意：
+   *
+   * - `'playback'`（生成 Jelly／移除 Jelly）：只在播放中變灰。錄製中照常可用，那兩個
+   *   工具在錄製中本來就要錄成 `spawn`／`remove` 事件（ADR-0013）。
+   * - `'busy'`（重建 Jelly）：錄製中也變灰，跟「全部重建」／「清空全部」兩顆鈕同一組
+   *   ——重建只改 Scene、不是 Track 事件，錄製中點下去沒意義。
    */
-  private readonly playbackLockedToolOptions: HTMLOptionElement[] = [];
+  private readonly lockedToolOptions: { option: HTMLOptionElement; lock: ToolLock }[] = [];
   /**
    * 「鎖定跟隨」勾選框（issue #36 追加把手）——`setFollowLocked` 讓 `JellySandbox`
    * 每幀把它同步到相機實際的 `followEnabled`，這樣相機軌播放（`setState` 硬切、
@@ -622,8 +631,8 @@ export class ControlPanel {
       },
     );
 
-    // 「重建」鈕（issue #90）放在「匯入」區塊最後：拉完拉霸按一下就看到效果。
-    const rebuild = this.rebuildRow(opts.onRebuild);
+    // 「全部重建」鈕（issue #90）放在「匯入」區塊最後：拉完拉霸按一下就看到效果。
+    const rebuild = this.rebuildRow(opts.onRebuildAll);
     this.rebuildButton = rebuild.button;
     // 「清空全部」（issue #95）緊接在匯入／存取片段三顆鈕之後：它是「新片段」的入口，
     // 跟「載入片段」同一組語意（整份片段換掉），放一起最直覺。
@@ -817,12 +826,14 @@ export class ControlPanel {
     // 片段初始 Pin 的兩顆鈕比照 Track 清單編輯：錄製中／播放中鎖住（issue #39）。
     this.setupPinsSnapshotButton.disabled = busy;
     this.setupPinsClearButton.disabled = busy;
-    // 「重建」鈕（issue #90）錄製中／播放中鎖住：重建只改 Scene、不是事件（ADR-0013）。
+    // 「全部重建」鈕（issue #90）錄製中／播放中鎖住：重建只改 Scene、不是事件（ADR-0013）。
     this.rebuildButton.disabled = busy;
     // 「清空全部」（issue #95）同理：它會清掉正在錄／正在播的片段本身。
     this.clearAllButton.disabled = busy;
-    // 生成／移除 Jelly 兩個工具（issue #97）只在播放中鎖住，錄製中可用（見欄位說明）。
-    for (const option of this.playbackLockedToolOptions) option.disabled = this.playbackLocked;
+    // 三個 Jelly 工具（issue #97 / #98）各自的鎖法，見 `lockedToolOptions`。
+    for (const { option, lock } of this.lockedToolOptions) {
+      option.disabled = lock === 'busy' ? busy : this.playbackLocked;
+    }
     // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
     this.playAllButton.disabled = busy || this.trackCount === 0 || this.playableTrackCount === 0;
     this.addGroupButton.disabled = busy;
@@ -946,21 +957,22 @@ export class ControlPanel {
     row.className = 'jelly-control-row';
 
     const select = document.createElement('select');
-    // 第三欄 = 播放中要不要鎖住這個選項（issue #97，見 `playbackLockedToolOptions`）。
-    for (const [value, text, lockDuringPlayback] of [
-      ['general', '一般操作', false],
-      ['fan', '電風扇', false],
-      ['formation', '編隊抓取', false],
-      ['spray', '撒 Pin', false],
-      ['erase', '移除 Pin', false],
-      ['spawn', '生成 Jelly', true],
-      ['removeJelly', '移除 Jelly', true],
+    // 第三欄 = 這個選項的鎖法（issue #97 / #98，見 `lockedToolOptions`）。
+    for (const [value, text, lock] of [
+      ['general', '一般操作', 'none'],
+      ['fan', '電風扇', 'none'],
+      ['formation', '編隊抓取', 'none'],
+      ['spray', '撒 Pin', 'none'],
+      ['erase', '移除 Pin', 'none'],
+      ['spawn', '生成 Jelly', 'playback'],
+      ['removeJelly', '移除 Jelly', 'playback'],
+      ['rebuildJelly', '重建 Jelly', 'busy'],
     ] as const) {
       const option = document.createElement('option');
       option.value = value;
       option.textContent = text;
       option.selected = value === initial;
-      if (lockDuringPlayback) this.playbackLockedToolOptions.push(option);
+      if (lock !== 'none') this.lockedToolOptions.push({ option, lock });
       select.appendChild(option);
     }
     select.addEventListener('change', () => onChange(select.value as ToolId));
@@ -1148,11 +1160,12 @@ export class ControlPanel {
   }
 
   /**
-   * 「重建」按鈕列（issue #90；issue #95 起對每一塊）——回傳按鈕本身讓建構子記進
-   * `rebuildButton`，`updateTrackControlsState` 才管得到它的 `disabled`。
+   * 「全部重建」按鈕列（issue #90；issue #95 起對每一塊，issue #98 改用這個名字）
+   * ——回傳按鈕本身讓建構子記進 `rebuildButton`，`updateTrackControlsState` 才管得到
+   * 它的 `disabled`。
    */
-  private rebuildRow(onRebuild: () => void): { row: HTMLElement; button: HTMLButtonElement } {
-    const result = this.buttonRowEl('重建', onRebuild);
+  private rebuildRow(onRebuildAll: () => void): { row: HTMLElement; button: HTMLButtonElement } {
+    const result = this.buttonRowEl('全部重建', onRebuildAll);
     result.button.title =
       '用各塊的來源圖＋目前的匯入尺寸／網格密度，重新生成桌上每一塊果凍（位置不變、Pin 掉光；Track 保留）';
     return result;

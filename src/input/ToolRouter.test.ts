@@ -1161,15 +1161,17 @@ describe('ToolRouter — 移除 Pin（issue #70 / V2 T3-6）', () => {
   });
 });
 
-describe('ToolRouter — 生成 Jelly／移除 Jelly（issue #97 / V3 T3-4）', () => {
-  /** 兩個工具都只有「點一下」一種手勢，回呼各自收集起來比對。 */
+describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', () => {
+  /** 三個工具都只有「點一下」一種手勢，回呼依工具各自收集起來比對。 */
   function makeClickTools() {
     const spawned: Point[] = [];
     const removed: Point[] = [];
+    const rebuilt: Point[] = [];
+    const buckets = { spawn: spawned, removeJelly: removed, rebuildJelly: rebuilt };
     const { router, events } = makeRouter(undefined, undefined, {
-      onClickTool: (tool, world) => (tool === 'spawn' ? spawned : removed).push(world),
+      onClickTool: (tool, world) => buckets[tool].push(world),
     });
-    return { router, events, spawned, removed };
+    return { router, events, spawned, removed, rebuilt };
   }
 
   it('生成 Jelly：點一下 → onSpawn 收到按下處的世界座標，不 emit 任何 InputEvent', () => {
@@ -1305,8 +1307,28 @@ describe('ToolRouter — 生成 Jelly／移除 Jelly（issue #97 / V3 T3-4）', 
     expect(spawned).toEqual([]);
   });
 
+  it('重建 Jelly：點一下 → 回呼帶按下處的世界座標，不 emit 任何 InputEvent（issue #98）', () => {
+    const { router, events, spawned, removed, rebuilt } = makeClickTools();
+    router.setActiveTool('rebuildJelly');
+    router.down(1, 12, 34, 0);
+    router.up(1, 12, 34, 90);
+    expect(rebuilt).toEqual([{ x: 1012, y: 1034 }]);
+    expect(spawned).toEqual([]);
+    expect(removed).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('重建 Jelly：拖曳（位移超過門檻）→ 不觸發回呼（issue #98）', () => {
+    const { router, rebuilt } = makeClickTools();
+    router.setActiveTool('rebuildJelly');
+    router.down(1, 0, 0, 0);
+    router.move(1, 40, 0);
+    router.up(1, 40, 0, 120);
+    expect(rebuilt).toEqual([]);
+  });
+
   it('CLICK_TOOL_IDS 就是會走這條手勢的工具清單', () => {
-    expect([...CLICK_TOOL_IDS]).toEqual(['spawn', 'removeJelly']);
+    expect([...CLICK_TOOL_IDS]).toEqual(['spawn', 'removeJelly', 'rebuildJelly']);
   });
 
   it('沒有注入回呼（未接線）→ 點一下什麼都不做，不爆炸', () => {

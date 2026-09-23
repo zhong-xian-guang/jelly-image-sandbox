@@ -125,17 +125,19 @@ import {
 
 /**
  * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）、
- * `'erase'`（issue #70，＝「移除 Pin」）、`'spawn'`／`'removeJelly'`（issue #97）
- * 加進 ADR-0011 選擇器；`'general'` 維持既有 Grab/Pin/Tap 手勢。
+ * `'erase'`（issue #70，＝「移除 Pin」）、`'spawn'`／`'removeJelly'`（issue #97）、
+ * `'rebuildJelly'`（issue #98）加進 ADR-0011 選擇器；`'general'` 維持既有
+ * Grab/Pin/Tap 手勢。
  */
-export type ToolId = 'general' | 'fan' | 'formation' | 'spray' | 'erase' | 'spawn' | 'removeJelly';
+export type ToolId =
+  'general' | 'fan' | 'formation' | 'spray' | 'erase' | 'spawn' | 'removeJelly' | 'rebuildJelly';
 
 /**
  * 「點一下就完成」的那幾個工具（issue #97）——`down`→`up` 無拖曳才作用，見
- * `ClickSession`。三個以上的工具共用同一條手勢，所以清單在這裡集中一份：加新的
- * 點一下工具（例如 issue #98 的「重建 Jelly」）只要加進這個陣列與 `ToolId`。
+ * `ClickSession`。三個工具共用同一條手勢，所以清單在這裡集中一份：加新的點一下
+ * 工具只要加進這個陣列與 `ToolId`（issue #98 的「重建 Jelly」就是這樣加的）。
  */
-export const CLICK_TOOL_IDS = ['spawn', 'removeJelly'] as const;
+export const CLICK_TOOL_IDS = ['spawn', 'removeJelly', 'rebuildJelly'] as const;
 
 export type ClickToolId = (typeof CLICK_TOOL_IDS)[number];
 
