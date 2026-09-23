@@ -23,7 +23,7 @@
 11. **凍結拓撲**：之後模擬只更新頂點位置，`indices` 與 `uv` 不變。
 12. **套用匯入尺寸**（`src/mesh/scaleMesh.ts`，issue #88）：管線**之外**的獨立純函式，把 `buildSimMesh` 輸出的 mask 像素座標網格等比放大／縮小到「bbox 最長邊 = 匯入尺寸拉霸值」（預設 512 世界單位）：`positions × s`、`restAreas × s²`，`indices`／`uv` 不動，以原點為錨不置中。刻意不進 `BuildSimMeshParams`——那些參數全部進種子雜湊（ADR-0005），加欄位會讓舊片段檔的網格不再重現。匯入層在這一步之後才建求解器；片段檔記下實際套用的值（`importSize`，`null` = 舊檔未縮放），載入時依檔案值縮放、不套目前拉霸。
 
-**重建**（issue #90，見 CONTEXT.md）：「匯入」區塊的「重建」鈕拿最近匯入的來源位元組（未匯入過＝內建預設果凍拍的 PNG）＋當下「網格密度」／「匯入尺寸」拉霸，從第 1 步到第 12 步整條重跑，走跟匯入完全相同的換網格路徑；片段檔記下的就是重建後的實際值。
+**重建**（issue #90 / #95 / #98，見 CONTEXT.md）：拿**那一塊自己的**來源位元組（圖庫查 `sourceId`）＋當下「網格密度」／「匯入尺寸」拉霸，從第 1 步到第 12 步整條重跑，換掉那塊的網格——同 `jellyId`、同 `sourceId`、同 `offset` 的 `remove` + `spawn`，所以擺放位置（網格座標的平移量）不變、那塊回到 rest、附在它上面的 Pin／Grab 掉光。兩個入口共用同一條路徑（`JellySandbox.rebuildJellies`）：「匯入」區塊的「全部重建」鈕對場上每一塊套目前拉霸，「重建 Jelly」工具點哪塊重建哪塊。重建只改 Scene、不是 Track 事件（ADR-0013），錄製中／播放中兩個入口都 disabled；片段檔記下的就是重建後的實際值。
 
 v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升級為「粗 Sim mesh + 細 Texture mesh，重心座標 skin」。
 

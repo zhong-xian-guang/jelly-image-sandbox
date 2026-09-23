@@ -41,14 +41,14 @@
  */
 
 import type { ToolId } from '../input';
+import type { BoundaryMode } from '../sim';
+import type { RecordTarget } from './track';
 
 /**
  * 「目前工具」下拉裡某個選項什麼時候要變灰（issue #97 / #98）——`'none'` 永遠可選、
  * `'playback'` 只在播放中鎖、`'busy'` 錄製中也鎖。見 `lockedToolOptions`。
  */
 type ToolLock = 'none' | 'playback' | 'busy';
-import type { BoundaryMode } from '../sim';
-import type { RecordTarget } from './track';
 
 /** 一顆 Demo 按鈕要顯示的最小資訊——`ControlPanel` 特意不 import `./demos`，維持跟 `SimCore`/`JellySandbox` 無關的薄接線層，這裡自己開一個形狀就好。 */
 export interface DemoMenuItem {
@@ -369,7 +369,7 @@ export class ControlPanel {
   private readonly setupPinsSnapshotButton: HTMLButtonElement;
   private readonly setupPinsClearButton: HTMLButtonElement;
   /** 「全部重建」鈕（issue #90）——錄製中／播放中鎖住，見 `updateTrackControlsState`。 */
-  private readonly rebuildButton: HTMLButtonElement;
+  private readonly rebuildAllButton: HTMLButtonElement;
   /** 「清空全部」鈕（issue #95）——同上鎖法。 */
   private readonly clearAllButton: HTMLButtonElement;
   /**
@@ -632,8 +632,8 @@ export class ControlPanel {
     );
 
     // 「全部重建」鈕（issue #90）放在「匯入」區塊最後：拉完拉霸按一下就看到效果。
-    const rebuild = this.rebuildRow(opts.onRebuildAll);
-    this.rebuildButton = rebuild.button;
+    const rebuildAll = this.rebuildAllRow(opts.onRebuildAll);
+    this.rebuildAllButton = rebuildAll.button;
     // 「清空全部」（issue #95）緊接在匯入／存取片段三顆鈕之後：它是「新片段」的入口，
     // 跟「載入片段」同一組語意（整份片段換掉），放一起最直覺。
     const clearAll = this.buttonRowEl('清空全部', opts.onClearAll);
@@ -664,7 +664,7 @@ export class ControlPanel {
       this.importHeading(),
       importSize.row,
       meshDensity.row,
-      rebuild.row,
+      rebuildAll.row,
       ...pins.rows,
       followLock.row,
       this.buttonRow('框住果凍', opts.onFrameJelly),
@@ -827,7 +827,7 @@ export class ControlPanel {
     this.setupPinsSnapshotButton.disabled = busy;
     this.setupPinsClearButton.disabled = busy;
     // 「全部重建」鈕（issue #90）錄製中／播放中鎖住：重建只改 Scene、不是事件（ADR-0013）。
-    this.rebuildButton.disabled = busy;
+    this.rebuildAllButton.disabled = busy;
     // 「清空全部」（issue #95）同理：它會清掉正在錄／正在播的片段本身。
     this.clearAllButton.disabled = busy;
     // 三個 Jelly 工具（issue #97 / #98）各自的鎖法，見 `lockedToolOptions`。
@@ -1161,10 +1161,10 @@ export class ControlPanel {
 
   /**
    * 「全部重建」按鈕列（issue #90；issue #95 起對每一塊，issue #98 改用這個名字）
-   * ——回傳按鈕本身讓建構子記進 `rebuildButton`，`updateTrackControlsState` 才管得到
+   * ——回傳按鈕本身讓建構子記進 `rebuildAllButton`，`updateTrackControlsState` 才管得到
    * 它的 `disabled`。
    */
-  private rebuildRow(onRebuildAll: () => void): { row: HTMLElement; button: HTMLButtonElement } {
+  private rebuildAllRow(onRebuildAll: () => void): { row: HTMLElement; button: HTMLButtonElement } {
     const result = this.buttonRowEl('全部重建', onRebuildAll);
     result.button.title =
       '用各塊的來源圖＋目前的匯入尺寸／網格密度，重新生成桌上每一塊果凍（位置不變、Pin 掉光；Track 保留）';

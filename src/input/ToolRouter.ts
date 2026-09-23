@@ -134,8 +134,10 @@ export type ToolId =
 
 /**
  * 「點一下就完成」的那幾個工具（issue #97）——`down`→`up` 無拖曳才作用，見
- * `ClickSession`。三個工具共用同一條手勢，所以清單在這裡集中一份：加新的點一下
- * 工具只要加進這個陣列與 `ToolId`（issue #98 的「重建 Jelly」就是這樣加的）。
+ * `ClickSession`。三個工具共用同一條手勢，所以清單在這裡集中一份：輸入層這邊加新的
+ * 點一下工具只要加進這個陣列與 `ToolId`，手勢本身完全不必動；工具真正上線還要在
+ * `ControlPanel` 的選項表補一列（含它的鎖法）、在 `JellySandbox.runClickTool` 補一條
+ * 分派（issue #98 的「重建 Jelly」就是這樣加的）。
  */
 export const CLICK_TOOL_IDS = ['spawn', 'removeJelly', 'rebuildJelly'] as const;
 

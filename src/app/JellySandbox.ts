@@ -1651,11 +1651,19 @@ export class JellySandbox {
    * Track／群組／片段初始 Pin 都保留（B 包的「換網格清空」在 ADR-0013 已廢止）。
    *
    * 先把每塊的新網格都建好（`meshFor`，任何一塊失敗就整批放棄、場上不動＋提示），
-   * 確定都成功才動場上的塊：不會重建到一半留下缺塊。三個入口（按鈕、工具、都是）
-   * 在錄製中／播放中已被面板與 `runClickTool` 擋掉，這裡不再重複判定。
+   * 確定都成功才動場上的塊：不會重建到一半留下缺塊。失敗文案由呼叫端給（單塊與
+   * 全場講法不同），跟 `runImport` 同一個手法。兩個入口（「全部重建」按鈕、
+   * 「重建 Jelly」工具）在錄製中／播放中分別已被面板與 `runClickTool` 擋掉，
+   * 這裡不再重複判定。
    */
   private rebuildJellies(entries: readonly SceneEntry[], failureNotice: string): void {
-    if (this.importing) return;
+    // 匯入／載入片段進行中就讓開（跟 `runImport` 互斥）。會提示而不是無聲放棄：
+    // 「重建 Jelly」工具跟按鈕不一樣，畫布上的點擊沒有灰掉的外觀可看，靜靜沒反應
+    // 會被當成壞掉（issue #98 檢視回饋）。
+    if (this.importing) {
+      this.showNotice('正在匯入圖片，請稍候再重建');
+      return;
+    }
     const meshParams = this.currentMeshParams();
     const importSize = this.importSize;
     try {
@@ -1801,7 +1809,7 @@ export class JellySandbox {
    * Scene 與錄製的分工（ADR-0013，同 `importImage`）：不在錄製中 → 生成後
    * `setScene(sceneSnapshot())`，這塊成為佈景的一部分、`停止／重設` 後還在；
    * 錄製中 → 只走 `dispatchInput`，`spawn` 錄進 Action Track（播到那步才出現、
-   * 重設後消失），Scene 不動。播放中兩個工具不作用（面板那兩個選項也是灰的）：
+   * 重設後消失），Scene 不動。播放中三個 Jelly 工具都不作用（面板那些選項也是灰的）：
    * Scene 快照不該把 Track 正在播、播完就消失的塊收進去。
    */
   private spawnAt(world: Point): void {
