@@ -16,8 +16,16 @@
  * 則把 `spawn` 錄進 Action Track（播到那步才出現、重設後消失）。「清空全部」
  * （`clearAll`）是唯一會把 Scene、Track、群組、初始 Pin、圖庫一起清成新片段的入口
  * （空桌面，內建預設果凍重新註冊為來源但不自動放上桌）。算繪端每幀用
- * `World.jellies()` 的 id 序列跟 `JellyRenderer` diff 同步（`syncRenderer`）。本票沒有
- * 碰撞（重疊就互相穿過，V3 T3-3 接）、沒有生成／移除工具（V3 T3-4）。
+ * `World.jellies()` 的 id 序列跟 `JellyRenderer` diff 同步（`syncRenderer`）。
+ *
+ * **生成／移除 Jelly 工具**（issue #97 / V3 T3-4；ADR-0011 進工具選擇器）：兩個
+ * 「點一下」工具（手勢判定在 `ToolRouter`，只回報世界座標）。生成（`spawnAt`）以
+ * 點擊處為中心放下一塊，圖用最近一次匯入的那張（`sourceForSpawn`）、尺寸與密度
+ * 用當下兩條拉霸，放不下（超出 Walled 範圍／掉到 Floor 地板下，見 `fitsInBoundary`）
+ * 就不生成並提示，懸停時先用禁止游標預告（`applyCanvasCursor`）。移除
+ * （`removeJellyAt`）點到哪塊移除哪塊、連同它的 Pin／Grab，點空白處無事。兩者的
+ * Scene／錄製分工跟匯入一致：不在錄製中就 `setScene(sceneSnapshot())`、錄製中則
+ * 只錄事件。
  *
  * 主迴圈用 `FixedStepAccumulator`（+ 250ms clamp）把真實時間切成 60Hz 固定步推進
  * 求解器；每幀再用**真實**幀時距（clamp 到 100ms）呼叫純函式 `updateCamera` 推進
@@ -136,6 +144,7 @@ import {
   worldToScreen,
 } from '../camera';
 import {
+  type ClickToolId,
   type FanParams,
   type ToolId,
   DEFAULT_FAN_FALLOFF_EXPONENT,
@@ -162,6 +171,7 @@ import { type BoundaryFrame, JellyRenderer } from '../render';
 import {
   type Bbox,
   type BoundaryMode,
+  compareJellyIds,
   type FanState,
   FloorBoundary,
   InfiniteBoundary,
@@ -215,7 +225,13 @@ import {
   tracksInEnabledGroups,
   withGroupInvariant,
 } from './track';
-import { BOUNDARY_FRICTION, computeFloorY, computeWalledBounds } from './boundaryGeometry';
+import {
+  BOUNDARY_FRICTION,
+  computeFloorY,
+  computeWalledBounds,
+  fitsInBoundaryFrame,
+  placeBboxCentered,
+} from './boundaryGeometry';
 
 /** 相機平滑用的單幀時距上限（分頁切回來不會讓相機瞬移）。 */
 const CAMERA_MAX_DT = 0.1;
@@ -424,6 +440,13 @@ export class JellySandbox {
   private pinModeEnabled = false;
   /** 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，筆刷／Pin 視覺靠這個判定。 */
   private activeTool: ToolId = 'general';
+  /**
+   * 「生成 Jelly」工具（issue #97）要放的那塊網格的 rest bbox，key 同 `meshMemo`
+   * ——`null` = 這組參數建不出網格。游標的「放不放得下」判定每幀都要算一次，沒有
+   * 這層 memo 的話建不出來的那組會每幀重跑整條 mesh 管線（`meshFor` 只快取成功的）。
+   * 跟著 `meshMemo` 一起清掉（「清空全部」／載入片段會換掉同名來源的內容）。
+   */
+  private readonly spawnBboxMemo = new Map<string, Bbox | null>();
   /**
    * 五個提示開關「使用者想不想看」的意圖——`wireframe` 是顯示網格（issue #14，
    * debug 線框）、`pins` 是 Pin 標記（issue #14）、`fanRange`／`fanIcon` 是風扇
@@ -1221,6 +1244,7 @@ export class JellySandbox {
     this.soloState = null;
     this.sources.clear();
     this.meshMemo.clear();
+    this.spawnBboxMemo.clear();
     this.nextJellyNum = 1;
     this.nextSourceNum = 1;
     this.registerDefaultSource();
@@ -1311,10 +1335,48 @@ export class JellySandbox {
     return this.pinModeEnabled && this.activeTool === 'general';
   }
 
-  /** 游標（十字）＋ Pin 標記的「可點掉」紅色脈動——兩者都跟著 `pinModeActive` 走，見該 getter。 */
+  /** 游標＋ Pin 標記的「可點掉」紅色脈動——兩者都跟著 `pinModeActive` 走，見該 getter。 */
   private applyPinModeVisuals(): void {
-    this.renderer.canvas.style.cursor = this.pinModeActive ? 'crosshair' : '';
+    this.applyCanvasCursor();
     this.pinMarkers.setRemovable(this.pinModeActive);
+  }
+
+  /**
+   * 畫布游標的單一出口（issue #97 收攏）——兩個來源：Pin 模式的十字（issue #14），
+   * 以及「生成 Jelly」工具在放不下的地方顯示的禁止樣式（issue #97 驗收條件）。
+   * 前者是狀態、後者跟著指標位置每幀變，所以 `frame()` 每幀呼叫一次；值沒變就
+   * 不寫 DOM。Pin 模式優先：那時根本切不到生成工具（`pinModeActive` 要求一般操作）。
+   *
+   * 比對的是 **DOM 上的實際值**而不是自己記一份快取：PixiJS 的事件系統滑過畫布時
+   * 也會寫同一個屬性（沒有互動物件時設成 `'inherit'`），被它蓋掉之後若只信自己的
+   * 快取就再也不會補回來——真瀏覽器驗證時抓到的（十字游標其實一直有這個缺口）。
+   * 「沒有特別游標」也因此用 `'inherit'`（等同預設，且跟 Pixi 寫的值一致）而不是
+   * 空字串，免得兩邊每幀互相覆寫。
+   */
+  private applyCanvasCursor(): void {
+    const cursor = this.pinModeActive
+      ? 'crosshair'
+      : this.spawnBlockedAtHover()
+        ? 'not-allowed'
+        : 'inherit';
+    const canvas = this.renderer.canvas;
+    if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
+  }
+
+  /**
+   * 「現在按下去會生不出來」嗎（issue #97）——只有選著生成工具、指標確實在畫布上
+   * （`CanvasHover`，見該檔：輸入層在單純懸停時是靜默的）時才判定；放不下的原因
+   * 跟 `spawnAt` 完全同一組（播放中、建不出網格、超出邊界），使用者看到禁止游標
+   * 就代表按下去真的不會有東西出現。
+   */
+  private spawnBlockedAtHover(): boolean {
+    if (this.activeTool !== 'spawn') return false;
+    if (this.playbackLocked) return true;
+    const point = this.canvasHover.point;
+    if (!point) return false;
+    const world = screenToWorld(this.cameraState.transform, this.canvasSize(), point.x, point.y);
+    const plan = this.spawnPlan(world);
+    return plan === null || !fitsInBoundaryFrame(this.boundaryFrame, plan.bbox);
   }
 
   /**
@@ -1653,13 +1715,13 @@ export class JellySandbox {
       throw err;
     }
     this.nextSourceNum++;
-    const bb = positionsBbox(mesh.positions);
-    const center = { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
-    this.spawnJelly(sourceId, meshParams, importSize, {
-      x: this.cameraState.transform.x - center.x,
-      y: this.cameraState.transform.y - center.y,
+    const camera = this.cameraState.transform;
+    const { offset } = placeBboxCentered(positionsBbox(mesh.positions), {
+      x: camera.x,
+      y: camera.y,
     });
-    if (!this.trackRecorder.isRecording) this.world.setScene(this.world.sceneSnapshot());
+    this.spawnJelly(sourceId, meshParams, importSize, offset);
+    this.commitSceneUnlessRecording();
   }
 
   /**
@@ -1675,6 +1737,129 @@ export class JellySandbox {
     const jellyId = `jelly/${this.nextJellyNum++}`;
     this.dispatchInput({ type: 'spawn', jellyId, sourceId, meshParams, importSize, offset });
     return jellyId;
+  }
+
+  /**
+   * 「點一下」工具（`ToolRouter` 的 `onClickTool`）的分派口（issue #97）——播放中
+   * 一律不作用：面板那兩個選項這時是灰的，但工具本身可能在播放開始前就選著了，
+   * 而 Scene 快照不該把 Track 正在播、播完就消失的塊收進去（同 `importImage` 先停
+   * 播放的理由）。
+   */
+  private runClickTool(tool: ClickToolId, world: Point): void {
+    if (this.playbackLocked) {
+      this.showNotice('播放中不能生成或移除果凍——先按「停止／重設」');
+      return;
+    }
+    if (tool === 'spawn') this.spawnAt(world);
+    else this.removeJellyAt(world);
+  }
+
+  /**
+   * 剛剛那個動作要不要變成佈景的一部分（issue #97 收攏匯入／生成／移除三處；
+   * ADR-0013）：不在錄製中 → 拍成新的 Scene（`停止／重設` 後還在）；錄製中 → 不動
+   * Scene，那筆事件已經由 `dispatchInput` 錄進 Action Track（播到那步才發生、重設
+   * 後不存在）。
+   */
+  private commitSceneUnlessRecording(): void {
+    if (!this.trackRecorder.isRecording) this.world.setScene(this.world.sceneSnapshot());
+  }
+
+  /**
+   * 「生成 Jelly」工具點一下畫布（issue #97 / V3 T3-4；ADR-0013）：以點擊處為中心
+   * 放下一塊——圖 = 最近一次匯入的那張（見 `sourceForSpawn`），尺寸與密度 = 當下
+   * 兩條拉霸（跟匯入走同一組「下一次」的意圖）。放不下（超出 Walled 範圍／掉到
+   * Floor 地板下）就整個不生成並提示，判定與懸停時的禁止游標同一條路徑
+   * （`fitsInBoundary`）。生成在既有塊上面是允許的——有碰撞（issue #96）會把它們
+   * 推開，那正是這個工具好玩的地方。
+   *
+   * Scene 與錄製的分工（ADR-0013，同 `importImage`）：不在錄製中 → 生成後
+   * `setScene(sceneSnapshot())`，這塊成為佈景的一部分、`停止／重設` 後還在；
+   * 錄製中 → 只走 `dispatchInput`，`spawn` 錄進 Action Track（播到那步才出現、
+   * 重設後消失），Scene 不動。播放中兩個工具不作用（面板那兩個選項也是灰的）：
+   * Scene 快照不該把 Track 正在播、播完就消失的塊收進去。
+   */
+  private spawnAt(world: Point): void {
+    const plan = this.spawnPlan(world);
+    if (!plan) {
+      this.showNotice('生成失敗，這張來源圖建不出果凍');
+      return;
+    }
+    if (!fitsInBoundaryFrame(this.boundaryFrame, plan.bbox)) {
+      this.showNotice('這裡放不下——超出桌面範圍了');
+      return;
+    }
+    this.spawnJelly(plan.sourceId, plan.meshParams, plan.importSize, plan.offset);
+    this.commitSceneUnlessRecording();
+  }
+
+  /**
+   * 「移除 Jelly」工具點一下畫布（issue #97）：點到哪塊移除哪塊（`World.pick`，
+   * 後生成的在上面先命中），連同附在它上面的 Pin／Grab 一起消失（`World.remove`
+   * 連那塊的 `SimCore` 整個丟掉、路由表也清乾淨）。點空白處什麼都不做——不是
+   * 「移除最近的一塊」，那會讓使用者不小心清掉沒瞄準的東西。Scene／錄製的分工
+   * 同 `spawnAt`。
+   */
+  private removeJellyAt(world: Point): void {
+    const hit = this.world.pick(world.x, world.y);
+    if (!hit) return;
+    this.dispatchInput({ type: 'remove', jellyId: hit.jellyId });
+    this.commitSceneUnlessRecording();
+  }
+
+  /**
+   * 「在 `world` 生成一塊的話，會是什麼樣子」（issue #97）——`spawnAt` 與懸停游標
+   * 共用。`offset` = 點擊世界座標 − 網格 bbox 中心（＝放下後 bbox 的中心落在點擊
+   * 處，同 `importImage` 的「對準相機中心」算法），`bbox` 是套上 `offset` 之後的
+   * 世界座標 bbox，邊界判定吃它。網格建不出來（來源不存在、壞參數）回 `null`。
+   */
+  private spawnPlan(world: Point): {
+    sourceId: string;
+    meshParams: BuildSimMeshParams;
+    importSize: number;
+    offset: Point;
+    bbox: Bbox;
+  } | null {
+    const meshParams = this.currentMeshParams();
+    const importSize = this.importSize;
+    const sourceId = this.sourceForSpawn();
+    const rest = this.spawnMeshBbox(sourceId, meshParams, importSize);
+    if (!rest) return null;
+    return { sourceId, meshParams, importSize, ...placeBboxCentered(rest, world) };
+  }
+
+  /** 這組生成參數的 rest 網格 bbox（issue #97）；建不出來記 `null`，見 `spawnBboxMemo`。 */
+  private spawnMeshBbox(
+    sourceId: string,
+    meshParams: BuildSimMeshParams,
+    importSize: number,
+  ): Bbox | null {
+    const key = meshKey(sourceId, meshParams, importSize);
+    const cached = this.spawnBboxMemo.get(key);
+    if (cached !== undefined) return cached;
+    let bbox: Bbox | null = null;
+    try {
+      bbox = positionsBbox(this.meshFor(sourceId, meshParams, importSize).positions);
+    } catch (err: unknown) {
+      console.warn('[jelly] 生成用的網格建不出來，已略過', err);
+    }
+    this.spawnBboxMemo.set(key, bbox);
+    return bbox;
+  }
+
+  /**
+   * 生成要用哪張圖（issue #97；ADR-0010 精神：不另外給選圖 UI）——最近一次匯入的
+   * 那張，也就是流水號最大的 `sourceId`（`compareJellyIds` 同一套「前綴 + 數字」
+   * 比法，`src/2` < `src/10`）。圖庫空的（載入了一份沒有任何來源的片段）就把內建
+   * 預設果凍重新註冊進去，讓這個工具永遠有東西可放。
+   */
+  private sourceForSpawn(): string {
+    let latest: string | null = null;
+    for (const id of this.sources.keys()) {
+      if (latest === null || compareJellyIds(latest, id) < 0) latest = id;
+    }
+    if (latest !== null) return latest;
+    this.registerDefaultSource();
+    return DEFAULT_SOURCE_ID;
   }
 
   /**
@@ -1857,6 +2042,7 @@ export class JellySandbox {
     this.sources.clear();
     for (const [id, source] of decoded) this.sources.set(id, source);
     this.meshMemo.clear();
+    this.spawnBboxMemo.clear();
     for (const [key, mesh] of memo) this.meshMemo.set(key, mesh);
     this.world.setScene(clip.scene);
     this.world.reset();
@@ -1900,6 +2086,9 @@ export class JellySandbox {
       // 撒 Pin 的間距判定要跟場上既有的 Pin 也比一次（issue #69），不然在撒過的
       // 地方再撒一次會疊成一坨。
       listPins: () => this.world.listPins(),
+      // 生成／移除 Jelly 兩個工具（issue #97）只回報「在這裡點了一下」，該放哪張圖、
+      // 該移除哪一塊由沙盒自己決定（見 `spawnAt`／`removeJellyAt`）。
+      onClickTool: (tool, world) => this.runClickTool(tool, world),
       applyInput: (event) => {
         const routed = routeForPinMode(event, this.pinModeActive, this.pinModeContext());
         if (routed) this.dispatchInput(routed); // 進 World + no-op 除非正在錄製（issue #29）
@@ -1969,6 +2158,9 @@ export class JellySandbox {
     // 不該落後指標，所以排在暫停守衛之前——暫停中果凍定格，但滑鼠還是會動。
     // 提示層（含編隊形狀預覽）則跟著暫停一起定格，見下方那一區。
     this.updateBrushCursor();
+    // 「生成 Jelly」的禁止游標跟著指標位置與邊界每幀重算（issue #97），理由同上：
+    // 游標不該落後指標，所以一樣排在暫停守衛之前。
+    this.applyCanvasCursor();
 
     // 暫停中（issue #34）：略過固定步迴圈、PerfMonitor 取樣與相機更新——果凍
     // 定格在當下形變、播放秒數不動、鏡頭不動、排定事件不觸發——只重畫這一格。

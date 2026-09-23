@@ -12,8 +12,16 @@ export {
   DEFAULT_SPRAY_RADIUS,
   DEFAULT_SPRAY_SPACING,
   DEFAULT_ERASE_RADIUS,
+  CLICK_TOOL_IDS,
 } from './ToolRouter';
-export type { ToolId, ToolRouterOptions, FanParams, SprayParams, EraseParams } from './ToolRouter';
+export type {
+  ToolId,
+  ClickToolId,
+  ToolRouterOptions,
+  FanParams,
+  SprayParams,
+  EraseParams,
+} from './ToolRouter';
 export { PointerInput } from './PointerInput';
 export type { PointerInputOptions } from './PointerInput';
 export { routeForPinMode } from './pinModeRouting';

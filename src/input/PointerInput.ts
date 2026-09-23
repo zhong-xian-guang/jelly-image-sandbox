@@ -29,6 +29,7 @@
 import type { FanState, InputEvent, PinInfo, Point } from '../sim';
 import type { GestureConfig } from './GestureTracker';
 import {
+  type ClickToolId,
   type EraseParams,
   type FanParams,
   type SprayParams,
@@ -45,6 +46,8 @@ export interface PointerInputOptions {
   getFan?: () => FanState | null;
   /** 轉發給 `ToolRouter`（issue #69）——場上目前的 Pin，供撒 Pin 的間距判定用。 */
   listPins?: () => readonly PinInfo[];
+  /** 轉發給 `ToolRouter`（issue #97）——「點一下」工具（生成／移除 Jelly）完成一次點擊。 */
+  onClickTool?: (tool: ClickToolId, world: Point) => void;
   config?: Partial<GestureConfig>;
   /** 時鐘來源（測試可注入）。預設 `performance.now`。 */
   now?: () => number;
@@ -67,6 +70,7 @@ export class PointerInput {
       hitTest: opts.hitTest,
       getFan: opts.getFan,
       listPins: opts.listPins,
+      onClickTool: opts.onClickTool,
       config: opts.config,
     });
 
