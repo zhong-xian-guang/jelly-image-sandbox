@@ -299,6 +299,87 @@ describe('World — Scene 與 reset', () => {
   });
 });
 
+describe('World — 重建（issue #98 / V3 T3-5）', () => {
+  /**
+   * 粗細兩種網格，外框都是 40×40——重建換的是網格密度，那塊的 rest 位置不該跟著動，
+   * 所以 fixture 刻意讓兩者的 bbox 一模一樣，位置有沒有變在測試裡看得乾淨。
+   */
+  const densityProvider: MeshProvider = (_sourceId, meshParams) =>
+    meshParams.targetParticleCount >= 25 ? gridMesh(5, 5, 10) : gridMesh(3, 3, 20);
+
+  const FINE: BuildSimMeshParams = { ...DEFAULT_PARAMS, targetParticleCount: 200 };
+  const COARSE: BuildSimMeshParams = { ...DEFAULT_PARAMS, targetParticleCount: 9 };
+
+  function spawnWith(
+    jellyId: string,
+    meshParams: BuildSimMeshParams,
+    offset: { x: number; y: number },
+  ): InputEvent {
+    return { type: 'spawn', jellyId, sourceId: 'src/1', meshParams, importSize: null, offset };
+  }
+
+  function bboxOf(positions: Float64Array): { cx: number; cy: number } {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < positions.length; i += 2) {
+      minX = Math.min(minX, positions[i]!);
+      maxX = Math.max(maxX, positions[i]!);
+      minY = Math.min(minY, positions[i + 1]!);
+      maxY = Math.max(maxY, positions[i + 1]!);
+    }
+    return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+  }
+
+  it('remove + 同 id 同 offset 的 spawn（不同 meshParams）→ 該塊換網格、回 rest、約束消失，其他塊不動', () => {
+    const world = new World(densityProvider);
+    world.applyInput(spawnWith('jelly/1', FINE, { x: 0, y: 0 }));
+    world.applyInput(spawnWith('jelly/2', FINE, { x: 100, y: 0 }));
+    const restCenter = bboxOf(world.jellies()[0]!.positions);
+    expect(restCenter).toEqual({ cx: 20, cy: 20 });
+
+    // 釘住一角、抓著另一角拉開，讓那塊既有約束又離開 rest。
+    world.applyInput({ type: 'pin', id: 'p', x: 0, y: 0 });
+    world.applyInput({ type: 'grab', id: 'g', x: 40, y: 40 });
+    world.applyInput({ type: 'moveGrab', id: 'g', x: 80, y: 80 });
+    run(world, 20);
+    expect(world.jellies()[0]!.positions.length / 2).toBe(25);
+    expect(world.pinCount).toBe(1);
+    expect(world.grabCount).toBe(1);
+    expect(bboxOf(world.jellies()[0]!.positions)).not.toEqual(restCenter);
+    const otherBefore = Array.from(world.jellies()[1]!.positions);
+
+    world.applyInput({ type: 'remove', jellyId: 'jelly/1' });
+    world.applyInput(spawnWith('jelly/1', COARSE, { x: 0, y: 0 }));
+
+    const rebuilt = world.jellies()[0]!;
+    expect(world.jellies().map((j) => j.id)).toEqual(['jelly/1', 'jelly/2']);
+    expect(rebuilt.positions.length / 2).toBe(9); // 換了網格
+    expect(bboxOf(rebuilt.positions)).toEqual(restCenter); // 回 rest、位置不變
+    expect(world.pinCount).toBe(0); // 它上面的 Pin／Grab 掉光
+    expect(world.grabCount).toBe(0);
+    expect(world.listPins()).toEqual([]);
+    expect(Array.from(world.jellies()[1]!.positions)).toEqual(otherBefore); // 另一塊不受影響
+  });
+
+  it('重建後 sceneSnapshot() 換成新的 meshParams、其餘欄位原樣（沙盒據此 setScene）', () => {
+    const world = new World(densityProvider);
+    world.applyInput(spawnWith('jelly/1', FINE, { x: 7, y: 9 }));
+    world.applyInput({ type: 'remove', jellyId: 'jelly/1' });
+    world.applyInput(spawnWith('jelly/1', COARSE, { x: 7, y: 9 }));
+    expect(world.sceneSnapshot()).toEqual([
+      {
+        jellyId: 'jelly/1',
+        sourceId: 'src/1',
+        meshParams: COARSE,
+        importSize: null,
+        offset: { x: 7, y: 9 },
+      },
+    ]);
+  });
+});
+
 describe('World — 全域參數與決定性', () => {
   it('applyParams 套到每塊：開重力後兩塊都往下掉；cellFrac 改動不丟錯', () => {
     const { world } = twoJellies();

@@ -18,14 +18,18 @@
  * （空桌面，內建預設果凍重新註冊為來源但不自動放上桌）。算繪端每幀用
  * `World.jellies()` 的 id 序列跟 `JellyRenderer` diff 同步（`syncRenderer`）。
  *
- * **生成／移除 Jelly 工具**（issue #97 / V3 T3-4；ADR-0011 進工具選擇器）：兩個
- * 「點一下」工具（手勢判定在 `ToolRouter`，只回報世界座標）。生成（`spawnAt`）以
- * 點擊處為中心放下一塊，圖用最近一次匯入的那張（`sourceForSpawn`）、尺寸與密度
- * 用當下兩條拉霸，放不下（超出 Walled 範圍／掉到 Floor 地板下，見 `fitsInBoundary`）
- * 就不生成並提示，懸停時先用禁止游標預告（`applyCanvasCursor`）。移除
- * （`removeJellyAt`）點到哪塊移除哪塊、連同它的 Pin／Grab，點空白處無事。兩者的
- * Scene／錄製分工跟匯入一致：不在錄製中就 `setScene(sceneSnapshot())`、錄製中則
- * 只錄事件。
+ * **生成／移除／重建 Jelly 工具**（issue #97 / #98；ADR-0011 進工具選擇器）：三個
+ * 「點一下」工具（手勢判定在 `ToolRouter`，只回報世界座標），分派口是
+ * `runClickTool`。生成（`spawnAt`）以點擊處為中心放下一塊，圖用最近一次匯入的那張
+ * （`sourceForSpawn`）、尺寸與密度用當下兩條拉霸，放不下（超出 Walled 範圍／掉到
+ * Floor 地板下，見 `fitsInBoundary`）就不生成並提示，懸停時先用禁止游標預告
+ * （`applyCanvasCursor`）。移除（`removeJellyAt`）點到哪塊移除哪塊、連同它的
+ * Pin／Grab，點空白處無事。重建（`rebuildJellyAt`）點哪塊換哪塊的網格，跟「全部
+ * 重建」按鈕共用 `rebuildJellies`。
+ *
+ * 生成／移除的 Scene／錄製分工跟匯入一致：不在錄製中就 `setScene(sceneSnapshot())`、
+ * 錄製中則只錄事件；重建是例外——它只改 Scene、永遠不錄（ADR-0013），所以錄製中
+ * 連同「全部重建」按鈕一起擋掉。
  *
  * 主迴圈用 `FixedStepAccumulator`（+ 250ms clamp）把真實時間切成 60Hz 固定步推進
  * 求解器；每幀再用**真實**幀時距（clamp 到 100ms）呼叫純函式 `updateCamera` 推進
@@ -177,6 +181,7 @@ import {
   InfiniteBoundary,
   type InputEvent,
   type Point,
+  type SceneEntry,
   softnessToParams,
   WalledBoundary,
   World,
@@ -686,7 +691,7 @@ export class JellySandbox {
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onImportSizeChange: (size) => this.setImportSize(size),
       onMeshDensityChange: (density) => this.setMeshDensity(density),
-      onRebuild: () => this.rebuildAll(),
+      onRebuildAll: () => this.rebuildAll(),
       onClearAll: () => this.clearAll(),
       onBoundaryChange: (mode) => this.setBoundaryMode(mode),
       onSoftnessChange: (t) => this.setSoftness(t),
@@ -1630,23 +1635,42 @@ export class JellySandbox {
   };
 
   /**
-   * 「重建」按鈕（issue #90 / V3 T1-3；issue #95 起對每一塊，見 CONTEXT.md「重建」）：
-   * 對場上每一塊，用它自己的來源圖＋目前兩條拉霸，同 id 同圖同 `offset` 地 `remove`
-   * + `spawn`（新 `meshParams`／`importSize`），之後 `setScene(sceneSnapshot())`——只改
-   * Scene、不是 Track 事件（面板在錄製中／播放中已把按鈕鎖住），Track／群組／初始 Pin
-   * 都保留。先把每塊的新網格都建好（`meshFor`，失敗就整批放棄、場上不動＋提示），
-   * 確定都成功才動場上的塊，不會重建到一半留下缺塊。
+   * 「全部重建」按鈕（issue #90 / V3 T1-3；issue #95 起對每一塊，issue #98 改名）：
+   * 場上每一塊都重建。跟「重建 Jelly」工具（`rebuildJellyAt`）只差在餵進去的清單是
+   * 全部還是一塊——同一條路徑（`rebuildJellies`），行為因此保證一致。
    */
   private rebuildAll(): void {
-    if (this.importing) return;
+    this.rebuildJellies(this.world.sceneSnapshot(), '重建失敗，場上的果凍維持不變');
+  }
+
+  /**
+   * 重建的唯一實作（issue #90 / #95 / #98，見 CONTEXT.md「重建」）：對 `entries` 裡的
+   * 每一塊，用它自己的來源圖＋目前兩條拉霸，同 id 同圖同 `offset` 地 `remove` + `spawn`
+   * （新 `meshParams`／`importSize`），之後 `setScene(sceneSnapshot())`——只改 Scene、
+   * 不是 Track 事件（所以走 `world.applyInput` 而不是 `dispatchInput`：這件事不該被錄），
+   * Track／群組／片段初始 Pin 都保留（B 包的「換網格清空」在 ADR-0013 已廢止）。
+   *
+   * 先把每塊的新網格都建好（`meshFor`，任何一塊失敗就整批放棄、場上不動＋提示），
+   * 確定都成功才動場上的塊：不會重建到一半留下缺塊。失敗文案由呼叫端給（單塊與
+   * 全場講法不同），跟 `runImport` 同一個手法。兩個入口（「全部重建」按鈕、
+   * 「重建 Jelly」工具）在錄製中／播放中分別已被面板與 `runClickTool` 擋掉，
+   * 這裡不再重複判定。
+   */
+  private rebuildJellies(entries: readonly SceneEntry[], failureNotice: string): void {
+    // 匯入／載入片段進行中就讓開（跟 `runImport` 互斥）。會提示而不是無聲放棄：
+    // 「重建 Jelly」工具跟按鈕不一樣，畫布上的點擊沒有灰掉的外觀可看，靜靜沒反應
+    // 會被當成壞掉（issue #98 檢視回饋）。
+    if (this.importing) {
+      this.showNotice('正在匯入圖片，請稍候再重建');
+      return;
+    }
     const meshParams = this.currentMeshParams();
     const importSize = this.importSize;
-    const entries = this.world.sceneSnapshot();
     try {
       for (const e of entries) this.meshFor(e.sourceId, meshParams, importSize);
     } catch (err: unknown) {
       console.warn('[jelly] 重建失敗，已略過', err);
-      this.showNotice('重建失敗，場上的果凍維持不變');
+      this.showNotice(failureNotice);
       return;
     }
     for (const e of entries) {
@@ -1740,18 +1764,28 @@ export class JellySandbox {
   }
 
   /**
-   * 「點一下」工具（`ToolRouter` 的 `onClickTool`）的分派口（issue #97）——播放中
-   * 一律不作用：面板那兩個選項這時是灰的，但工具本身可能在播放開始前就選著了，
-   * 而 Scene 快照不該把 Track 正在播、播完就消失的塊收進去（同 `importImage` 先停
-   * 播放的理由）。
+   * 「點一下」工具（`ToolRouter` 的 `onClickTool`）的分派口（issue #97 / #98）——
+   * 兩道守衛，對應面板上那兩種選項鎖法（`ControlPanel` 的 `lockedToolOptions`）。
+   * 面板已經把對應的選項變灰，這裡仍要再擋一次：工具可能在錄製／播放開始**之前**
+   * 就選著了，這時選擇器變灰也攔不住畫布上的點擊。
+   *
+   * - 播放中三個都不作用：Scene 快照不該把 Track 正在播、播完就消失的塊收進去
+   *   （同 `importImage` 先停播放的理由）。
+   * - 錄製中只擋重建：生成／移除要錄成 `spawn`／`remove` 事件（ADR-0013），重建卻
+   *   只改 Scene、不是事件，錄製中點下去沒意義。
    */
   private runClickTool(tool: ClickToolId, world: Point): void {
     if (this.playbackLocked) {
-      this.showNotice('播放中不能生成或移除果凍——先按「停止／重設」');
+      this.showNotice('播放中不能生成、移除或重建果凍——先按「停止／重設」');
+      return;
+    }
+    if (tool === 'rebuildJelly' && this.trackRecorder.isRecording) {
+      this.showNotice('錄製中不能重建——重建換的是佈景的網格，不是可以錄的事件');
       return;
     }
     if (tool === 'spawn') this.spawnAt(world);
-    else this.removeJellyAt(world);
+    else if (tool === 'removeJelly') this.removeJellyAt(world);
+    else this.rebuildJellyAt(world);
   }
 
   /**
@@ -1775,7 +1809,7 @@ export class JellySandbox {
    * Scene 與錄製的分工（ADR-0013，同 `importImage`）：不在錄製中 → 生成後
    * `setScene(sceneSnapshot())`，這塊成為佈景的一部分、`停止／重設` 後還在；
    * 錄製中 → 只走 `dispatchInput`，`spawn` 錄進 Action Track（播到那步才出現、
-   * 重設後消失），Scene 不動。播放中兩個工具不作用（面板那兩個選項也是灰的）：
+   * 重設後消失），Scene 不動。播放中三個 Jelly 工具都不作用（面板那些選項也是灰的）：
    * Scene 快照不該把 Track 正在播、播完就消失的塊收進去。
    */
   private spawnAt(world: Point): void {
@@ -1804,6 +1838,21 @@ export class JellySandbox {
     if (!hit) return;
     this.dispatchInput({ type: 'remove', jellyId: hit.jellyId });
     this.commitSceneUnlessRecording();
+  }
+
+  /**
+   * 「重建 Jelly」工具點一下畫布（issue #98 / V3 T3-5）：點到哪塊重建哪塊（`World.pick`，
+   * 後生成的在上面先命中），點空白處什麼都不做（同 `removeJellyAt`：不去猜最近的一塊）。
+   * 命中的塊在 `sceneSnapshot()` 裡一定找得到——它就是「場上每塊當初 spawn 的參數」——
+   * 找不到只可能是內部狀態對不上，那就當沒點到。實際重建交給 `rebuildJellies`，跟
+   * 「全部重建」按鈕同一條路徑，只差清單長度。
+   */
+  private rebuildJellyAt(world: Point): void {
+    const hit = this.world.pick(world.x, world.y);
+    if (!hit) return;
+    const entry = this.world.sceneSnapshot().find((e) => e.jellyId === hit.jellyId);
+    if (!entry) return;
+    this.rebuildJellies([entry], '重建失敗，這塊果凍維持不變');
   }
 
   /**
