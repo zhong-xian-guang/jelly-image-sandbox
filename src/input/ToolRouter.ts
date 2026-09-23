@@ -51,6 +51,13 @@
  * 那些具體座標，重播時原樣送回去，不會重算隨機分佈——所以這裡刻意不需要有
  * 種子的 PRNG。
  *
+ * **生成 Jelly／移除 Jelly**（issue #97 / V3 T3-4）：兩個「點一下」工具——`down`
+ * 記下按下處，`up` 時只要途中沒拖曳（位移 ≤ `tapMaxDist`，跟一般操作同一組門檻）
+ * 就呼叫對應的回呼（`onSpawn`／`onRemoveJelly`），參數是按下當下的世界座標。
+ * 這兩個工具是本檔唯一**不** emit `InputEvent` 的分支：要送進 `World` 的 `spawn`
+ * 需要來源圖、兩條拉霸的值與網格 bbox，`remove` 需要先 `pick` 出 `jellyId`——那些
+ * 都是 `JellySandbox` 的狀態，輸入層只回報「在這個世界座標點了一下」（ADR-0005）。
+ *
  * **移除 Pin**（issue #70 / V2 T3-6）：撒 Pin 的反向操作，但手勢形狀相反——它是
  * **持續**的橡皮擦：`down` 開始一次擦除、`move` 沿路繼續擦、`up`／`cancel` 結束。
  * 每次（含 `down` 當下那一次）用注入的 `listPins()` 掃一遍場上的 Pin，落在
@@ -115,10 +122,17 @@ import {
 
 /**
  * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）、
- * `'erase'`（issue #70，＝「移除 Pin」）加進 ADR-0011 選擇器；`'general'` 維持
- * 既有 Grab/Pin/Tap 手勢。
+ * `'erase'`（issue #70，＝「移除 Pin」）、`'spawn'`／`'removeJelly'`（issue #97）
+ * 加進 ADR-0011 選擇器；`'general'` 維持既有 Grab/Pin/Tap 手勢。
  */
-export type ToolId = 'general' | 'fan' | 'formation' | 'spray' | 'erase';
+export type ToolId = 'general' | 'fan' | 'formation' | 'spray' | 'erase' | 'spawn' | 'removeJelly';
+
+/** 「點一下就完成」的那幾個工具（issue #97）——`down`→`up` 無拖曳才作用，見 `ClickSession`。 */
+type ClickToolId = Extract<ToolId, 'spawn' | 'removeJelly'>;
+
+function isClickTool(tool: ToolId): tool is ClickToolId {
+  return tool === 'spawn' || tool === 'removeJelly';
+}
 
 export const DEFAULT_TOOL: ToolId = 'general';
 
@@ -194,6 +208,16 @@ export interface ToolRouterOptions extends GestureTrackerOptions {
    * 說明）。測試注入有種子的 PRNG 才能逐次一致。
    */
   random?: () => number;
+  /**
+   * 「生成 Jelly」工具點一下的回呼（issue #97 / V3 T3-4）——參數是**按下當下**的
+   * 世界座標。刻意不是 `InputEvent`：真正要送進 `World` 的 `spawn` 事件得知道用
+   * 哪張來源圖、目前兩條拉霸的值、`offset` 要減掉網格 bbox 中心——那些是
+   * `JellySandbox` 的狀態，輸入層不該認識（ADR-0005：輸入層只回報手勢）。
+   * 不帶這個選項等同「這個工具沒接線」：點下去什麼都不會發生。
+   */
+  onSpawn?: (world: Point) => void;
+  /** 「移除 Jelly」工具點一下的回呼（issue #97）——同 `onSpawn`，由呼叫端 `pick` 決定移除哪塊。 */
+  onRemoveJelly?: (world: Point) => void;
 }
 
 /** 放置新風扇進行中的狀態：世界座標原點 + 目前（拖曳中或放開時）的終點。 */
@@ -251,6 +275,27 @@ interface EraseSession {
   erasedPinIds: Set<PointerId>;
 }
 
+/**
+ * 進行中的一次「點一下」手勢（issue #97，生成 Jelly／移除 Jelly 共用）：`world` 是
+ * **按下當下**的世界座標（回呼拿的就是它，跟輕拍「打在按下點」同一條規則），
+ * `dragged` 一旦在 `move` 途中被設起來就不會再放下——拖出去又拖回原點仍然不算
+ * 點一下，使用者中途已經看到自己在拖了。
+ *
+ * 刻意**只**看位移、不看按住多久（跟 `isTap` 不同）：這兩個工具是「放在這裡」
+ * 而不是「輕拍一下」，瞄準位置多按了一秒再放開仍該生成，不然會變成「按太久
+ * 就沒反應」的謎樣失敗。
+ *
+ * `tool` 是按下當下選的那個工具——按住途中切換選擇器（觸控裝置做得到）時，
+ * 這次手勢仍算在按下時那個工具頭上。
+ */
+interface ClickSession {
+  tool: ClickToolId;
+  startX: number;
+  startY: number;
+  world: Point;
+  dragged: boolean;
+}
+
 export class ToolRouter {
   private readonly gestureTracker: GestureTracker;
   private readonly screenToWorld: (x: number, y: number) => Point;
@@ -259,6 +304,8 @@ export class ToolRouter {
   private readonly getFan: (() => FanState | null) | undefined;
   private readonly listPins: (() => readonly PinInfo[]) | undefined;
   private readonly random: () => number;
+  private readonly onSpawn: ((world: Point) => void) | undefined;
+  private readonly onRemoveJelly: ((world: Point) => void) | undefined;
   private activeTool: ToolId = DEFAULT_TOOL;
   /** 進行中的電風扇手勢（放置或拖曳），鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly fanSessions = new Map<PointerId, FanSession>();
@@ -289,6 +336,8 @@ export class ToolRouter {
   private eraseRadius = DEFAULT_ERASE_RADIUS;
   /** 進行中的擦除手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly eraseSessions = new Map<PointerId, EraseSession>();
+  /** 進行中的「點一下」手勢（issue #97），鍵為指標 `id`（`up`/`cancel` 後移除）。 */
+  private readonly clickSessions = new Map<PointerId, ClickSession>();
   /**
    * 解析後的手勢門檻（issue #81）——編隊抓取的輕拍判定要跟一般操作**同一組**
    * 數值，否則同一個使用者在兩個模式下「怎樣算快速按放」會前後矛盾。`opts` 原本
@@ -305,6 +354,8 @@ export class ToolRouter {
     this.getFan = opts.getFan;
     this.listPins = opts.listPins;
     this.random = opts.random ?? Math.random;
+    this.onSpawn = opts.onSpawn;
+    this.onRemoveJelly = opts.onRemoveJelly;
     this.config = resolveGestureConfig(opts.config);
   }
 
@@ -480,6 +531,18 @@ export class ToolRouter {
       const session: EraseSession = { erasedPinIds: new Set() };
       this.eraseSessions.set(id, session);
       this.eraseAt(this.screenToWorld(screenX, screenY), session);
+      return;
+    }
+    if (isClickTool(this.activeTool)) {
+      // 生成／移除都要等 `up` 才算數（issue #97）——按下當下先記位置，拖曳與否
+      // 由 `move` 判定。刻意不在 `down` 就動手：按錯地方時還能拖開取消。
+      this.clickSessions.set(id, {
+        tool: this.activeTool,
+        startX: screenX,
+        startY: screenY,
+        world: this.screenToWorld(screenX, screenY),
+        dragged: false,
+      });
     }
   }
 
@@ -520,6 +583,13 @@ export class ToolRouter {
       const session = this.eraseSessions.get(id);
       if (!session) return;
       this.eraseAt(this.screenToWorld(screenX, screenY), session);
+      return;
+    }
+    const click = this.clickSessions.get(id);
+    if (click && !click.dragged) {
+      // 超過輕拍的位移門檻（跟一般操作同一組設定）就不再是「點一下」。
+      const moved = Math.hypot(screenX - click.startX, screenY - click.startY);
+      if (moved > this.config.tapMaxDist) click.dragged = true;
     }
   }
 
@@ -544,6 +614,15 @@ export class ToolRouter {
       if (this.formationDefinePoints) return; // 定義中：down 才算數
       this.emitFormationTapIfAny(id, screenX, screenY, timeMs);
       this.releaseFormationSession(id);
+      return;
+    }
+    const click = this.clickSessions.get(id);
+    if (click) {
+      this.clickSessions.delete(id);
+      if (!click.dragged) {
+        const notify = click.tool === 'spawn' ? this.onSpawn : this.onRemoveJelly;
+        notify?.(click.world);
+      }
       return;
     }
     if (this.activeTool === 'erase') {
@@ -576,7 +655,10 @@ export class ToolRouter {
       // 已經擦掉的 Pin 是既成事實，取消不會把它們變回來（比照拖曳風扇的 cancel
       // 不回捲）——這裡只是停止繼續跟著指標擦。
       this.eraseSessions.delete(id);
+      return;
     }
+    // 生成／移除都還沒發生（要等 `up`），中斷就是整個作廢，不留痕跡（issue #97）。
+    this.clickSessions.delete(id);
   }
 
   /**

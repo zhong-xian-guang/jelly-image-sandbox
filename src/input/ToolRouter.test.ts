@@ -1159,3 +1159,143 @@ describe('ToolRouter — 移除 Pin（issue #70 / V2 T3-6）', () => {
     expect(events).toEqual([]);
   });
 });
+
+describe('ToolRouter — 生成 Jelly／移除 Jelly（issue #97 / V3 T3-4）', () => {
+  /** 兩個工具都只有「點一下」一種手勢，回呼各自收集起來比對。 */
+  function makeClickTools() {
+    const spawned: Point[] = [];
+    const removed: Point[] = [];
+    const { router, events } = makeRouter(undefined, undefined, {
+      onSpawn: (world) => spawned.push(world),
+      onRemoveJelly: (world) => removed.push(world),
+    });
+    return { router, events, spawned, removed };
+  }
+
+  it('生成 Jelly：點一下 → onSpawn 收到按下處的世界座標，不 emit 任何 InputEvent', () => {
+    const { router, events, spawned, removed } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 30, 40, 0);
+    router.up(1, 30, 40, 120);
+    expect(spawned).toEqual([{ x: 1030, y: 1040 }]);
+    expect(removed).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('移除 Jelly：點一下 → onRemoveJelly 收到世界座標', () => {
+    const { router, spawned, removed } = makeClickTools();
+    router.setActiveTool('removeJelly');
+    router.down(1, 5, 7, 0);
+    router.up(1, 5, 7, 80);
+    expect(removed).toEqual([{ x: 1005, y: 1007 }]);
+    expect(spawned).toEqual([]);
+  });
+
+  it('按住一陣子再放開（沒拖曳）仍算點一下——只要位置沒動就生成', () => {
+    const { router, spawned } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 10, 10, 0);
+    router.move(1, 12, 11);
+    router.up(1, 12, 11, 3000);
+    expect(spawned).toEqual([{ x: 1010, y: 1010 }]);
+  });
+
+  it('拖曳（位移超過門檻）→ 不觸發回呼', () => {
+    const { router, spawned, removed } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 0, 0, 0);
+    router.move(1, 40, 0);
+    router.up(1, 40, 0, 100);
+
+    router.setActiveTool('removeJelly');
+    router.down(2, 0, 0, 200);
+    router.move(2, 0, 30);
+    router.up(2, 0, 30, 300);
+
+    expect(spawned).toEqual([]);
+    expect(removed).toEqual([]);
+  });
+
+  it('拖出去又回到原點 → 仍不算點一下（中途已經判定為拖曳）', () => {
+    const { router, spawned } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 0, 0, 0);
+    router.move(1, 50, 50);
+    router.move(1, 0, 0);
+    router.up(1, 0, 0, 200);
+    expect(spawned).toEqual([]);
+  });
+
+  it('cancel → 不觸發回呼；之後再 up 也不會補送', () => {
+    const { router, spawned } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 0, 0, 0);
+    router.cancel(1);
+    router.up(1, 0, 0, 100);
+    expect(spawned).toEqual([]);
+  });
+
+  it('沒有 down 過的 up 不觸發回呼；同一次 up 不會重送兩次', () => {
+    const { router, spawned } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.up(9, 0, 0, 100);
+    expect(spawned).toEqual([]);
+
+    router.down(1, 0, 0, 200);
+    router.up(1, 0, 0, 300);
+    router.up(1, 0, 0, 400);
+    expect(spawned).toHaveLength(1);
+  });
+
+  it('多指各自獨立：其中一指拖曳不影響另一指的點一下', () => {
+    const { router, spawned } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 0, 0, 0);
+    router.down(2, 100, 100, 0);
+    router.move(1, 60, 0); // 第一指拖曳
+    router.up(1, 60, 0, 200);
+    router.up(2, 100, 100, 200);
+    expect(spawned).toEqual([{ x: 1100, y: 1100 }]);
+  });
+
+  it('按下與放開之間切換工具 → 送到按下當下那個工具的回呼', () => {
+    const { router, spawned, removed } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 0, 0, 0);
+    router.setActiveTool('removeJelly');
+    router.up(1, 0, 0, 100);
+    expect(spawned).toEqual([{ x: 1000, y: 1000 }]);
+    expect(removed).toEqual([]);
+  });
+
+  it('沒有注入回呼（未接線）→ 點一下什麼都不做，不爆炸', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('spawn');
+    router.down(1, 0, 0, 0);
+    router.up(1, 0, 0, 100);
+    router.setActiveTool('removeJelly');
+    router.down(2, 0, 0, 200);
+    router.up(2, 0, 0, 300);
+    expect(events).toEqual([]);
+  });
+
+  it('兩個工具下，一般操作的 Grab／Tap 完全不觸發；切回一般操作後恢復', () => {
+    const { router, events } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 0, 0, 0);
+    router.up(1, 0, 0, 100);
+    router.setActiveTool('removeJelly');
+    router.down(2, 0, 0, 200);
+    router.up(2, 0, 0, 300);
+    expect(events).toEqual([]);
+
+    router.setActiveTool('general');
+    router.down(3, 0, 0, 400);
+    router.up(3, 0, 0, 500);
+    expect(events).toEqual([
+      { type: 'grab', id: 3, x: 1000, y: 1000 },
+      { type: 'tap', x: 1000, y: 1000 },
+      { type: 'release', id: 3 },
+    ]);
+  });
+});

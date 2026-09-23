@@ -602,7 +602,46 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
       'formation',
       'spray',
       'erase',
+      'spawn',
+      'removeJelly',
     ]);
+  });
+
+  it('切到「生成 Jelly」／「移除 Jelly」→ onToolChange 收到對應值（issue #97）', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const select = findToolSelect(panel);
+
+    select.value = 'spawn';
+    select.dispatchEvent(new Event('change'));
+    expect(opts.onToolChange).toHaveBeenCalledWith('spawn');
+
+    select.value = 'removeJelly';
+    select.dispatchEvent(new Event('change'));
+    expect(opts.onToolChange).toHaveBeenCalledWith('removeJelly');
+  });
+
+  it('播放中「生成 Jelly」／「移除 Jelly」兩個選項變灰，其餘工具照常可選（issue #97）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const select = findToolSelect(panel);
+    const disabledValues = () => [...select.options].filter((o) => o.disabled).map((o) => o.value);
+
+    expect(disabledValues()).toEqual([]);
+
+    panel.setPlaybackControlsEnabled(false);
+    expect(disabledValues()).toEqual(['spawn', 'removeJelly']);
+    expect(select.disabled).toBe(false);
+
+    panel.setPlaybackControlsEnabled(true);
+    expect(disabledValues()).toEqual([]);
+  });
+
+  it('錄製中兩個工具仍可用——生成／移除本來就要錄進 Track（issue #97）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const select = findToolSelect(panel);
+
+    panel.setRecordingActive(true);
+    expect([...select.options].some((o) => o.disabled)).toBe(false);
   });
 
   it('切換選項 → onToolChange 收到新值', () => {
