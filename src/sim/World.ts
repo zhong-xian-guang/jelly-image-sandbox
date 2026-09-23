@@ -27,14 +27,17 @@
  * 風扇。沙盒在不錄製時的匯入／生成／移除／重建之後呼叫 `setScene(sceneSnapshot())`。
  *
  * **`step(dt)`**：切 substep；每個 substep 對每塊 `predict` → 每塊 `solveInternal` →
- * （V3 T3-3 在這裡插跨塊碰撞）→ 每塊 `finishSubstep`。沒有碰撞時逐塊的浮點運算跟各自
+ * 一次跨塊碰撞（`resolveCollisions`，issue #96 / V3 T3-3；就地改各塊的 `positions`／
+ * `prevPositions`，兩塊以上才跑）→ 每塊 `finishSubstep`。單塊時逐塊的浮點運算跟各自
  * `SimCore.step(dt)` 完全一樣。`params` 是全域手感參數（Softness／Tap／重力／substeps
- * …）：`applyParams` 套到每塊、之後 `spawn` 的新塊也從它起家。
+ * …）：`applyParams` 套到每塊、之後 `spawn` 的新塊也從它起家；`collision` 是碰撞參數
+ * （固定手感值，建構時注入、不進面板／片段檔）。
  */
 
 import type { SimMesh } from '../mesh';
 
 import { type Boundary, InfiniteBoundary } from './boundary';
+import { type CollisionParams, DEFAULT_COLLISION_PARAMS, resolveCollisions } from './collision';
 import { SimCore } from './SimCore';
 import {
   type Bbox,
@@ -121,10 +124,14 @@ function cloneEntry(e: SceneEntry): SceneEntry {
 export class World {
   /** 全域手感參數（每塊共用）。改欄位請走 `applyParams`，才會同步到場上每塊。 */
   readonly params: SimParams;
+  /** 跨塊碰撞參數（issue #96）：建構時注入，之後不變。 */
+  readonly collision: CollisionParams;
 
   private readonly jellyMap = new Map<string, Jelly>();
   /** `jellyMap` 依 id 排序後的快取；`spawn`／`remove`／`reset` 時重算。 */
   private sorted: Jelly[] = [];
+  /** `sorted` 對應的 `SimCore` 陣列（同順序），給每個 substep 的碰撞用，免逐 substep 配置。 */
+  private sortedCores: SimCore[] = [];
   /** 約束 id → 所在的塊。Grab 與 Pin 共用 id 命名空間（同 `SimCore`）。 */
   private readonly route = new Map<PointerId, string>();
   private scene: SceneEntry[] = [];
@@ -134,8 +141,10 @@ export class World {
   constructor(
     private readonly meshProvider: MeshProvider,
     params: Partial<SimParams> = {},
+    collision: Partial<CollisionParams> = {},
   ) {
     this.params = { ...DEFAULT_SIM_PARAMS, ...params };
+    this.collision = { ...DEFAULT_COLLISION_PARAMS, ...collision };
   }
 
   // ---- scene ---------------------------------------------------------------
@@ -191,6 +200,7 @@ export class World {
     this.sorted = [...this.jellyMap.values()].sort((a, b) =>
       compareJellyIds(a.entry.jellyId, b.entry.jellyId),
     );
+    this.sortedCores = this.sorted.map((j) => j.core);
   }
 
   // ---- readouts ---------------------------------------------------------------
@@ -410,17 +420,19 @@ export class World {
 
   /**
    * 推進 `dt` 秒。`dt <= 0` 或空場為 no-op。substep 切法與 `SimCore.step` 同一條規則
-   * （`params.substeps` 取整、至少 1）。
+   * （`params.substeps` 取整、至少 1）。每個 substep 在各塊內部約束解完、回推速度之前
+   * 跑一次跨塊碰撞（issue #96；塊對依 id 順序走訪，決定性）。
    */
   step(dt: number): void {
     if (!(dt > 0) || this.sorted.length === 0) return;
     const subs = substepCount(this.params);
     const h = dt / subs;
+    const cores = this.sortedCores;
     for (let s = 0; s < subs; s++) {
-      for (const j of this.sorted) j.core.predict(h);
-      for (const j of this.sorted) j.core.solveInternal(h);
-      // V3 T3-3：跨塊碰撞插在這裡（就地改各塊的 `positions`／`prevPositions`）。
-      for (const j of this.sorted) j.core.finishSubstep(h);
+      for (const core of cores) core.predict(h);
+      for (const core of cores) core.solveInternal(h);
+      if (cores.length > 1) resolveCollisions(cores, this.collision);
+      for (const core of cores) core.finishSubstep(h);
     }
   }
 }
