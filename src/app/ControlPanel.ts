@@ -366,13 +366,13 @@ export class ControlPanel {
   /** 「清空全部」鈕（issue #95）——同上鎖法。 */
   private readonly clearAllButton: HTMLButtonElement;
   /**
-   * 「目前工具」下拉裡改動 Scene 的那兩個選項（issue #97：生成 Jelly／移除 Jelly）
-   * ——**只**在播放中變灰（`updateTrackControlsState`），錄製中照常可用：那兩個工具
-   * 在錄製中本來就要錄成 `spawn`／`remove` 事件（ADR-0013），跟「重建」／「清空
-   * 全部」那種只改 Scene、錄製中按下沒意義的按鈕不同。鎖的是選項而不是整個
-   * 下拉：播放中仍要能切到其他工具。
+   * 「目前工具」下拉裡**播放中要鎖住**的選項（issue #97：生成 Jelly／移除 Jelly）
+   * ——只在播放中變灰（`updateTrackControlsState`），錄製中照常可用：那兩個工具在
+   * 錄製中本來就要錄成 `spawn`／`remove` 事件（ADR-0013），跟「重建」／「清空全部」
+   * 那種只改 Scene、錄製中按下沒意義的按鈕不同。鎖的是選項而不是整個下拉：播放中
+   * 仍要能切到其他工具。
    */
-  private readonly sceneToolOptions: HTMLOptionElement[] = [];
+  private readonly playbackLockedToolOptions: HTMLOptionElement[] = [];
   /**
    * 「鎖定跟隨」勾選框（issue #36 追加把手）——`setFollowLocked` 讓 `JellySandbox`
    * 每幀把它同步到相機實際的 `followEnabled`，這樣相機軌播放（`setState` 硬切、
@@ -822,7 +822,7 @@ export class ControlPanel {
     // 「清空全部」（issue #95）同理：它會清掉正在錄／正在播的片段本身。
     this.clearAllButton.disabled = busy;
     // 生成／移除 Jelly 兩個工具（issue #97）只在播放中鎖住，錄製中可用（見欄位說明）。
-    for (const option of this.sceneToolOptions) option.disabled = this.playbackLocked;
+    for (const option of this.playbackLockedToolOptions) option.disabled = this.playbackLocked;
     // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
     this.playAllButton.disabled = busy || this.trackCount === 0 || this.playableTrackCount === 0;
     this.addGroupButton.disabled = busy;
@@ -946,20 +946,21 @@ export class ControlPanel {
     row.className = 'jelly-control-row';
 
     const select = document.createElement('select');
-    for (const [value, text] of [
-      ['general', '一般操作'],
-      ['fan', '電風扇'],
-      ['formation', '編隊抓取'],
-      ['spray', '撒 Pin'],
-      ['erase', '移除 Pin'],
-      ['spawn', '生成 Jelly'],
-      ['removeJelly', '移除 Jelly'],
+    // 第三欄 = 播放中要不要鎖住這個選項（issue #97，見 `playbackLockedToolOptions`）。
+    for (const [value, text, lockDuringPlayback] of [
+      ['general', '一般操作', false],
+      ['fan', '電風扇', false],
+      ['formation', '編隊抓取', false],
+      ['spray', '撒 Pin', false],
+      ['erase', '移除 Pin', false],
+      ['spawn', '生成 Jelly', true],
+      ['removeJelly', '移除 Jelly', true],
     ] as const) {
       const option = document.createElement('option');
       option.value = value;
       option.textContent = text;
       option.selected = value === initial;
-      if (value === 'spawn' || value === 'removeJelly') this.sceneToolOptions.push(option);
+      if (lockDuringPlayback) this.playbackLockedToolOptions.push(option);
       select.appendChild(option);
     }
     select.addEventListener('change', () => onChange(select.value as ToolId));

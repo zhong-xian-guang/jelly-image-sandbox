@@ -62,8 +62,16 @@ export function isTap(
   config: GestureConfig,
 ): boolean {
   const heldMs = timeMs - start.startT;
-  const movedPx = Math.hypot(screenX - start.startX, screenY - start.startY);
-  return heldMs <= config.tapMaxMs && movedPx <= config.tapMaxDist;
+  return heldMs <= config.tapMaxMs && movedFromStart(start, screenX, screenY) <= config.tapMaxDist;
+}
+
+/**
+ * 這次手勢從按下處移動了多少**螢幕** CSS px（issue #97 抽出）——`isTap` 與
+ * `ToolRouter` 的「點一下」工具共用同一把尺，兩邊對「算不算動過」才不會各有
+ * 一套算法。同 `isTap`：只比 down／目前這兩點，不累計路徑長度。
+ */
+export function movedFromStart(start: GestureStart, screenX: number, screenY: number): number {
+  return Math.hypot(screenX - start.startX, screenY - start.startY);
 }
 
 export interface GestureTrackerOptions {

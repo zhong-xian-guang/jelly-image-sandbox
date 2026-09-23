@@ -144,6 +144,7 @@ import {
   worldToScreen,
 } from '../camera';
 import {
+  type ClickToolId,
   type FanParams,
   type ToolId,
   DEFAULT_FAN_FALLOFF_EXPONENT,
@@ -224,7 +225,13 @@ import {
   tracksInEnabledGroups,
   withGroupInvariant,
 } from './track';
-import { BOUNDARY_FRICTION, computeFloorY, computeWalledBounds } from './boundaryGeometry';
+import {
+  BOUNDARY_FRICTION,
+  computeFloorY,
+  computeWalledBounds,
+  fitsInBoundaryFrame,
+  placeBboxCentered,
+} from './boundaryGeometry';
 
 /** 相機平滑用的單幀時距上限（分頁切回來不會讓相機瞬移）。 */
 const CAMERA_MAX_DT = 0.1;
@@ -1369,7 +1376,7 @@ export class JellySandbox {
     if (!point) return false;
     const world = screenToWorld(this.cameraState.transform, this.canvasSize(), point.x, point.y);
     const plan = this.spawnPlan(world);
-    return plan === null || !this.fitsInBoundary(plan.bbox);
+    return plan === null || !fitsInBoundaryFrame(this.boundaryFrame, plan.bbox);
   }
 
   /**
@@ -1708,13 +1715,13 @@ export class JellySandbox {
       throw err;
     }
     this.nextSourceNum++;
-    const bb = positionsBbox(mesh.positions);
-    const center = { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
-    this.spawnJelly(sourceId, meshParams, importSize, {
-      x: this.cameraState.transform.x - center.x,
-      y: this.cameraState.transform.y - center.y,
+    const camera = this.cameraState.transform;
+    const { offset } = placeBboxCentered(positionsBbox(mesh.positions), {
+      x: camera.x,
+      y: camera.y,
     });
-    if (!this.trackRecorder.isRecording) this.world.setScene(this.world.sceneSnapshot());
+    this.spawnJelly(sourceId, meshParams, importSize, offset);
+    this.commitSceneUnlessRecording();
   }
 
   /**
@@ -1733,6 +1740,31 @@ export class JellySandbox {
   }
 
   /**
+   * 「點一下」工具（`ToolRouter` 的 `onClickTool`）的分派口（issue #97）——播放中
+   * 一律不作用：面板那兩個選項這時是灰的，但工具本身可能在播放開始前就選著了，
+   * 而 Scene 快照不該把 Track 正在播、播完就消失的塊收進去（同 `importImage` 先停
+   * 播放的理由）。
+   */
+  private runClickTool(tool: ClickToolId, world: Point): void {
+    if (this.playbackLocked) {
+      this.showNotice('播放中不能生成或移除果凍——先按「停止／重設」');
+      return;
+    }
+    if (tool === 'spawn') this.spawnAt(world);
+    else this.removeJellyAt(world);
+  }
+
+  /**
+   * 剛剛那個動作要不要變成佈景的一部分（issue #97 收攏匯入／生成／移除三處；
+   * ADR-0013）：不在錄製中 → 拍成新的 Scene（`停止／重設` 後還在）；錄製中 → 不動
+   * Scene，那筆事件已經由 `dispatchInput` 錄進 Action Track（播到那步才發生、重設
+   * 後不存在）。
+   */
+  private commitSceneUnlessRecording(): void {
+    if (!this.trackRecorder.isRecording) this.world.setScene(this.world.sceneSnapshot());
+  }
+
+  /**
    * 「生成 Jelly」工具點一下畫布（issue #97 / V3 T3-4；ADR-0013）：以點擊處為中心
    * 放下一塊——圖 = 最近一次匯入的那張（見 `sourceForSpawn`），尺寸與密度 = 當下
    * 兩條拉霸（跟匯入走同一組「下一次」的意圖）。放不下（超出 Walled 範圍／掉到
@@ -1747,21 +1779,17 @@ export class JellySandbox {
    * Scene 快照不該把 Track 正在播、播完就消失的塊收進去。
    */
   private spawnAt(world: Point): void {
-    if (this.playbackLocked) {
-      this.showNotice('播放中不能生成果凍——先按「停止／重設」');
-      return;
-    }
     const plan = this.spawnPlan(world);
     if (!plan) {
       this.showNotice('生成失敗，這張來源圖建不出果凍');
       return;
     }
-    if (!this.fitsInBoundary(plan.bbox)) {
+    if (!fitsInBoundaryFrame(this.boundaryFrame, plan.bbox)) {
       this.showNotice('這裡放不下——超出桌面範圍了');
       return;
     }
     this.spawnJelly(plan.sourceId, plan.meshParams, plan.importSize, plan.offset);
-    if (!this.trackRecorder.isRecording) this.world.setScene(this.world.sceneSnapshot());
+    this.commitSceneUnlessRecording();
   }
 
   /**
@@ -1772,14 +1800,10 @@ export class JellySandbox {
    * 同 `spawnAt`。
    */
   private removeJellyAt(world: Point): void {
-    if (this.playbackLocked) {
-      this.showNotice('播放中不能移除果凍——先按「停止／重設」');
-      return;
-    }
     const hit = this.world.pick(world.x, world.y);
     if (!hit) return;
     this.dispatchInput({ type: 'remove', jellyId: hit.jellyId });
-    if (!this.trackRecorder.isRecording) this.world.setScene(this.world.sceneSnapshot());
+    this.commitSceneUnlessRecording();
   }
 
   /**
@@ -1800,22 +1824,7 @@ export class JellySandbox {
     const sourceId = this.sourceForSpawn();
     const rest = this.spawnMeshBbox(sourceId, meshParams, importSize);
     if (!rest) return null;
-    const offset = {
-      x: world.x - (rest.minX + rest.maxX) / 2,
-      y: world.y - (rest.minY + rest.maxY) / 2,
-    };
-    return {
-      sourceId,
-      meshParams,
-      importSize,
-      offset,
-      bbox: {
-        minX: rest.minX + offset.x,
-        minY: rest.minY + offset.y,
-        maxX: rest.maxX + offset.x,
-        maxY: rest.maxY + offset.y,
-      },
-    };
+    return { sourceId, meshParams, importSize, ...placeBboxCentered(rest, world) };
   }
 
   /** 這組生成參數的 rest 網格 bbox（issue #97）；建不出來記 `null`，見 `spawnBboxMemo`。 */
@@ -1851,26 +1860,6 @@ export class JellySandbox {
     if (latest !== null) return latest;
     this.registerDefaultSource();
     return DEFAULT_SOURCE_ID;
-  }
-
-  /**
-   * 放下後這塊整個在桌面範圍內嗎（issue #97 驗收條件：以「放下後 bbox 是否完全在
-   * 範圍內」判定）——Walled 要完全在箱內、Floor 不能有任何一點在地板下方（世界 y
-   * 向下，地板是 `maxY` 的上限）、Infinite 不檢查。判定吃的是畫出來的外框
-   * （`boundaryFrame`），使用者看到的界線跟判定用的是同一條。
-   */
-  private fitsInBoundary(bbox: Bbox): boolean {
-    const frame = this.boundaryFrame;
-    if (!frame) return true;
-    if (frame.kind === 'walled') {
-      return (
-        bbox.minX >= frame.minX &&
-        bbox.maxX <= frame.maxX &&
-        bbox.minY >= frame.minY &&
-        bbox.maxY <= frame.maxY
-      );
-    }
-    return bbox.maxY <= frame.y;
   }
 
   /**
@@ -2099,8 +2088,7 @@ export class JellySandbox {
       listPins: () => this.world.listPins(),
       // 生成／移除 Jelly 兩個工具（issue #97）只回報「在這裡點了一下」，該放哪張圖、
       // 該移除哪一塊由沙盒自己決定（見 `spawnAt`／`removeJellyAt`）。
-      onSpawn: (world) => this.spawnAt(world),
-      onRemoveJelly: (world) => this.removeJellyAt(world),
+      onClickTool: (tool, world) => this.runClickTool(tool, world),
       applyInput: (event) => {
         const routed = routeForPinMode(event, this.pinModeActive, this.pinModeContext());
         if (routed) this.dispatchInput(routed); // 進 World + no-op 除非正在錄製（issue #29）

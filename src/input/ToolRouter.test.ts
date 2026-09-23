@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mulberry32 } from '../mesh';
 import type { FanState, InputEvent, Point } from '../sim';
 import {
+  CLICK_TOOL_IDS,
   DEFAULT_FAN_FALLOFF_EXPONENT,
   DEFAULT_FAN_FREQUENCY,
   DEFAULT_FAN_STRENGTH,
@@ -1166,8 +1167,7 @@ describe('ToolRouter — 生成 Jelly／移除 Jelly（issue #97 / V3 T3-4）', 
     const spawned: Point[] = [];
     const removed: Point[] = [];
     const { router, events } = makeRouter(undefined, undefined, {
-      onSpawn: (world) => spawned.push(world),
-      onRemoveJelly: (world) => removed.push(world),
+      onClickTool: (tool, world) => (tool === 'spawn' ? spawned : removed).push(world),
     });
     return { router, events, spawned, removed };
   }
@@ -1266,6 +1266,47 @@ describe('ToolRouter — 生成 Jelly／移除 Jelly（issue #97 / V3 T3-4）', 
     router.up(1, 0, 0, 100);
     expect(spawned).toEqual([{ x: 1000, y: 1000 }]);
     expect(removed).toEqual([]);
+  });
+
+  // 按住途中切到「一般操作」這類完全不同的工具也一樣：進行中的點一下手勢在
+  // `move`／`up`／`cancel` 都先於 `activeTool` 分支處理，不會被別的工具吃掉。
+  it('按住途中切到一般操作 → 放開時仍完成這次點一下，且不留殘餘 session', () => {
+    const { router, spawned, events } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 20, 30, 0);
+    router.setActiveTool('general');
+    router.up(1, 20, 30, 100);
+    expect(spawned).toEqual([{ x: 1020, y: 1030 }]);
+    expect(events).toEqual([]); // 沒有被當成一般操作的 Grab/Tap
+
+    // session 已清掉：接下來的一般操作是乾淨的一次 Grab。
+    router.down(2, 0, 0, 200);
+    router.up(2, 0, 0, 1000);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'release']);
+    expect(spawned).toHaveLength(1);
+  });
+
+  it('按住途中切到一般操作、期間拖曳 → 仍判定為拖曳，不生成', () => {
+    const { router, spawned } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 0, 0, 0);
+    router.setActiveTool('general');
+    router.move(1, 50, 0);
+    router.up(1, 50, 0, 200);
+    expect(spawned).toEqual([]);
+  });
+
+  it('按住途中切走工具後 cancel → 不觸發回呼', () => {
+    const { router, spawned } = makeClickTools();
+    router.setActiveTool('spawn');
+    router.down(1, 0, 0, 0);
+    router.setActiveTool('fan');
+    router.cancel(1);
+    expect(spawned).toEqual([]);
+  });
+
+  it('CLICK_TOOL_IDS 就是會走這條手勢的工具清單', () => {
+    expect([...CLICK_TOOL_IDS]).toEqual(['spawn', 'removeJelly']);
   });
 
   it('沒有注入回呼（未接線）→ 點一下什麼都不做，不爆炸', () => {

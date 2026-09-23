@@ -7,10 +7,16 @@
  *   有限大小的桌面，牆壁會擋住 Jelly」）。
  * - **Floor**：地板貼齊 bbox 底邊，切過去 Jelly 就已經站在地板上。
  *
+ * issue #97 追加「生成 Jelly」工具要的兩件純幾何：`placeBboxCentered`（以某點為
+ * 中心擺一塊的位移與擺完的 bbox）與 `fitsInBoundaryFrame`（擺完的 bbox 在不在桌面
+ * 範圍內）。放這裡而不是 `JellySandbox`：跟上面兩支同一類——只吃 bbox、沒有 DOM、
+ * 單元測試直接跑。
+ *
  * 純函式、只依賴呼叫端傳入的 bbox，方便單元測試——DOM／求解器接線在 `JellySandbox`。
  */
 
-import type { Bbox } from '../sim';
+import type { BoundaryFrame } from '../render';
+import type { Bbox, Point } from '../sim';
 
 /** Walled 範圍邊長 = Jelly bbox 較長邊 × 此係數，未指定 `sizeFactor` 時的預設值。 */
 export const WALLED_SIZE_FACTOR = 4;
@@ -43,4 +49,44 @@ export function computeWalledBounds(bbox: Bbox, sizeFactor = WALLED_SIZE_FACTOR)
  */
 export function computeFloorY(bbox: Bbox): number {
   return bbox.maxY;
+}
+
+/**
+ * 把一塊 rest 網格的 bbox 擺到以 `center` 為中心的位置（issue #97）：回傳要加在
+ * 每個頂點上的 `offset`（= 中心點 − bbox 中心），以及擺完之後的世界座標 bbox。
+ * 「生成 Jelly」點哪裡就以那裡為中心、匯入則以相機對準處為中心，用的是同一套算法。
+ */
+export function placeBboxCentered(rest: Bbox, center: Point): { offset: Point; bbox: Bbox } {
+  const offset = {
+    x: center.x - (rest.minX + rest.maxX) / 2,
+    y: center.y - (rest.minY + rest.maxY) / 2,
+  };
+  return {
+    offset,
+    bbox: {
+      minX: rest.minX + offset.x,
+      minY: rest.minY + offset.y,
+      maxX: rest.maxX + offset.x,
+      maxY: rest.maxY + offset.y,
+    },
+  };
+}
+
+/**
+ * 這個 bbox 整個在桌面範圍內嗎（issue #97；ADR-0013：範圍外拒絕生成，不 clamp、
+ * 不撐大範圍）——Walled 要完全在箱內、Floor 不能有任何一點在地板下方（世界 y 向
+ * 下，地板是 `maxY` 的上限）、`null`（Infinite）不檢查。吃的是畫出來的外框
+ * `BoundaryFrame`，使用者看到的界線跟判定用的是同一條。
+ */
+export function fitsInBoundaryFrame(frame: BoundaryFrame | null, bbox: Bbox): boolean {
+  if (!frame) return true;
+  if (frame.kind === 'walled') {
+    return (
+      bbox.minX >= frame.minX &&
+      bbox.maxX <= frame.maxX &&
+      bbox.minY >= frame.minY &&
+      bbox.maxY <= frame.maxY
+    );
+  }
+  return bbox.maxY <= frame.y;
 }
