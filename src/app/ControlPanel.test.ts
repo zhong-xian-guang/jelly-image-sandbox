@@ -27,7 +27,6 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       softness: 0.5,
       tapStrength: 6000,
       gravity: 0,
-      pinMode: false,
       showPins: true,
       followLocked: false,
       showWireframe: false,
@@ -89,7 +88,6 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onSoftnessChange: vi.fn(),
     onTapStrengthChange: vi.fn(),
     onGravityChange: vi.fn(),
-    onPinModeChange: vi.fn(),
     onClearPins: vi.fn(),
     onShowPinsChange: vi.fn(),
     onFollowLockChange: vi.fn(),
@@ -603,6 +601,7 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
     expect(select.value).toBe('general');
     expect([...select.options].map((o) => o.value)).toEqual([
       'general',
+      'pin',
       'handfulGrab',
       'fan',
       'formation',
@@ -688,18 +687,11 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
   });
 });
 
-describe('ControlPanel — 切到非一般操作的工具時鎖住 Pin 控制項（issue #67 事後檢視追加）', () => {
+describe('ControlPanel — Pin 工具取代「Pin 模式」勾選框（issue #115；ADR-0015）', () => {
   function findToolSelect(panel: ControlPanel): HTMLSelectElement {
     return [...panel.element.querySelectorAll('select')].find((s) =>
-      s.querySelector('option[value="fan"]'),
+      s.querySelector('option[value="pin"]'),
     ) as HTMLSelectElement;
-  }
-
-  function pinCheckbox(panel: ControlPanel): HTMLInputElement {
-    const label = [...panel.element.querySelectorAll('label')].find((l) =>
-      l.textContent?.includes('Pin 模式'),
-    );
-    return label!.querySelector('input[type=checkbox]') as HTMLInputElement;
   }
 
   function clearPinsButton(panel: ControlPanel): HTMLButtonElement {
@@ -708,90 +700,47 @@ describe('ControlPanel — 切到非一般操作的工具時鎖住 Pin 控制項
     ) as HTMLButtonElement;
   }
 
-  function toolLockHint(panel: ControlPanel): HTMLElement {
-    return [...panel.element.querySelectorAll('.jelly-control-hint')].find((el) =>
-      el.textContent?.includes('Pin 暫時無法使用'),
-    ) as HTMLElement;
-  }
-
-  it('初始為「一般操作」→ Pin 控制項可用、提示隱藏', () => {
+  it('面板上不再有「Pin 模式」勾選框，也沒有「Pin 暫時無法使用」提示', () => {
     const panel = new ControlPanel(makeOptions());
-    expect(pinCheckbox(panel).disabled).toBe(false);
-    expect(clearPinsButton(panel).disabled).toBe(false);
-    expect(toolLockHint(panel).hidden).toBe(true);
+    expect(panel.element.textContent).not.toContain('Pin 模式');
+    expect(panel.element.textContent).not.toContain('Pin 暫時無法使用');
   });
 
-  it('切到「電風扇」→ Pin 模式勾選框／清除所有 Pin 都鎖住、提示顯示', () => {
-    const panel = new ControlPanel(makeOptions());
+  it('工具選擇器有「Pin」選項，切過去 → onToolChange 收到 "pin"', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
     const select = findToolSelect(panel);
+    expect(select.querySelector('option[value="pin"]')!.textContent).toBe('Pin');
 
+    select.value = 'pin';
+    select.dispatchEvent(new Event('change'));
+    expect(opts.onToolChange).toHaveBeenCalledWith('pin');
+  });
+
+  it('「清除所有 Pin」不受目前工具影響（切到電風扇仍可用）', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const select = findToolSelect(panel);
     select.value = 'fan';
     select.dispatchEvent(new Event('change'));
 
-    expect(pinCheckbox(panel).disabled).toBe(true);
-    expect(clearPinsButton(panel).disabled).toBe(true);
-    expect(toolLockHint(panel).hidden).toBe(false);
-  });
-
-  it('切回「一般操作」→ 解鎖、提示重新隱藏，且不強制取消勾選 Pin 模式', () => {
-    const panel = new ControlPanel(
-      makeOptions({ initial: { ...makeOptions().initial, pinMode: true } }),
-    );
-    const select = findToolSelect(panel);
-
-    select.value = 'fan';
-    select.dispatchEvent(new Event('change'));
-    select.value = 'general';
-    select.dispatchEvent(new Event('change'));
-
-    expect(pinCheckbox(panel).disabled).toBe(false);
     expect(clearPinsButton(panel).disabled).toBe(false);
-    expect(toolLockHint(panel).hidden).toBe(true);
-    expect(pinCheckbox(panel).checked).toBe(true); // 鎖住期間沒被強制取消勾選
+    clearPinsButton(panel).click();
+    expect(opts.onClearPins).toHaveBeenCalled();
   });
 
-  // issue #68 事後檢視：Pin 模式在非一般操作工具下其實不生效（見
-  // `JellySandbox.pinModeActive`），所以「作用中」的強調色也要跟著熄掉，
-  // 不然會跟旁邊「Pin 暫時無法使用」的提示自相矛盾。
-  it('Pin 模式勾著時切到別的工具 → 「作用中」強調色熄掉；切回一般操作 → 恢復', () => {
-    const panel = new ControlPanel(
-      makeOptions({ initial: { ...makeOptions().initial, pinMode: true } }),
-    );
-    const select = findToolSelect(panel);
-    const label = () =>
-      [...panel.element.querySelectorAll('label')].find((l) =>
-        l.textContent?.includes('Pin 模式'),
-      ) as HTMLElement;
-
-    expect(label().classList.contains('jelly-pin-mode-active')).toBe(true);
-
-    select.value = 'formation';
-    select.dispatchEvent(new Event('change'));
-    expect(label().classList.contains('jelly-pin-mode-active')).toBe(false);
-    expect(pinCheckbox(panel).checked).toBe(true); // 勾選狀態本身不動
-
-    select.value = 'general';
-    select.dispatchEvent(new Event('change'));
-    expect(label().classList.contains('jelly-pin-mode-active')).toBe(true);
-  });
-
-  it('「顯示 Pin」關閉時切回「一般操作」——兩個鎖住理由是 OR，顯示 Pin 這個理由仍生效', () => {
+  it('「顯示 Pin」關閉 → 「清除所有 Pin」鎖住（所見即所得）；打開 → 解鎖', () => {
     const panel = new ControlPanel(
       makeOptions({ initial: { ...makeOptions().initial, showPins: false } }),
     );
-    const select = findToolSelect(panel);
+    expect(clearPinsButton(panel).disabled).toBe(true);
 
-    // 一開始就因為「顯示 Pin」關閉而鎖住。
-    expect(pinCheckbox(panel).disabled).toBe(true);
-
-    select.value = 'fan';
-    select.dispatchEvent(new Event('change'));
-    select.value = 'general';
-    select.dispatchEvent(new Event('change'));
-
-    // 切回一般操作只解除「工具」這個鎖住理由，「顯示 Pin」關閉仍鎖著。
-    expect(pinCheckbox(panel).disabled).toBe(true);
-    expect(toolLockHint(panel).hidden).toBe(true); // 提示只跟「工具」理由掛勾，不會誤植成顯示 Pin 的理由
+    const showPins = [...panel.element.querySelectorAll('label')]
+      .find((l) => l.textContent?.includes('顯示 Pin'))!
+      .querySelector('input[type=checkbox]') as HTMLInputElement;
+    showPins.checked = true;
+    showPins.dispatchEvent(new Event('change'));
+    expect(clearPinsButton(panel).disabled).toBe(false);
   });
 });
 
@@ -1100,18 +1049,6 @@ describe('ControlPanel — 撒 Pin 控制項（issue #69 / V2 T3-5）', () => {
     input.dispatchEvent(new Event('input'));
     expect(opts.onSpraySpacingChange).toHaveBeenCalledWith(20);
   });
-
-  it('切到「撒 Pin」→ Pin 控制項一併鎖住（畫布手勢已被這個工具接管）', () => {
-    const panel = new ControlPanel(makeOptions());
-    const select = findToolSelect(panel);
-    select.value = 'spray';
-    select.dispatchEvent(new Event('change'));
-
-    const pinCheckbox = [...panel.element.querySelectorAll('label')]
-      .find((l) => l.textContent?.includes('Pin 模式'))
-      ?.querySelector('input[type=checkbox]') as HTMLInputElement;
-    expect(pinCheckbox.disabled).toBe(true);
-  });
 });
 
 describe('ControlPanel — 移除 Pin 控制項（issue #70 / V2 T3-6）', () => {
@@ -1165,18 +1102,6 @@ describe('ControlPanel — 移除 Pin 控制項（issue #70 / V2 T3-6）', () =>
     expect(opts.onEraseRadiusChange).toHaveBeenCalledWith(200);
     expect(opts.onSprayRadiusChange).not.toHaveBeenCalled();
     expect(Number(sprayInput.value)).toBe(opts.initial.sprayRadius);
-  });
-
-  it('切到「移除 Pin」→ Pin 控制項一併鎖住（畫布手勢已被這個工具接管）', () => {
-    const panel = new ControlPanel(makeOptions());
-    const select = findToolSelect(panel);
-    select.value = 'erase';
-    select.dispatchEvent(new Event('change'));
-
-    const pinCheckbox = [...panel.element.querySelectorAll('label')]
-      .find((l) => l.textContent?.includes('Pin 模式'))
-      ?.querySelector('input[type=checkbox]') as HTMLInputElement;
-    expect(pinCheckbox.disabled).toBe(true);
   });
 });
 

@@ -4,9 +4,12 @@
  * issue #68 / V2 T3-4 加上第二個：編隊抓取。
  *
  * ADR-0011：「目前工具」選擇器只涵蓋新增的沙盒工具（電風扇／編隊抓取／撒
- * Pin／移除 Pin），Grab／Pin／Tap 三個既有操作維持純手勢辨識、不進選擇器。
- * `'general'` 下 `down`/`move`/`up`/`cancel` 原封不動委派給內部持有的
- * `GestureTracker`，不修改 `GestureTracker` 本身。後續三個工具會在這裡加上
+ * Pin／移除 Pin），Grab／Tap 維持純手勢辨識、不進選擇器（Pin 原本也在此列，
+ * ADR-0015 / issue #115 把它移進選擇器）。
+ * `'general'` 與 `'pin'` 下 `down`/`move`/`up`/`cancel` 原封不動委派給內部持有的
+ * `GestureTracker`，不修改 `GestureTracker` 本身——Pin 工具的手勢跟一般操作一模
+ * 一樣，把 `grab` 換成 `pin`/`unpin`、丟掉 `tap` 是呼叫端 `routeForPinTool` 的事
+ * （那邊要讀場上的 Pin 與隨相機縮放的移除半徑）。後續三個工具會在這裡加上
  * 對應的 `ToolId` 分支。
  *
  * **編隊抓取**（issue #68）：兩個子狀態，`beginFormationDefine()`／
@@ -135,11 +138,12 @@ import {
 /**
  * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）、
  * `'erase'`（issue #70，＝「移除 Pin」）、`'spawn'`／`'removeJelly'`（issue #97）、
- * `'rebuildJelly'`（issue #98）、`'handfulGrab'`（issue #113）加進 ADR-0011 選擇器；
- * `'general'` 維持既有 Grab/Pin/Tap 手勢。
+ * `'rebuildJelly'`（issue #98）、`'handfulGrab'`（issue #113）、`'pin'`（issue #115；
+ * ADR-0015）加進 ADR-0011 選擇器；`'general'` 維持既有 Grab/Tap 手勢。
  */
 export type ToolId =
   | 'general'
+  | 'pin'
   | 'handfulGrab'
   | 'fan'
   | 'formation'
@@ -165,6 +169,11 @@ function isClickTool(tool: ToolId): tool is ClickToolId {
 }
 
 export const DEFAULT_TOOL: ToolId = 'general';
+
+/** 手勢直接交給 `GestureTracker` 的工具——一般操作與 Pin（issue #115，見類別頂端說明）。 */
+function usesGestureTracker(tool: ToolId): boolean {
+  return tool === 'general' || tool === 'pin';
+}
 
 /** 電風扇矩形的初始預設值（issue #66）——`setFanParams`（issue #67）可在執行期間覆寫。 */
 export const DEFAULT_FAN_WIDTH = 150;
@@ -576,7 +585,7 @@ export class ToolRouter {
   }
 
   down(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
-    if (this.activeTool === 'general') {
+    if (usesGestureTracker(this.activeTool)) {
       this.gestureTracker.down(id, screenX, screenY, timeMs);
       return;
     }
@@ -689,7 +698,7 @@ export class ToolRouter {
       this.emit({ type: 'moveGrab', id, x: world.x, y: world.y });
       return;
     }
-    if (this.activeTool === 'general') {
+    if (usesGestureTracker(this.activeTool)) {
       this.gestureTracker.move(id, screenX, screenY);
       return;
     }
@@ -753,7 +762,7 @@ export class ToolRouter {
       this.emit({ type: 'release', id });
       return;
     }
-    if (this.activeTool === 'general') {
+    if (usesGestureTracker(this.activeTool)) {
       this.gestureTracker.up(id, screenX, screenY, timeMs);
       return;
     }
@@ -793,7 +802,7 @@ export class ToolRouter {
       this.emit({ type: 'release', id });
       return;
     }
-    if (this.activeTool === 'general') {
+    if (usesGestureTracker(this.activeTool)) {
       this.gestureTracker.cancel(id);
       return;
     }
