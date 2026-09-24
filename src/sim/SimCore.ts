@@ -34,9 +34,9 @@
  *      翻正——不取絕對值）。compliant projection、1 iteration、`α̃ = compliance/h²`。
  *   5. Grab / Pin 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心
  *      權重分回三個 Particle（ADR-0003）。Pin = 目標點凍結、β 恆 1 的 Grab
- *      （ADR-0004）。大把抓取（issue #113；ADR-0014）＝一條約束 N 個附著項，圈內每顆
- *      各自拉向「目標 + 按下時的偏移」、硬度依距離衰減。多條依序解、每 substep 一次；孤立 Pin 逐幀看幾乎不動，
- *      共用 Particle 的密集 Pin 群仍會被下一 substep 的 shape matching 微擾。
+ *      （ADR-0004）。大把抓取（issue #113；ADR-0014）＝一條約束 N 個附著項，圈內
+ *      每顆各自拉向「目標 + 按下時的偏移」、硬度依距離衰減。多條依序解、每 substep
+ *      一次；孤立 Pin 逐幀看幾乎不動，共用 Particle 的密集 Pin 群仍會被下一 substep 的 shape matching 微擾。
  *      陣風觸發時對已 Pin 住的 Particle 一樣會把衝量烤進 `vel`、預測也照常積分，但
  *      這一步會把位置拉回鎖定點——附著點因此仍不動，力學上不需要另外特例判斷。
  *   6. Boundary（`setBoundary`，可換）：clamp 進 Walled AABB／Floor 地板以上／Infinite no-op。
@@ -99,6 +99,16 @@ interface Constraint {
   target: Point;
   pinned: boolean;
   handful: boolean;
+}
+
+/** `pick` 命中結果的防禦性複本（呼叫端不該拿到求解器內部陣列的參照，反之亦然）。 */
+function copySurfacePoint(hit: SurfacePoint): SurfacePoint {
+  return { tri: [hit.tri[0], hit.tri[1], hit.tri[2]], w: [hit.w[0], hit.w[1], hit.w[2]] };
+}
+
+/** 「就是第 `i` 顆 Particle」的表面點：三個頂點都是它、重心權重 `(1, 0, 0)`。 */
+function particlePoint(i: number): SurfacePoint {
+  return { tri: [i, i, i], w: [1, 0, 0] };
 }
 
 /** 單點附著（單點 Grab／Pin）：一條約束只有 `anchor` 本身這一項。 */
@@ -630,10 +640,7 @@ export class SimCore {
   private doGrab(id: PointerId, x: number, y: number, radius: number): boolean {
     const hit = this.pick(x, y);
     if (hit) {
-      const anchor: SurfacePoint = {
-        tri: [hit.tri[0], hit.tri[1], hit.tri[2]],
-        w: [hit.w[0], hit.w[1], hit.w[2]],
-      };
+      const anchor = copySurfacePoint(hit);
       this.constraints.set(id, {
         anchor,
         attachments: singleAttachment(anchor),
@@ -655,7 +662,7 @@ export class SimCore {
       }
     }
     if (best < 0) return false;
-    const anchor: SurfacePoint = { tri: [best, best, best], w: [1, 0, 0] };
+    const anchor = particlePoint(best);
     this.constraints.set(id, {
       anchor,
       attachments: singleAttachment(anchor),
@@ -683,13 +690,7 @@ export class SimCore {
       const d = Math.hypot(dx, dy);
       if (!(d < radius)) continue;
       const f = 1 - d / radius;
-      attachments.push({
-        tri: [i, i, i],
-        w: [1, 0, 0],
-        offsetX: dx,
-        offsetY: dy,
-        stiffness: f * f,
-      });
+      attachments.push({ ...particlePoint(i), offsetX: dx, offsetY: dy, stiffness: f * f });
       if (d < nearestD) {
         nearestD = d;
         nearest = i;
@@ -697,9 +698,7 @@ export class SimCore {
     }
     if (nearest < 0) return false;
     const hit = this.pick(x, y);
-    const anchor: SurfacePoint = hit
-      ? { tri: [hit.tri[0], hit.tri[1], hit.tri[2]], w: [hit.w[0], hit.w[1], hit.w[2]] }
-      : { tri: [nearest, nearest, nearest], w: [1, 0, 0] };
+    const anchor = hit ? copySurfacePoint(hit) : particlePoint(nearest);
     this.constraints.set(id, {
       anchor,
       attachments,

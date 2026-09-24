@@ -1435,7 +1435,6 @@ describe('ToolRouter — 大把抓取（issue #113 / V3 T4-1；ADR-0014）', () 
     events.length = 0;
     router.down(2, 0, 0, 100);
     expect(events[0]).toEqual({ type: 'grab', id: 2, x: 1000, y: 1000, handfulRadius: 300 });
-    expect(router.handfulRadius).toBe(300);
   });
 
   it('按在 Jelly 外（hitTest 否）→ 不追這個指標、不 emit（背景拖曳歸相機）', () => {

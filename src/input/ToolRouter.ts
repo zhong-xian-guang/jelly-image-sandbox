@@ -83,7 +83,7 @@
  * Jelly 上才算，同 `hitTest`）→ `grab{handfulRadius}`、`move` → `moveGrab`、`up` →
  * 快速按放（`isTap`，同一組門檻）先送 `tap{radius}`（打在按下點）再 `release`，
  * `cancel` 只 `release`。id 直接用指標 id（`PointerInput` 每次按下都配新的），多指各自
- * 一把。半徑存在 `handfulRadiusValue`（`setHandfulParams`，面板拉霸即時寫入），**按下
+ * 一把。半徑存在 `handfulRadius`（`setHandfulParams`，面板拉霸即時寫入），**按下
  * 當下**拍進 session——之後改半徑只影響下一把。把 N 顆展開的工作不在這裡：輸入層只
  * 送一個 `handfulRadius`，求解器依它決定性地挑出同一把（重播才一致）。進行中的 session
  * 跟「點一下」一樣先於 `activeTool` 分支處理：按住途中切走工具，這一把仍照常跟隨、放開。
@@ -384,7 +384,7 @@ export class ToolRouter {
   /** 進行中的擦除手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly eraseSessions = new Map<PointerId, EraseSession>();
   /** 大把抓取半徑（issue #113）——面板拉霸即時寫入，按下當下拍進 session。 */
-  private handfulRadiusValue = DEFAULT_HANDFUL_RADIUS;
+  private handfulRadius = DEFAULT_HANDFUL_RADIUS;
   /** 進行中的大把抓取手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly handfulSessions = new Map<PointerId, HandfulSession>();
   /** 進行中的「點一下」手勢（issue #97），鍵為指標 `id`（`up`/`cancel` 後移除）。 */
@@ -512,12 +512,7 @@ export class ToolRouter {
 
   /** 面板「大把抓取半徑」拉霸的即時寫入口（issue #113）——只影響**下一次**按下。 */
   setHandfulParams(params: Partial<HandfulParams>): void {
-    if (params.radius !== undefined) this.handfulRadiusValue = params.radius;
-  }
-
-  /** 目前的大把抓取半徑（世界單位）——範圍圈提示讀它。 */
-  get handfulRadius(): number {
-    return this.handfulRadiusValue;
+    if (params.radius !== undefined) this.handfulRadius = params.radius;
   }
 
   get currentTool(): ToolId {
@@ -532,7 +527,7 @@ export class ToolRouter {
     if (this.activeTool === 'handfulGrab') {
       const world = this.screenToWorld(screenX, screenY);
       if (this.hitTest && !this.hitTest(world)) return; // 背景拖曳 → 不歸求解器
-      const radius = this.handfulRadiusValue;
+      const radius = this.handfulRadius;
       this.handfulSessions.set(id, {
         startX: screenX,
         startY: screenY,
