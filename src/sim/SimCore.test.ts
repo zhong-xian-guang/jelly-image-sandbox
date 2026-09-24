@@ -1545,33 +1545,6 @@ describe('SimCore — 側視阻尼只作用在內部運動（issue #106 / V3 T2-
     expect(allFinite(sim.positions)).toBe(true);
   });
 
-  it('gravity > 0：拉扯期間暫停的動量守恆修正，放手後恢復——無摩擦地板上沒有持續的幽靈力（issue #102）', () => {
-    // 拉扯本身會帶一點橫向動量（網格不對稱），無摩擦地板上只剩 airDamping 慢慢吃，
-    // 所以不要求完全不動；要擋的是 #91 的幽靈力——每秒 ~30 單位、不會減速的滑動。
-    const sim = new SimCore(MESH());
-    sim.params.gravity = 2000;
-    sim.setBoundary(new FloorBoundary({ floorY: sim.bbox().maxY, friction: 0 }));
-    run(sim, 30);
-    sim.applyInput({ type: 'grab', id: 'g', x: 48, y: 0 });
-    for (let step = 1; step <= 6; step++) {
-      sim.applyInput({ type: 'moveGrab', id: 'g', x: 48, y: -8 * step });
-      sim.step(1 / 60);
-    }
-    sim.applyInput({ type: 'release', id: 'g' });
-    run(sim, 300); // 5 s
-    const x0 = sim.centroid().x;
-    run(sim, 60);
-    const x1 = sim.centroid().x;
-    run(sim, 120);
-    const x2 = sim.centroid().x;
-    run(sim, 60);
-    const x3 = sim.centroid().x;
-    const early = Math.abs(x1 - x0);
-    const late = Math.abs(x3 - x2);
-    expect(early).toBeLessThan(3);
-    expect(late).toBeLessThanOrEqual(early); // 只會變慢、不會被持續推著走
-  });
-
   it('gravity = 0：airDamping 完全不參與（俯視路徑不變）', () => {
     const play = (airDamping: number): number[] => {
       const sim = new SimCore(MESH());
@@ -1622,51 +1595,85 @@ describe('SimCore — Region 依網格拓撲分組（issue #83）', () => {
     return { x, y };
   }
 
-  it('拉 A 齒尖端，隔著縫隙、網格上不相連的 B 齒尖端不跟著動', () => {
-    const sim = new SimCore(FORK());
-    // 釘住整排叉齒根部（y = 80），排除經底部的正當傳導——剩下的耦合只能來自
-    // 求解器把兩齒放進同一個 Region。
-    for (let x = 0; x <= 96; x += 8) sim.applyInput({ type: 'pin', id: `root${x}`, x, y: 80 });
-    const bTip = sim.pick(56, 0)!;
-    const bBefore = surfacePos(sim, bTip);
-
-    sim.applyInput({ type: 'grab', id: 'a', x: 48, y: 0 });
-    sim.applyInput({ type: 'moveGrab', id: 'a', x: 28, y: -30 });
-    run(sim, 120);
-
-    const a = sim.attachPoint('a')!;
-    const aMoved = Math.hypot(a.x - 48, a.y - 0);
-    expect(aMoved).toBeGreaterThan(30); // 拉得動 A
-
-    const bAfter = surfacePos(sim, bTip);
-    const bMoved = Math.hypot(bAfter.x - bBefore.x, bAfter.y - bBefore.y);
-    // 修前 B 跟著走 ≈ 55%；修後剩下的是兩齒根部經底部那列邊真的相連、落在同一
-    // 格時合法成為一個 Region 的微量耦合（≈ 2%）。
-    expect(bMoved).toBeLessThan(aMoved * 0.05);
-  });
-
-  // issue #102：側視（gravity ≠ 0）的動量守恆修正原本扣「整塊的平均位移」，拉 A 齒的
-  // 淨位移被攤給整塊、隔空把 B 齒反向推走（實測 ≈ 35%）。重力會讓兩齒各自下垂，所以
-  // 跟「同樣重力、沒拉 A」的對照組比 B 齒尖端的位置，差距才是拉 A 造成的耦合。
-  it('側視（gravity ≠ 0）下拉 A 齒，B 齒尖端跟沒拉時的位置幾乎相同', () => {
+  /**
+   * 釘住整排叉齒根部（y = 80），排除經底部的正當傳導——剩下的耦合只能來自求解器。
+   * 同樣條件跑「拉 A」與「不拉」兩次，比 B 齒尖端的位置差：重力會讓兩齒各自下垂，
+   * 對照組扣掉這部分，差距才是拉 A 造成的耦合（g = 0 時對照組就是靜止位置）。
+   */
+  function forkCoupling(
+    gravity: number,
+    by: 'grab' | 'movePin' = 'grab',
+  ): { aMoved: number; bMoved: number } {
     const play = (pull: boolean) => {
       const sim = new SimCore(FORK());
-      sim.params.gravity = 2000;
+      sim.params.gravity = gravity;
       for (let x = 0; x <= 96; x += 8) sim.applyInput({ type: 'pin', id: `root${x}`, x, y: 80 });
       const bTip = sim.pick(56, 0)!;
       if (pull) {
         sim.applyInput({ type: 'grab', id: 'a', x: 48, y: 0 });
-        sim.applyInput({ type: 'moveGrab', id: 'a', x: 28, y: -30 });
+        if (by === 'movePin') sim.applyInput({ type: 'pin', id: 'a' });
+        sim.applyInput({ type: by === 'grab' ? 'moveGrab' : 'movePin', id: 'a', x: 28, y: -30 });
       }
       run(sim, 120);
       return { b: surfacePos(sim, bTip), a: sim.attachPoint('a') };
     };
     const pulled = play(true);
     const still = play(false);
-    const aMoved = Math.hypot(pulled.a!.x - 48, pulled.a!.y - 0);
-    expect(aMoved).toBeGreaterThan(30);
-    const bMoved = Math.hypot(pulled.b.x - still.b.x, pulled.b.y - still.b.y);
+    return {
+      aMoved: Math.hypot(pulled.a!.x - 48, pulled.a!.y - 0),
+      bMoved: Math.hypot(pulled.b.x - still.b.x, pulled.b.y - still.b.y),
+    };
+  }
+
+  it('拉 A 齒尖端，隔著縫隙、網格上不相連的 B 齒尖端不跟著動', () => {
+    const { aMoved, bMoved } = forkCoupling(0);
+    expect(aMoved).toBeGreaterThan(30); // 拉得動 A
+    // 修前 B 跟著走 ≈ 55%；修後剩下的是兩齒根部經底部那列邊真的相連、落在同一
+    // 格時合法成為一個 Region 的微量耦合（≈ 2%）。
     expect(bMoved).toBeLessThan(aMoved * 0.05);
+  });
+
+  // issue #102：側視（gravity ≠ 0）的動量守恆修正扣「整塊的平均位移」，拉 A 齒的淨位移
+  // 被攤給整塊、隔空把 B 齒反向推走（修前 ≈ 35%）。
+  it('側視（gravity ≠ 0）下拉 A 齒，B 齒同樣不跟著動', () => {
+    const { aMoved, bMoved } = forkCoupling(2000);
+    expect(aMoved).toBeGreaterThan(30);
+    expect(bMoved).toBeLessThan(aMoved * 0.05);
+  });
+
+  it('側視下把 A 齒上的 Pin 拖走（movePin），B 齒同樣不跟著動', () => {
+    const { aMoved, bMoved } = forkCoupling(2000, 'movePin');
+    expect(aMoved).toBeGreaterThan(30);
+    expect(bMoved).toBeLessThan(aMoved * 0.05);
+  });
+});
+
+describe('SimCore — 側視動量守恆修正在有 Grab／Pin 時暫停（issue #102）', () => {
+  it('gravity > 0：有 Grab 時暫停的動量守恆修正，放手後恢復——無摩擦地板上沒有持續的幽靈力（issue #102）', () => {
+    // 拉扯本身會帶一點橫向動量（網格不對稱），無摩擦地板上只剩 airDamping 慢慢吃，
+    // 所以不要求完全不動；要擋的是 #91 的幽靈力——每秒 ~30 單位、不會減速的滑動。
+    const sim = new SimCore(MESH());
+    sim.params.gravity = 2000;
+    sim.setBoundary(new FloorBoundary({ floorY: sim.bbox().maxY, friction: 0 }));
+    run(sim, 30);
+    sim.applyInput({ type: 'grab', id: 'g', x: 48, y: 0 });
+    for (let step = 1; step <= 6; step++) {
+      sim.applyInput({ type: 'moveGrab', id: 'g', x: 48, y: -8 * step });
+      sim.step(1 / 60);
+    }
+    sim.applyInput({ type: 'release', id: 'g' });
+    run(sim, 300); // 5 s
+    const x0 = sim.centroid().x;
+    run(sim, 60);
+    const x1 = sim.centroid().x;
+    run(sim, 120);
+    const x2 = sim.centroid().x;
+    run(sim, 60);
+    const x3 = sim.centroid().x;
+    const early = Math.abs(x1 - x0);
+    const late = Math.abs(x3 - x2);
+    expect(early).toBeLessThan(3);
+    expect(late).toBeLessThanOrEqual(early); // 只會變慢、不會被持續推著走
   });
 });
 

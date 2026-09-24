@@ -832,8 +832,9 @@ export class SimCore {
   /** substep 第二段（步驟 3–6）：shape matching → XPBD → Grab/Pin → Boundary。碰撞（V3 T3-3）排在這之後。 */
   solveInternal(h: number): void {
     const gravity = this.params.gravity;
-    // 3. shape-matching 脊椎（有重力、且沒有 Grab 在拉時開動量守恆，見方法說明）。
-    this.solveShapeMatching(this.params.alphaSm, gravity !== 0 && this.grabCount === 0);
+    // 3. shape-matching 脊椎（有重力、且身上沒有任何 Grab／Pin 時開動量守恆，見方法說明）。
+    const conserveMomentum = gravity !== 0 && this.constraints.size === 0;
+    this.solveShapeMatching(this.params.alphaSm, conserveMomentum);
     // 4. XPBD 細節層（疊加；補局部拉伸擠壓的彈性 + 第二道防翻面）。
     if (this.params.xpbd) this.solveXpbd(h);
     // 5. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
@@ -897,13 +898,12 @@ export class SimCore {
    * 不被拉、也不納入），讓 shape matching 這一步的淨平移精確為 0。**只在 `gravity ≠ 0` 時開**：g = 0 走原路徑，每個浮點運算跟以前
    * 完全一樣，舊片段重播結果不變（issue #91 驗收）。
    *
-   * **有 Grab 在拉時也不開**（issue #102）：被拉的那一段在這一步會產生很大的淨位移，
-   * 均勻扣掉等於把它攤給整塊、隔空把網格上不相連的部位反向推走（音叉情境拉 A 齒，
-   * B 齒跟著動 ≈ 35%）。這時使用者的手是任意大小的外力，這點漏差無關緊要；要修的
-   * 幽靈滑動只發生在靜置時，放手之後修正立刻恢復。改成非均勻分攤（逐 Region 在地
-   * 扣回、FastLSM 加權、按位移大小分攤）都實驗過：耦合消得掉，但非均勻的修正會激起
-   * 內部運動，落地後要多花 1–2 s 才靜止，所以不採用。全域開啟（含 g = 0）也因此不做：
-   * 會改掉所有舊片段的重播結果，又沒有要修的現象。
+   * **身上有任何 Grab／Pin 時也不開**（issue #102）：被拉（或 Pin 被拖走）的那一段在
+   * 這一步會產生很大的淨位移，均勻扣掉等於把它攤給整塊、隔空把網格上不相連的部位
+   * 反向推走（音叉情境拉 A 齒，B 齒跟著動 ≈ 35%）。有約束時果凍被手拉著或被釘住，
+   * 本來就不會自由滑走，要修的幽靈滑動只發生在完全自由的靜置；放手／拔掉最後一顆
+   * Pin 之後修正立刻恢復。不改成非均勻分攤、也不全域開啟的理由見設計文件 substep
+   * 步驟 2。
    */
   private solveShapeMatching(alphaSm: number, conserveMomentum: boolean): void {
     this.goalX.fill(0);
