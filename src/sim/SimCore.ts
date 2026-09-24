@@ -71,16 +71,38 @@ import {
 } from './types';
 
 /**
- * 一條作用中的位置約束（設計文件步驟 4：「Grab / Pin / Multi-grab 位置約束」）。
- * 附著點 = 三角形 `tri` 上的重心座標 `w`，每 substep 拉向 `target`。
- * `pinned` = false 是 Grab（`target` 跟指標更新、硬度用 `params.grabBeta`）；
- * `pinned` = true 是 Pin（`target` 凍結、β 恆為 1，見 ADR-0004）。
+ * 約束的一個附著項：三角形 `tri` 上的重心座標 `w`，拉向「約束目標 + `offset`」，
+ * 硬度 = 約束的 β × `stiffness`。單點 Grab／Pin 只有一項（`offset` 0、`stiffness` 1，
+ * ADR-0003）；大把抓取每顆圈內 Particle 各一項（`tri` 三個都是那顆、`w = (1, 0, 0)`，
+ * `offset` = 按下當下相對按下點的位移、`stiffness` 依距離衰減，ADR-0014）。
  */
-interface Constraint {
+interface Attachment {
   tri: readonly [number, number, number];
   w: readonly [number, number, number];
+  offsetX: number;
+  offsetY: number;
+  stiffness: number;
+}
+
+/**
+ * 一條作用中的位置約束（設計文件步驟 4：「Grab / Pin / Multi-grab 位置約束」）。
+ * `attachments` 每項每 substep 拉向 `target + offset`；`anchor` 是對外回報的附著點
+ * （`attachPoint`／`restAttachPoint`／`listPins`）——單點時就是唯一那一項，大把抓取
+ * 時是按下點（整把的中心）。`pinned` = false 是 Grab（`target` 跟指標更新、硬度用
+ * `params.grabBeta`）；`pinned` = true 是 Pin（`target` 凍結、β 恆為 1，見 ADR-0004）。
+ * `handful` = 大把抓取（ADR-0014），不支援就地轉 Pin。
+ */
+interface Constraint {
+  anchor: SurfacePoint;
+  attachments: Attachment[];
   target: Point;
   pinned: boolean;
+  handful: boolean;
+}
+
+/** 單點附著（單點 Grab／Pin）：一條約束只有 `anchor` 本身這一項。 */
+function singleAttachment(anchor: SurfacePoint): Attachment[] {
+  return [{ tri: anchor.tri, w: anchor.w, offsetX: 0, offsetY: 0, stiffness: 1 }];
 }
 
 /** 一個 shape-matching Region：成員 Particle 索引 + 其相對 Region 靜止質心的座標。 */
@@ -393,7 +415,7 @@ export class SimCore {
         const c = this.constraints.get(event.id);
         if (c && !c.pinned) {
           // 就地凍結：目標點移到目前附著點 → 不跳動。已是 Pin 則不動它。
-          const a = this.weightedPoint(c);
+          const a = this.weightedPoint(c.anchor);
           c.target.x = a.x;
           c.target.y = a.y;
           c.pinned = true;
@@ -494,7 +516,7 @@ export class SimCore {
   attachPoint(id: PointerId): Point | null {
     const c = this.constraints.get(id);
     if (!c) return null;
-    return this.weightedPoint(c);
+    return this.weightedPoint(c.anchor);
   }
 
   /**
@@ -507,7 +529,7 @@ export class SimCore {
   restAttachPoint(id: PointerId): Point | null {
     const c = this.constraints.get(id);
     if (!c) return null;
-    return this.weightedPoint(c, this.rest);
+    return this.weightedPoint(c.anchor, this.rest);
   }
 
   /**
@@ -517,7 +539,7 @@ export class SimCore {
   listPins(): PinInfo[] {
     const pins: PinInfo[] = [];
     for (const [id, c] of this.constraints) {
-      if (c.pinned) pins.push({ id, point: this.weightedPoint(c) });
+      if (c.pinned) pins.push({ id, point: this.weightedPoint(c.anchor) });
     }
     return pins;
   }
@@ -598,11 +620,16 @@ export class SimCore {
   private doGrab(id: PointerId, x: number, y: number, radius: number): boolean {
     const hit = this.pick(x, y);
     if (hit) {
-      this.constraints.set(id, {
+      const anchor: SurfacePoint = {
         tri: [hit.tri[0], hit.tri[1], hit.tri[2]],
         w: [hit.w[0], hit.w[1], hit.w[2]],
+      };
+      this.constraints.set(id, {
+        anchor,
+        attachments: singleAttachment(anchor),
         target: { x, y },
         pinned: false,
+        handful: false,
       });
       return true;
     }
@@ -618,17 +645,19 @@ export class SimCore {
       }
     }
     if (best < 0) return false;
+    const anchor: SurfacePoint = { tri: [best, best, best], w: [1, 0, 0] };
     this.constraints.set(id, {
-      tri: [best, best, best],
-      w: [1, 0, 0],
+      anchor,
+      attachments: singleAttachment(anchor),
       target: { x, y },
       pinned: false,
+      handful: false,
     });
     return true;
   }
 
-  /** 附著點世界座標＝三角形頂點的重心座標加權；`buf` 預設目前位置，傳 `rest` 得靜止形狀下的座標。 */
-  private weightedPoint(g: Constraint, buf: Float64Array = this.pos): Point {
+  /** 表面點世界座標＝三角形頂點的重心座標加權；`buf` 預設目前位置，傳 `rest` 得靜止形狀下的座標。 */
+  private weightedPoint(g: SurfacePoint, buf: Float64Array = this.pos): Point {
     const [i0, i1, i2] = g.tri;
     const [w0, w1, w2] = g.w;
     return {
@@ -991,18 +1020,21 @@ export class SimCore {
     for (const g of this.constraints.values()) {
       if (g.pinned !== pinned) continue;
       const beta = g.pinned ? 1 : this.params.grabBeta;
-      const [i0, i1, i2] = g.tri;
-      const [w0, w1, w2] = g.w;
-      const p = this.weightedPoint(g);
-      const ex = (g.target.x - p.x) * beta;
-      const ey = (g.target.y - p.y) * beta;
-      const s2 = w0 * w0 + w1 * w1 + w2 * w2 || 1;
-      this.pos[2 * i0] = this.pos[2 * i0]! + (w0 * ex) / s2;
-      this.pos[2 * i0 + 1] = this.pos[2 * i0 + 1]! + (w0 * ey) / s2;
-      this.pos[2 * i1] = this.pos[2 * i1]! + (w1 * ex) / s2;
-      this.pos[2 * i1 + 1] = this.pos[2 * i1 + 1]! + (w1 * ey) / s2;
-      this.pos[2 * i2] = this.pos[2 * i2]! + (w2 * ex) / s2;
-      this.pos[2 * i2 + 1] = this.pos[2 * i2 + 1]! + (w2 * ey) / s2;
+      for (const a of g.attachments) {
+        const [i0, i1, i2] = a.tri;
+        const [w0, w1, w2] = a.w;
+        const p = this.weightedPoint(a);
+        const k = beta * a.stiffness;
+        const ex = (g.target.x + a.offsetX - p.x) * k;
+        const ey = (g.target.y + a.offsetY - p.y) * k;
+        const s2 = w0 * w0 + w1 * w1 + w2 * w2 || 1;
+        this.pos[2 * i0] = this.pos[2 * i0]! + (w0 * ex) / s2;
+        this.pos[2 * i0 + 1] = this.pos[2 * i0 + 1]! + (w0 * ey) / s2;
+        this.pos[2 * i1] = this.pos[2 * i1]! + (w1 * ex) / s2;
+        this.pos[2 * i1 + 1] = this.pos[2 * i1 + 1]! + (w1 * ey) / s2;
+        this.pos[2 * i2] = this.pos[2 * i2]! + (w2 * ex) / s2;
+        this.pos[2 * i2 + 1] = this.pos[2 * i2 + 1]! + (w2 * ey) / s2;
+      }
     }
   }
 
