@@ -26,8 +26,8 @@ export type {
   SprayParams,
   EraseParams,
   HandfulParams,
-  RadiusRange,
   RadiusToolId,
+  ToolRadius,
 } from './ToolRouter';
 export { PointerInput } from './PointerInput';
 export type { PointerInputOptions } from './PointerInput';

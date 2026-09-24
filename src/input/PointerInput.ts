@@ -33,7 +33,7 @@ import {
   type EraseParams,
   type HandfulParams,
   type FanParams,
-  type RadiusToolId,
+  type ToolRadius,
   type SprayParams,
   type ToolId,
   ToolRouter,
@@ -119,7 +119,7 @@ export class PointerInput {
   }
 
   /** 轉發給 `ToolRouter.adjustActiveRadius`（issue #114）——按住右鍵＋滾輪調目前工具的半徑。 */
-  adjustActiveRadius(steps: number): { tool: RadiusToolId; radius: number } | null {
+  adjustActiveRadius(steps: number): ToolRadius | null {
     return this.tracker.adjustActiveRadius(steps);
   }
 

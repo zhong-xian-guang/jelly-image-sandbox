@@ -249,6 +249,12 @@ export const HANDFUL_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 }
 /** 有半徑、能用「右鍵＋滾輪」調整的工具（issue #114）。 */
 export type RadiusToolId = 'spray' | 'erase' | 'handfulGrab';
 
+/** `adjustActiveRadius` 的回報（issue #114）：調的是哪個工具、新半徑多少。 */
+export interface ToolRadius {
+  tool: RadiusToolId;
+  radius: number;
+}
+
 /** `setHandfulParams` 接受的部分更新（issue #113）——目前只有半徑一個欄位。 */
 export interface HandfulParams {
   /** 抓取範圍的世界座標半徑（圓心 = 按下處）。 */
@@ -548,7 +554,7 @@ export class ToolRouter {
    * 就回 `null`（「不處理」——呼叫端照舊縮放相機）。跟拉霸一樣只影響**下一次**按下：
    * 進行中的大把抓取 session 已經在按下時記下自己的半徑。
    */
-  adjustActiveRadius(steps: number): { tool: RadiusToolId; radius: number } | null {
+  adjustActiveRadius(steps: number): ToolRadius | null {
     const tool = this.activeTool;
     if (tool === 'spray') {
       this.sprayRadius = stepRadius(this.sprayRadius, steps, SPRAY_RADIUS_RANGE);

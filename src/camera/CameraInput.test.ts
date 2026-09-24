@@ -120,13 +120,13 @@ describe('CameraInput — 按住右鍵＋滾輪調工具半徑（issue #114）',
     stubPointerCapture(el);
   });
 
-  function setup(adjustRadius?: (steps: number) => boolean) {
+  function setup(adjustToolRadius?: (steps: number) => boolean) {
     const cmds: CameraCommand[] = [];
     const input = new CameraInput(el, {
       screenToWorld: (x, y) => ({ x, y }),
       hitTest: () => false,
       emit: (c) => cmds.push(c),
-      adjustRadius,
+      adjustToolRadius,
     });
     return { cmds, input };
   }
@@ -144,7 +144,7 @@ describe('CameraInput — 按住右鍵＋滾輪調工具半徑（issue #114）',
     return ev;
   }
 
-  it('按住右鍵＋滾輪、工具有半徑 → 交給 adjustRadius（往上滾 = +1、往下滾 = −1），相機不縮放', () => {
+  it('按住右鍵＋滾輪、工具有半徑 → 交給 adjustToolRadius（往上滾 = +1、往下滾 = −1），相機不縮放', () => {
     const steps: number[] = [];
     const { cmds } = setup((s) => {
       steps.push(s);
@@ -157,13 +157,13 @@ describe('CameraInput — 按住右鍵＋滾輪調工具半徑（issue #114）',
     expect(ev.defaultPrevented).toBe(true);
   });
 
-  it('按住右鍵＋滾輪、工具沒有半徑（adjustRadius 回報不處理）→ 照舊縮放', () => {
+  it('按住右鍵＋滾輪、工具沒有半徑（adjustToolRadius 回報不處理）→ 照舊縮放', () => {
     const { cmds } = setup(() => false);
     wheel(-100, 2);
     expect(cmds.some((c) => c.type === 'zoomBy')).toBe(true);
   });
 
-  it('沒按右鍵 → 不問 adjustRadius，照舊縮放', () => {
+  it('沒按右鍵 → 不問 adjustToolRadius，照舊縮放', () => {
     let called = false;
     const { cmds } = setup(() => {
       called = true;

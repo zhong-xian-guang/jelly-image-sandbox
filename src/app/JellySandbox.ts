@@ -163,6 +163,7 @@ import {
   HANDFUL_RADIUS_RANGE,
   SPRAY_RADIUS_RANGE,
   PointerInput,
+  type RadiusToolId,
   routeForPinMode,
 } from '../input';
 import {
@@ -1494,9 +1495,12 @@ export class JellySandbox {
     const adjusted = this.input.adjustActiveRadius(steps);
     if (!adjusted) return false;
     const { tool, radius } = adjusted;
-    if (tool === 'spray') this.setSprayRadius(radius);
-    else if (tool === 'erase') this.setEraseRadius(radius);
-    else this.setHandfulRadius(radius);
+    const setRadius: Record<RadiusToolId, (r: number) => void> = {
+      spray: (r) => this.setSprayRadius(r),
+      erase: (r) => this.setEraseRadius(r),
+      handfulGrab: (r) => this.setHandfulRadius(r),
+    };
+    setRadius[tool](radius);
     this.controlPanel.setToolRadius(tool, radius);
     return true;
   }
@@ -2194,7 +2198,7 @@ export class JellySandbox {
       screenToWorld: project,
       hitTest,
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
-      adjustRadius: (steps) => this.adjustToolRadius(steps),
+      adjustToolRadius: (steps) => this.adjustToolRadius(steps),
     });
     return { input, cameraInput };
   }

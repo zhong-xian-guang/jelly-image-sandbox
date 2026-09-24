@@ -13,7 +13,7 @@
  * 兩層共用同一個 canvas、各自 `addEventListener`，靠上述判斷互不重疊。
  *
  * **按住右鍵＋滾輪**（issue #114）：右鍵按住（`buttons & 2`）時的滾輪先問
- * `adjustRadius`——目前工具有半徑就由它調半徑、這一格不縮放；回報「不處理」（或沒
+ * `adjustToolRadius`——目前工具有半徑就由它調半徑、這一格不縮放；回報「不處理」（或沒
  * 接這個選項）才照舊縮放。右鍵本身不是任何手勢（指標層只認左鍵、這裡只認中鍵），
  * 「右鍵按住」同時看滾輪事件自己的 `buttons` 與指標事件最近一次回報的 `buttons`
  * ——不是每個瀏覽器都會替 `WheelEvent` 填 `buttons`，而指標事件一定有（左鍵按住中
@@ -37,9 +37,11 @@ export interface CameraInputOptions {
   /**
    * 按住右鍵時的滾輪（issue #114）：`steps` 格（往上滾 = +1、往下滾 = −1）。回傳
    * `true` = 已經拿去調工具半徑，這一格不縮放相機；`false` = 目前工具沒有半徑，
-   * 照舊縮放。
+   * 照舊縮放。一個滾輪事件＝一格（只看方向不看 `deltaY` 大小）：目標裝置是滑鼠
+   * （spec #112「只用一隻滑鼠就能操作」），每個刻度一個事件；觸控板連發小 delta 會
+   * 走得比較快，但拿觸控板按住右鍵本來就不是這個手勢的用法。
    */
-  adjustRadius?: (steps: number) => boolean;
+  adjustToolRadius?: (steps: number) => boolean;
 }
 
 export class CameraInput {
@@ -47,7 +49,7 @@ export class CameraInput {
   private readonly gestures: CameraGestures;
   private readonly screenToWorld: (x: number, y: number) => Point;
   private readonly hitTest: (world: Point) => boolean;
-  private readonly adjustRadius: ((steps: number) => boolean) | undefined;
+  private readonly adjustToolRadius: ((steps: number) => boolean) | undefined;
   /** 滑鼠指標事件最近一次回報的 `buttons`（issue #114）——判斷「右鍵按住」用。 */
   private mouseButtons = 0;
 
@@ -55,7 +57,7 @@ export class CameraInput {
     this.target = target;
     this.screenToWorld = opts.screenToWorld;
     this.hitTest = opts.hitTest;
-    this.adjustRadius = opts.adjustRadius;
+    this.adjustToolRadius = opts.adjustToolRadius;
     this.gestures = new CameraGestures({ emit: opts.emit, config: opts.config });
 
     target.addEventListener('wheel', this.onWheel, { passive: false });
@@ -83,7 +85,7 @@ export class CameraInput {
   private onWheel = (ev: WheelEvent): void => {
     ev.preventDefault(); // 擋掉頁面縮放 / 捲動
     const rightHeld = ((ev.buttons | this.mouseButtons) & 2) !== 0;
-    if (rightHeld && ev.deltaY !== 0 && this.adjustRadius?.(-Math.sign(ev.deltaY))) return;
+    if (rightHeld && ev.deltaY !== 0 && this.adjustToolRadius?.(-Math.sign(ev.deltaY))) return;
     const [x, y] = this.localXY(ev);
     this.gestures.wheel(ev.deltaY, x, y);
   };
