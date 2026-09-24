@@ -164,26 +164,26 @@ interface XY {
   y: number;
 }
 
+type GrabEvent = Extract<DemoEvent, { type: 'grab' }>;
+
 /**
  * 掃過 `steps` 中 `keep(atStep)` 為真的排程項，回傳每個指標 id 此刻「還沒放開的
- * Grab」——`origin` 是原始 `grab` 的挑選座標（picking 靠它命中 rest 形狀上正確的
- * 材質點）、`target` 是最後一次 `grab`／`moveGrab` 的目標座標。`release`／`pin`
+ * Grab」——`grab` 是原始的 `grab` 事件（挑選座標讓 picking 命中 rest 形狀上正確的
+ * 材質點；`radius`／`handfulRadius` 等選擇性欄位原樣保留，issue #113 的大把抓取
+ * 重建後才是同一把）、`target` 是最後一次 `grab`／`moveGrab` 的目標座標。`release`／`pin`
  *（轉成 Pin，不再是可重建的 Grab）／`unpin` 清掉。Pin 本身橫跨修剪點的重建不在
  * issue #35 範圍。
  */
 function openGrabs(
   steps: readonly DemoStep[],
   keep: (atStep: number) => boolean,
-): Map<PointerId, { origin: XY; target: XY }> {
-  const open = new Map<PointerId, { origin: XY; target: XY }>();
+): Map<PointerId, { grab: GrabEvent; target: XY }> {
+  const open = new Map<PointerId, { grab: GrabEvent; target: XY }>();
   for (const { atStep, event } of steps) {
     if (!keep(atStep)) continue;
     switch (event.type) {
       case 'grab':
-        open.set(event.id, {
-          origin: { x: event.x, y: event.y },
-          target: { x: event.x, y: event.y },
-        });
+        open.set(event.id, { grab: event, target: { x: event.x, y: event.y } });
         break;
       case 'moveGrab': {
         const g = open.get(event.id);
@@ -244,8 +244,8 @@ export function mergeTracks(tracks: readonly OverlayTrack[]): DemoStep[] {
     // 相機軌沒有 Grab，`openGrabs` 回空 Map，這段自然略過。
     if (inStep > 0) {
       for (const [id, g] of openGrabs(track.steps, (s) => s < inStep)) {
-        push(track.startStep, { type: 'grab', id, x: g.origin.x, y: g.origin.y });
-        if (g.target.x !== g.origin.x || g.target.y !== g.origin.y) {
+        push(track.startStep, { ...g.grab, id });
+        if (g.target.x !== g.grab.x || g.target.y !== g.grab.y) {
           push(track.startStep, { type: 'moveGrab', id, x: g.target.x, y: g.target.y });
         }
       }

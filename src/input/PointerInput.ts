@@ -31,6 +31,7 @@ import type { GestureConfig } from './GestureTracker';
 import {
   type ClickToolId,
   type EraseParams,
+  type HandfulParams,
   type FanParams,
   type SprayParams,
   type ToolId,
@@ -109,6 +110,11 @@ export class PointerInput {
   /** 轉發給 `ToolRouter.setEraseParams`（issue #70）——面板移除 Pin 滑桿變更時呼叫。 */
   setEraseParams(params: Partial<EraseParams>): void {
     this.tracker.setEraseParams(params);
+  }
+
+  /** 轉發給 `ToolRouter.setHandfulParams`（issue #113）——面板大把抓取半徑拉霸變更時呼叫。 */
+  setHandfulParams(params: Partial<HandfulParams>): void {
+    this.tracker.setHandfulParams(params);
   }
 
   /** 轉發給 `ToolRouter`（issue #68）——面板「開始設定形狀」／「完成設定」按鈕呼叫。 */

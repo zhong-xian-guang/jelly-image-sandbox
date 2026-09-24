@@ -8,6 +8,7 @@ import {
   DEFAULT_FAN_FREQUENCY,
   DEFAULT_FAN_STRENGTH,
   DEFAULT_FAN_WIDTH,
+  DEFAULT_HANDFUL_RADIUS,
   DEFAULT_TOOL,
   ToolRouter,
   type ToolRouterOptions,
@@ -1359,6 +1360,109 @@ describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', (
       { type: 'grab', id: 3, x: 1000, y: 1000 },
       { type: 'tap', x: 1000, y: 1000 },
       { type: 'release', id: 3 },
+    ]);
+  });
+});
+
+describe('ToolRouter — 大把抓取（issue #113 / V3 T4-1；ADR-0014）', () => {
+  function makeHandful(extra?: Partial<ToolRouterOptions>) {
+    const made = makeRouter(undefined, undefined, extra);
+    made.router.setActiveTool('handfulGrab');
+    return made;
+  }
+
+  it('拖曳 → grab{handfulRadius} → moveGrab… → release，不送 tap', () => {
+    const { router, events } = makeHandful();
+    router.down(1, 10, 20, 0);
+    router.move(1, 40, 20);
+    router.move(1, 80, 30);
+    router.up(1, 80, 30, 500);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1010, y: 1020, handfulRadius: DEFAULT_HANDFUL_RADIUS },
+      { type: 'moveGrab', id: 1, x: 1040, y: 1020 },
+      { type: 'moveGrab', id: 1, x: 1080, y: 1030 },
+      { type: 'release', id: 1 },
+    ]);
+  });
+
+  it('快速按放 → grab → tap{radius}（按下當下位置）→ release', () => {
+    const { router, events } = makeHandful();
+    router.down(1, 10, 20, 0);
+    router.move(1, 12, 21);
+    router.up(1, 12, 21, 100);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1010, y: 1020, handfulRadius: DEFAULT_HANDFUL_RADIUS },
+      { type: 'moveGrab', id: 1, x: 1012, y: 1021 },
+      { type: 'tap', x: 1010, y: 1020, radius: DEFAULT_HANDFUL_RADIUS },
+      { type: 'release', id: 1 },
+    ]);
+  });
+
+  it('cancel 只 release，不送 tap', () => {
+    const { router, events } = makeHandful();
+    router.down(1, 10, 20, 0);
+    router.cancel(1);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'release']);
+    router.up(1, 10, 20, 50); // session 已結束 → 不再 emit
+    expect(events.length).toBe(2);
+  });
+
+  it('多指各自一把，互不干擾', () => {
+    const { router, events } = makeHandful();
+    router.down(1, 0, 0, 0);
+    router.down(2, 100, 0, 0);
+    router.move(2, 150, 0);
+    router.up(1, 0, 0, 500);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1000, y: 1000, handfulRadius: DEFAULT_HANDFUL_RADIUS },
+      { type: 'grab', id: 2, x: 1100, y: 1000, handfulRadius: DEFAULT_HANDFUL_RADIUS },
+      { type: 'moveGrab', id: 2, x: 1150, y: 1000 },
+      { type: 'release', id: 1 },
+    ]);
+  });
+
+  it('半徑讀按下當下的值：拖曳途中改半徑不影響這一把的 tap', () => {
+    const { router, events } = makeHandful();
+    router.setHandfulParams({ radius: 60 });
+    router.down(1, 0, 0, 0);
+    router.setHandfulParams({ radius: 300 });
+    router.up(1, 0, 0, 50);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1000, y: 1000, handfulRadius: 60 },
+      { type: 'tap', x: 1000, y: 1000, radius: 60 },
+      { type: 'release', id: 1 },
+    ]);
+    events.length = 0;
+    router.down(2, 0, 0, 100);
+    expect(events[0]).toEqual({ type: 'grab', id: 2, x: 1000, y: 1000, handfulRadius: 300 });
+  });
+
+  it('按在 Jelly 外（hitTest 否）→ 不追這個指標、不 emit（背景拖曳歸相機）', () => {
+    const { router, events } = makeHandful({ hitTest: () => false });
+    router.down(1, 0, 0, 0);
+    router.move(1, 50, 0);
+    router.up(1, 50, 0, 500);
+    expect(events).toEqual([]);
+  });
+
+  it('按住途中切走工具，這一把仍照常跟隨並放開', () => {
+    const { router, events } = makeHandful();
+    router.down(1, 0, 0, 0);
+    router.setActiveTool('general');
+    router.move(1, 30, 0);
+    router.up(1, 30, 0, 500);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'moveGrab', 'release']);
+  });
+
+  it('一般操作的 Grab 不帶 handfulRadius（行為不變）', () => {
+    const { router, events } = makeRouter();
+    router.setHandfulParams({ radius: 200 });
+    router.down(1, 0, 0, 0);
+    router.up(1, 0, 0, 50);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1000, y: 1000 },
+      { type: 'tap', x: 1000, y: 1000 },
+      { type: 'release', id: 1 },
     ]);
   });
 });
