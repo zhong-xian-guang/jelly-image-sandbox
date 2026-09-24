@@ -53,16 +53,15 @@
  *
  * **控制面板**：`ControlPanel`（同樣是薄的 DOM 接線層）建 UI、回呼往外送；實際
  * 換算邏輯都在純函式模組——Softness 曲線見 `../sim/softness`，Walled 邊界範圍見
- * `./boundaryGeometry`，Pin 模式的輸入轉接見 `../input/pinModeRouting`（開啟 Pin 模式
- * 後，`PointerInput` 原本會發的 `grab` 改由它轉成 `pin`，直接放 Pin 而非可拖曳
+ * `./boundaryGeometry`，Pin 工具的輸入轉接見 `../input/pinToolRouting`（目前工具是
+ * Pin 時，`PointerInput` 原本會發的 `grab` 改由它轉成 `pin`，直接放 Pin 而非可拖曳
  * 的 Grab；點在既有 Pin 附近則轉成 `unpin`，即「點掉特定 Pin」）。
  *
  * **Pin 的視覺提示**：`PinMarkers`（DOM 覆蓋層）每幀把 `world.listPins()` 的世界
- * 座標投影成螢幕座標畫成小圓點；Pin 模式開啟時標記變紅脈動（提示可以點掉）、
- * 畫布游標也換成十字——兩層一起讓「現在是不是在 Pin 模式」不用低頭看面板就
- * 知道（見 `setPinMode`）。「顯示 Pin」關掉時整層藏起來、`frame()` 也跳過投影
- * 計算（見 `setPinsVisible`）；`ControlPanel` 那邊會同時鎖住 Pin 模式／清除所有
- * Pin，所見即所得。
+ * 座標投影成螢幕座標畫成小圓點；選著 Pin 工具時標記變紅脈動（提示可以點掉）、
+ * 畫布游標也換成十字——兩層一起讓「現在是不是在放 Pin」不用低頭看面板就
+ * 知道（見 `applyPinToolVisuals`）。「顯示 Pin」關掉時整層藏起來、`frame()` 也跳過投影
+ * 計算（見 `setPinsVisible`）；`ControlPanel` 那邊會同時鎖住清除所有 Pin，所見即所得。
  *
  * **播放時隱藏提示**（issue #71 / V2 T3-7）：一個全域開關，開著時只要有 Demo／
  * Track 在播放，所有視覺提示（顯示網格、Pin 標記、風扇範圍／圖示、編隊抓取提示）
@@ -164,7 +163,7 @@ import {
   SPRAY_RADIUS_RANGE,
   PointerInput,
   type RadiusToolId,
-  routeForPinMode,
+  routeForPinTool,
 } from '../input';
 import {
   buildSimMesh,
@@ -299,9 +298,9 @@ const DEFAULT_IMPORT_SIZE = 512;
 /** 內建預設果凍在來源圖庫裡的 id（啟動時、「清空全部」後都重新註冊成它）。 */
 const DEFAULT_SOURCE_ID = 'src/1';
 /**
- * Pin 模式下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
+ * Pin 工具下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
  * CSS 直徑（16px）同數量級，換算回世界座標時要除以目前相機縮放（見
- * `pinModeContext`），這樣判定範圍不會隨縮放忽大忽小。
+ * `pinToolContext`），這樣判定範圍不會隨縮放忽大忽小。
  */
 const PIN_REMOVE_RADIUS_PX = 16;
 /**
@@ -443,9 +442,10 @@ export class JellySandbox {
   private lastBbox: Bbox;
   /** 目前邊界的外框幾何（給 `JellyRenderer.setBoundaryFrame` 畫）：`walled` 是 AABB、`floor` 是地板 y、`infinite` 為 `null`。 */
   private boundaryFrame: BoundaryFrame | null = null;
-  /** 控制面板「Pin 模式」開關；`attachInputHandlers` 的 `applyInput` 靠它轉接。 */
-  private pinModeEnabled = false;
-  /** 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，筆刷／Pin 視覺靠這個判定。 */
+  /**
+   * 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，筆刷／Pin 視覺靠這個判定；
+   * `attachInputHandlers` 的 `applyInput` 也靠它決定要不要過 Pin 工具轉接（issue #115）。
+   */
   private activeTool: ToolId = 'general';
   /**
    * 「生成 Jelly」工具（issue #97）要放的那塊網格的 rest bbox，key 同 `meshMemo`
@@ -645,7 +645,6 @@ export class JellySandbox {
         softness: DEFAULT_SOFTNESS,
         tapStrength: this.world.params.tapStrength,
         gravity: this.world.params.gravity,
-        pinMode: this.pinModeEnabled,
         showPins: this.hintIntent.pins,
         followLocked: !this.cameraState.followEnabled,
         showWireframe: this.hintIntent.wireframe,
@@ -707,7 +706,6 @@ export class JellySandbox {
       onSoftnessChange: (t) => this.setSoftness(t),
       onTapStrengthChange: (strength) => this.setTapStrength(strength),
       onGravityChange: (gravity) => this.setGravity(gravity),
-      onPinModeChange: (enabled) => this.setPinMode(enabled),
       onClearPins: () => this.clearPins(),
       onShowPinsChange: (visible) => this.setHintVisible('pins', visible),
       onFollowLockChange: (locked) => this.setFollowLock(locked),
@@ -751,7 +749,7 @@ export class JellySandbox {
     this.canvasHover = new CanvasHover(root, {
       isCanvas: (target) => target === this.renderer.canvas,
     });
-    this.applyPinModeVisuals();
+    this.applyPinToolVisuals();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
     // 看到「群組」這個概念、按「＋ 新增群組」（issue #43）。
@@ -1331,40 +1329,20 @@ export class JellySandbox {
   }
 
   /**
-   * 「Pin 模式」開關（issue #14）——`attachInputHandlers` 的 `applyInput` 靠
-   * `pinModeActive` 轉接；這裡順便切畫布游標（十字）跟 Pin 標記的「可點掉」
-   * 視覺（紅色脈動），兩者都是純粹的提示，不影響任何判定邏輯。
+   * 游標（十字）＋ Pin 標記的「可點掉」紅色脈動——只在目前工具是 Pin 時出現
+   * （issue #115；ADR-0015 取代原本的「Pin 模式」勾選框）。兩者都是純粹的提示，
+   * 不影響任何判定邏輯（轉接見 `routeForPinTool`）。
    */
-  private setPinMode(enabled: boolean): void {
-    this.pinModeEnabled = enabled;
-    this.applyPinModeVisuals();
-  }
-
-  /**
-   * Pin 模式**實際生效**與否（issue #68 事後檢視修正）——勾選框開著還不夠，
-   * 還要「目前工具」是一般操作。切到電風扇／編隊抓取這類新工具時，畫布手勢
-   * 整個被該工具接管，面板那邊早就把 Pin 控制項鎖住＋顯示「Pin 暫時無法使用」
-   * （issue #67，見 `ControlPanel.pinRows`）——但轉接這邊原本只看
-   * `pinModeEnabled`，先開 Pin 模式再切到編隊抓取，編隊送出的 `grab` 仍會被
-   * `routeForPinMode` 轉成 `pin`/`unpin`，變成「一次撒一排 Pin」：面板說的跟
-   * 實際行為對不上。「在一片範圍內一次撒／清一批 Pin」是撒 Pin／移除 Pin 兩
-   * 個工具的職責（issue #69 / #70），編隊抓取只管抓取。
-   */
-  private get pinModeActive(): boolean {
-    return this.pinModeEnabled && this.activeTool === 'general';
-  }
-
-  /** 游標＋ Pin 標記的「可點掉」紅色脈動——兩者都跟著 `pinModeActive` 走，見該 getter。 */
-  private applyPinModeVisuals(): void {
+  private applyPinToolVisuals(): void {
     this.applyCanvasCursor();
-    this.pinMarkers.setRemovable(this.pinModeActive);
+    this.pinMarkers.setRemovable(this.activeTool === 'pin');
   }
 
   /**
-   * 畫布游標的單一出口（issue #97 收攏）——兩個來源：Pin 模式的十字（issue #14），
+   * 畫布游標的單一出口（issue #97 收攏）——兩個來源：Pin 工具的十字（issue #14 / #115），
    * 以及「生成 Jelly」工具在放不下的地方顯示的禁止樣式（issue #97 驗收條件）。
    * 前者是狀態、後者跟著指標位置每幀變，所以 `frame()` 每幀呼叫一次；值沒變就
-   * 不寫 DOM。Pin 模式優先：那時根本切不到生成工具（`pinModeActive` 要求一般操作）。
+   * 不寫 DOM。兩者互斥：各自只在自己的工具下出現。
    *
    * 比對的是 **DOM 上的實際值**而不是自己記一份快取：PixiJS 的事件系統滑過畫布時
    * 也會寫同一個屬性（沒有互動物件時設成 `'inherit'`），被它蓋掉之後若只信自己的
@@ -1373,11 +1351,12 @@ export class JellySandbox {
    * 空字串，免得兩邊每幀互相覆寫。
    */
   private applyCanvasCursor(): void {
-    const cursor = this.pinModeActive
-      ? 'crosshair'
-      : this.spawnBlockedAtHover()
-        ? 'not-allowed'
-        : 'inherit';
+    const cursor =
+      this.activeTool === 'pin'
+        ? 'crosshair'
+        : this.spawnBlockedAtHover()
+          ? 'not-allowed'
+          : 'inherit';
     const canvas = this.renderer.canvas;
     if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
   }
@@ -1401,13 +1380,12 @@ export class JellySandbox {
   /**
    * 「目前工具」選擇器變更（issue #65 / V2 T3-1）——轉發給 `PointerInput.setActiveTool`；
    * `activeTool` 另外存一份給重新匯入圖片後換綁新 canvas 時重套（見 `attachInputHandlers`
-   * 呼叫處，比照 `applyPinModeVisuals` 的手法）。切換工具會連帶改變 `pinModeActive`
-   * （見該 getter），所以游標／標記的視覺提示也要跟著重算。
+   * 呼叫處）。切進／切出 Pin 工具會改變游標／標記的視覺提示，所以要跟著重算。
    */
   private setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
     this.input.setActiveTool(tool);
-    this.applyPinModeVisuals();
+    this.applyPinToolVisuals();
     // 筆刷圓圈游標不需要另外的顯示開關，選到用得到它的工具就看得到，切走就收起來。
     const brush = this.brushFor(tool);
     if (brush) this.brushCursor.setVariant(brush.variant);
@@ -1590,7 +1568,7 @@ export class JellySandbox {
    * 所有「沙盒自己發的模擬事件」的單一出口（issue #95 收攏）：送進 `world.applyInput`，
    * 同時 `trackRecorder.record`（no-op 除非正在錄製）——ADR-0005「所有影響模擬的輸入
    * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件另有
-   * `attachInputHandlers` 裡的派送點（先過 Pin 模式轉接），做的是同樣兩件事。
+   * `attachInputHandlers` 裡的派送點（先過 Pin 工具轉接），做的是同樣兩件事。
    */
   private dispatchInput(event: InputEvent): void {
     this.world.applyInput(event);
@@ -1601,9 +1579,6 @@ export class JellySandbox {
    * 面板上任何一個提示顯示開關被切換（「顯示網格」「顯示 Pin」「顯示風扇範圍」
    * 「顯示風扇圖示」「顯示編隊抓取提示」）——五顆共用這一個入口：記下使用者的
    * 意圖，實際看不看得到交給 `applyHintVisibility` 算（播放中可能被壓下）。
-   *
-   * 「顯示 Pin」關掉時，`ControlPanel` 那邊已經順便把「Pin 模式」的勾選框一起
-   * 強制關掉（所見即所得），這裡不用重複處理。
    */
   private setHintVisible(key: HintKey, visible: boolean): void {
     this.hintIntent[key] = visible;
@@ -1670,7 +1645,7 @@ export class JellySandbox {
    * 「bbox 對角線的固定比例」是世界座標常數，縮得越近，同一個世界半徑換算成
    * 螢幕像素就越大，會出現「明明離標記很遠，點下去卻被當成點中」的錯覺。
    */
-  private pinModeContext(): { pins: ReturnType<World['listPins']>; removeRadius: number } {
+  private pinToolContext(): { pins: ReturnType<World['listPins']>; removeRadius: number } {
     return {
       pins: this.world.listPins(),
       removeRadius: PIN_REMOVE_RADIUS_PX / this.cameraState.transform.scale,
@@ -2190,7 +2165,7 @@ export class JellySandbox {
       // 該移除哪一塊由沙盒自己決定（見 `spawnAt`／`removeJellyAt`）。
       onClickTool: (tool, world) => this.runClickTool(tool, world),
       applyInput: (event) => {
-        const routed = routeForPinMode(event, this.pinModeActive, this.pinModeContext());
+        const routed = routeForPinTool(event, this.activeTool, this.pinToolContext());
         if (routed) this.dispatchInput(routed); // 進 World + no-op 除非正在錄製（issue #29）
       },
     });

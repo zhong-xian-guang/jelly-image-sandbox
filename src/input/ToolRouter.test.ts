@@ -137,6 +137,45 @@ describe('ToolRouter — 「一般操作」委派給內部 GestureTracker，行�
   });
 });
 
+describe('ToolRouter — Pin 工具（issue #115；ADR-0015）', () => {
+  // Pin 工具的手勢跟一般操作同一套（GestureTracker）；把 grab 換成 pin/unpin、丟掉 tap
+  // 是 `routeForPinTool` 的事（見 pinToolRouting.test.ts）。
+  it('拖曳 → grab, moveGrab, release（同一般操作）', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('pin');
+    router.down(1, 0, 0, 0);
+    router.move(1, 40, 5);
+    router.up(1, 40, 5, 400);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'moveGrab', 'release']);
+  });
+
+  it('快速按放 → grab, tap, release（同一般操作的門檻）', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('pin');
+    router.down(1, 50, 60, 100);
+    router.up(1, 51, 60, 200);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1050, y: 1060 },
+      { type: 'tap', x: 1050, y: 1060 },
+      { type: 'release', id: 1 },
+    ]);
+  });
+
+  it('cancel → release', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('pin');
+    router.down(1, 0, 0, 0);
+    router.cancel(1);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'release']);
+  });
+
+  it('沒有半徑可調 → adjustActiveRadius 回 null', () => {
+    const { router } = makeRouter();
+    router.setActiveTool('pin');
+    expect(router.adjustActiveRadius(1)).toBeNull();
+  });
+});
+
 describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
   it('down → move（僅更新內部預覽，不 emit）→ up → 恰好一個 setFan，欄位對應拖曳的起點/方向/距離', () => {
     const { router, events } = makeRouter();
@@ -252,7 +291,7 @@ describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
     expect(events.some((e) => e.type === 'grab' || e.type === 'tap')).toBe(false);
   });
 
-  it('切回一般操作 → Grab/Pin/Tap 手勢立刻恢復正常', () => {
+  it('切回一般操作 → Grab/Tap 手勢立刻恢復正常', () => {
     const { router, events } = makeRouter();
     router.setActiveTool('fan');
     router.down(1, 0, 0, 0);

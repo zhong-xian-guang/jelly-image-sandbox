@@ -31,4 +31,4 @@ export type {
 } from './ToolRouter';
 export { PointerInput } from './PointerInput';
 export type { PointerInputOptions } from './PointerInput';
-export { routeForPinMode } from './pinModeRouting';
+export { routeForPinTool } from './pinToolRouting';
