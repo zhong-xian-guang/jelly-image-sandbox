@@ -832,8 +832,9 @@ export class SimCore {
   /** substep 第二段（步驟 3–6）：shape matching → XPBD → Grab/Pin → Boundary。碰撞（V3 T3-3）排在這之後。 */
   solveInternal(h: number): void {
     const gravity = this.params.gravity;
-    // 3. shape-matching 脊椎（有重力時開動量守恆，見方法說明）。
-    this.solveShapeMatching(this.params.alphaSm, gravity !== 0);
+    // 3. shape-matching 脊椎（有重力、且身上沒有任何 Grab／Pin 時開動量守恆，見方法說明）。
+    const conserveMomentum = gravity !== 0 && this.constraints.size === 0;
+    this.solveShapeMatching(this.params.alphaSm, conserveMomentum);
     // 4. XPBD 細節層（疊加；補局部拉伸擠壓的彈性 + 第二道防翻面）。
     if (this.params.xpbd) this.solveXpbd(h);
     // 5. Grab / Pin 位置約束（在 shape matching 之後 → 把手直追目標、身體下一步跟上）。
@@ -895,7 +896,14 @@ export class SimCore {
    * 下以 ~30 單位／秒橫移，關掉 XPBD 就沒有——壓縮狀態下的漏差來自兩層的交互）。
    * 開啟時把所有有 Region 的 Particle 位移扣掉它們的平均（沒有 Region 的 Particle
    * 不被拉、也不納入），讓 shape matching 這一步的淨平移精確為 0。**只在 `gravity ≠ 0` 時開**：g = 0 走原路徑，每個浮點運算跟以前
-   * 完全一樣，舊片段重播結果不變（issue #91 驗收；要不要全域開啟見 issue #102）。
+   * 完全一樣，舊片段重播結果不變（issue #91 驗收）。
+   *
+   * **身上有任何 Grab／Pin 時也不開**（issue #102）：被拉（或 Pin 被拖走）的那一段在
+   * 這一步會產生很大的淨位移，均勻扣掉等於把它攤給整塊、隔空把網格上不相連的部位
+   * 反向推走（音叉情境拉 A 齒，B 齒跟著動 ≈ 35%）。有約束時果凍被手拉著或被釘住，
+   * 本來就不會自由滑走，要修的幽靈滑動只發生在完全自由的靜置；放手／拔掉最後一顆
+   * Pin 之後修正立刻恢復。不改成非均勻分攤、也不全域開啟的理由見設計文件 substep
+   * 步驟 2。
    */
   private solveShapeMatching(alphaSm: number, conserveMomentum: boolean): void {
     this.goalX.fill(0);
