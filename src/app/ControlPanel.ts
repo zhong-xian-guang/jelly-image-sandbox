@@ -981,8 +981,9 @@ export class ControlPanel {
 
   /**
    * 「目前工具」下拉（issue #65 / V2 T3-1；ADR-0011）——只涵蓋新增的沙盒工具。
-   * 「一般操作」＝維持既有 Grab/Pin/Tap 純手勢，選中它時 `ToolRouter` 原封不動
-   * 委派給既有 `GestureTracker`；「電風扇」（issue #66）之後在畫布上按下拖曳放開
+   * 「一般操作」＝維持既有 Grab/Tap 純手勢，選中它時 `ToolRouter` 原封不動
+   * 委派給既有 `GestureTracker`；「Pin」（issue #115；ADR-0015，取代原本的「Pin 模式」
+   * 勾選框）同一套手勢，只是 `grab` 換成放 Pin／點掉 Pin；「電風扇」（issue #66）之後在畫布上按下拖曳放開
    * 即放置一個風扇；「編隊抓取」（issue #68）、「撒 Pin」（issue #69）、
    * 「移除 Pin」（issue #70）同理各自接管畫布手勢。
    */
@@ -1031,7 +1032,7 @@ export class ControlPanel {
    */
   private toolSection(
     initialTool: ToolId,
-    toolParams: Partial<Record<Exclude<ToolId, 'general'>, HTMLElement>>,
+    toolParams: Partial<Record<Exclude<ToolId, 'general' | 'pin'>, HTMLElement>>,
     onChange: (tool: ToolId) => void,
   ): HTMLDetailsElement {
     const details = document.createElement('details');

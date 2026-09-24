@@ -291,7 +291,7 @@ describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
     expect(events.some((e) => e.type === 'grab' || e.type === 'tap')).toBe(false);
   });
 
-  it('切回一般操作 → Grab/Pin/Tap 手勢立刻恢復正常', () => {
+  it('切回一般操作 → Grab/Tap 手勢立刻恢復正常', () => {
     const { router, events } = makeRouter();
     router.setActiveTool('fan');
     router.down(1, 0, 0, 0);
