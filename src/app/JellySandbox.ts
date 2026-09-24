@@ -159,7 +159,11 @@ import {
   DEFAULT_SPRAY_SPACING,
   DEFAULT_ERASE_RADIUS,
   DEFAULT_HANDFUL_RADIUS,
+  ERASE_RADIUS_RANGE,
+  HANDFUL_RADIUS_RANGE,
+  SPRAY_RADIUS_RANGE,
   PointerInput,
+  type RadiusToolId,
   routeForPinMode,
 } from '../input';
 import {
@@ -278,24 +282,12 @@ const FAN_STRENGTH_RANGE = { min: 200, max: 60000, step: 200 };
 const FAN_FALLOFF_RANGE = { min: 0.2, max: 5, step: 0.1 };
 const FAN_FREQUENCY_RANGE = { min: 0.2, max: 10, step: 0.1 };
 /**
- * 撒 Pin 兩個滑桿的範圍（issue #69），世界座標單位——中點沒有特別對齊預設值
- * （`DEFAULT_SPRAY_RADIUS`／`DEFAULT_SPRAY_SPACING` 落在範圍內即可，這兩個值
- * 本來就沒有「不動它就等於某個物理預設」的意義，跟 `TAP_STRENGTH_RANGE` 不同）。
- * 半徑上限 400 ≈ 一般匯入果凍的尺度，一下蓋住整隻；間距下限 12 是「撒得很密」
- * 的實用下限——再小只是讓 Pin 疊在同一批 Particle 上，手感沒有變化、求解器卻
- * 要多扛幾十個硬約束。
+ * 撒 Pin 間距滑桿的範圍（issue #69），世界座標單位。下限 12 是「撒得很密」的實用
+ * 下限——再小只是讓 Pin 疊在同一批 Particle 上，手感沒有變化、求解器卻要多扛
+ * 幾十個硬約束。三條半徑拉霸的範圍住在 `ToolRouter`（issue #114：右鍵＋滾輪調
+ * 半徑要夾在同一個範圍內）。
  */
-const SPRAY_RADIUS_RANGE = { min: 20, max: 400, step: 10 };
 const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
-/**
- * 移除 Pin 的橡皮擦半徑範圍（issue #70），世界座標單位——沿用
- * `SPRAY_RADIUS_RANGE` 的上下限（兩者都是「以指標為圓心的作用範圍」，尺度一樣
- * 由果凍大小決定），但刻意是**另一條**滑桿、另一個狀態：撒的時候常常想撒一大片，
- * 擦的時候多半想擦得精準一點，共用一個值會逼使用者每次切工具都重調。
- */
-const ERASE_RADIUS_RANGE = { min: 20, max: 400, step: 10 };
-/** 大把抓取半徑拉霸的範圍（issue #113），世界單位——跟撒 Pin 一致（spec #112）。 */
-const HANDFUL_RADIUS_RANGE = { min: 20, max: 400, step: 10 };
 /**
  * 「匯入尺寸」拉霸的範圍與預設（issue #88 / V3 T1-1，見 CONTEXT.md「匯入尺寸」），
  * 世界單位 = 未縮放時的 mask 像素。預設 512：一般解析度的圖進場大小跟以前差不多
@@ -1495,6 +1487,25 @@ export class JellySandbox {
   }
 
   /**
+   * 按住右鍵＋滾輪（issue #114，`CameraInput` 呼叫）：目前工具有半徑就由 `ToolRouter`
+   * 增減並夾在範圍內，新值走跟拉霸同一條路（`setXRadius`：沙盒狀態＝圓圈大小 +
+   * `ToolRouter`），再灌回面板拉霸。回傳 `false`（工具沒有半徑）時相機照舊縮放。
+   */
+  private adjustToolRadius(steps: number): boolean {
+    const adjusted = this.input.adjustActiveRadius(steps);
+    if (!adjusted) return false;
+    const { tool, radius } = adjusted;
+    const setRadius: Record<RadiusToolId, (r: number) => void> = {
+      spray: (r) => this.setSprayRadius(r),
+      erase: (r) => this.setEraseRadius(r),
+      handfulGrab: (r) => this.setHandfulRadius(r),
+    };
+    setRadius[tool](radius);
+    this.controlPanel.setToolRadius(tool, radius);
+    return true;
+  }
+
+  /**
    * 「清除所有 Pin」按鈕（issue #14；issue #51 起改走窄介面）——跟指標事件同一條
    * 路：一個無 `id` 的「清除 Pin 事件」`InputEvent` 送進 `world.applyInput`，同時
    * `trackRecorder.record`（no-op 除非正在錄製）。不再直呼 `SimCore.clearPins()`，回到
@@ -2187,6 +2198,7 @@ export class JellySandbox {
       screenToWorld: project,
       hitTest,
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
+      adjustToolRadius: (steps) => this.adjustToolRadius(steps),
     });
     return { input, cameraInput };
   }

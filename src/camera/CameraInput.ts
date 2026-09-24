@@ -11,6 +11,14 @@
  *    當 Grab。
  *
  * 兩層共用同一個 canvas、各自 `addEventListener`，靠上述判斷互不重疊。
+ *
+ * **按住右鍵＋滾輪**（issue #114）：右鍵按住（`buttons & 2`）時的滾輪先問
+ * `adjustToolRadius`——目前工具有半徑就由它調半徑、這一格不縮放；回報「不處理」（或沒
+ * 接這個選項）才照舊縮放。右鍵本身不是任何手勢（指標層只認左鍵、這裡只認中鍵），
+ * 「右鍵按住」同時看滾輪事件自己的 `buttons` 與指標事件最近一次回報的 `buttons`
+ * ——不是每個瀏覽器都會替 `WheelEvent` 填 `buttons`，而指標事件一定有（左鍵按住中
+ * 再按右鍵只會來 `pointermove`，一樣帶著新的 `buttons`）。
+ * 畫布上的瀏覽器右鍵選單一律擋掉，不然放開右鍵就跳選單。只掛在畫布上，面板不受影響。
  * 判定結果是 `CameraCommand`，交給呼叫端每幀餵進 `updateCamera`——不直接改相機狀態。
  */
 
@@ -26,6 +34,14 @@ export interface CameraInputOptions {
   /** 判定出的相機指令往這裡送——呼叫端收集後每幀丟給 `updateCamera`。 */
   emit: (cmd: CameraCommand) => void;
   config?: Partial<CameraGesturesConfig>;
+  /**
+   * 按住右鍵時的滾輪（issue #114）：`steps` 格（往上滾 = +1、往下滾 = −1）。回傳
+   * `true` = 已經拿去調工具半徑，這一格不縮放相機；`false` = 目前工具沒有半徑，
+   * 照舊縮放。一個滾輪事件＝一格（只看方向不看 `deltaY` 大小）：目標裝置是滑鼠
+   * （spec #112「只用一隻滑鼠就能操作」），每個刻度一個事件；觸控板連發小 delta 會
+   * 走得比較快，但拿觸控板按住右鍵本來就不是這個手勢的用法。
+   */
+  adjustToolRadius?: (steps: number) => boolean;
 }
 
 export class CameraInput {
@@ -33,11 +49,15 @@ export class CameraInput {
   private readonly gestures: CameraGestures;
   private readonly screenToWorld: (x: number, y: number) => Point;
   private readonly hitTest: (world: Point) => boolean;
+  private readonly adjustToolRadius: ((steps: number) => boolean) | undefined;
+  /** 滑鼠指標事件最近一次回報的 `buttons`（issue #114）——判斷「右鍵按住」用。 */
+  private mouseButtons = 0;
 
   constructor(target: HTMLElement, opts: CameraInputOptions) {
     this.target = target;
     this.screenToWorld = opts.screenToWorld;
     this.hitTest = opts.hitTest;
+    this.adjustToolRadius = opts.adjustToolRadius;
     this.gestures = new CameraGestures({ emit: opts.emit, config: opts.config });
 
     target.addEventListener('wheel', this.onWheel, { passive: false });
@@ -45,6 +65,7 @@ export class CameraInput {
     target.addEventListener('pointermove', this.onMove);
     target.addEventListener('pointerup', this.onUp);
     target.addEventListener('pointercancel', this.onCancel);
+    target.addEventListener('contextmenu', this.onContextMenu);
   }
 
   destroy(): void {
@@ -53,6 +74,7 @@ export class CameraInput {
     this.target.removeEventListener('pointermove', this.onMove);
     this.target.removeEventListener('pointerup', this.onUp);
     this.target.removeEventListener('pointercancel', this.onCancel);
+    this.target.removeEventListener('contextmenu', this.onContextMenu);
   }
 
   private localXY(ev: PointerEvent | WheelEvent): [number, number] {
@@ -62,11 +84,22 @@ export class CameraInput {
 
   private onWheel = (ev: WheelEvent): void => {
     ev.preventDefault(); // 擋掉頁面縮放 / 捲動
+    const rightHeld = ((ev.buttons | this.mouseButtons) & 2) !== 0;
+    if (rightHeld && ev.deltaY !== 0 && this.adjustToolRadius?.(-Math.sign(ev.deltaY))) return;
     const [x, y] = this.localXY(ev);
     this.gestures.wheel(ev.deltaY, x, y);
   };
 
+  private onContextMenu = (ev: MouseEvent): void => {
+    ev.preventDefault(); // 右鍵留給「按住右鍵＋滾輪調半徑」，放開時不跳瀏覽器選單
+  };
+
+  private trackMouseButtons(ev: PointerEvent): void {
+    if (ev.pointerType === 'mouse') this.mouseButtons = ev.buttons;
+  }
+
   private onDown = (ev: PointerEvent): void => {
+    this.trackMouseButtons(ev);
     const [x, y] = this.localXY(ev);
     // 滑鼠：只有中鍵算相機（不論有沒有落在 Jelly 上）。觸控／觸控筆：維持
     // 原本的背景判定（命中 Jelly 的留給 PointerInput 當 Grab）。
@@ -78,11 +111,13 @@ export class CameraInput {
   };
 
   private onMove = (ev: PointerEvent): void => {
+    this.trackMouseButtons(ev);
     const [x, y] = this.localXY(ev);
     this.gestures.pointerMove(ev.pointerId, x, y);
   };
 
   private onUp = (ev: PointerEvent): void => {
+    this.trackMouseButtons(ev);
     this.gestures.pointerUp(ev.pointerId);
     if (this.target.hasPointerCapture(ev.pointerId)) {
       this.target.releasePointerCapture(ev.pointerId);

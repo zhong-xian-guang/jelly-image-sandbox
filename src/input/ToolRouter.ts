@@ -196,6 +196,19 @@ const SPRAY_ATTEMPTS_PER_SLOT = 12;
 const MAX_SPRAY_ATTEMPTS = 1500;
 const MAX_SPRAY_PINS = 200;
 
+/** 半徑拉霸的範圍（issue #114）——面板拉霸與「右鍵＋滾輪調半徑」共用同一份。 */
+export interface RadiusRange {
+  min: number;
+  max: number;
+  step: number;
+}
+
+/**
+ * 撒 Pin 半徑拉霸的範圍（issue #69），世界座標單位。上限 400 ≈ 一般匯入果凍的
+ * 尺度，一下蓋住整隻。
+ */
+export const SPRAY_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 };
+
 /** `setSprayParams` 接受的部分更新（issue #69）——兩個欄位皆可選。 */
 export interface SprayParams {
   /** 撒點範圍的世界座標半徑（圓心 = 點擊處）。 */
@@ -210,6 +223,14 @@ export interface SprayParams {
  */
 export const DEFAULT_ERASE_RADIUS = 100;
 
+/**
+ * 移除 Pin 的橡皮擦半徑範圍（issue #70）——沿用 `SPRAY_RADIUS_RANGE` 的上下限（兩者
+ * 都是「以指標為圓心的作用範圍」，尺度一樣由果凍大小決定），但刻意是**另一條**
+ * 滑桿、另一個狀態：撒的時候常常想撒一大片，擦的時候多半想擦得精準一點，共用一個
+ * 值會逼使用者每次切工具都重調。
+ */
+export const ERASE_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 };
+
 /** `setEraseParams` 接受的部分更新（issue #70）——目前只有半徑一個欄位。 */
 export interface EraseParams {
   /** 橡皮擦的世界座標半徑（圓心 = 指標目前位置）。 */
@@ -221,6 +242,18 @@ export interface EraseParams {
  * 跟撒 Pin 同一個預設，拉霸範圍也相同（spec #112）。
  */
 export const DEFAULT_HANDFUL_RADIUS = 140;
+
+/** 大把抓取半徑拉霸的範圍（issue #113），世界單位——跟撒 Pin 一致（spec #112）。 */
+export const HANDFUL_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 };
+
+/** 有半徑、能用「右鍵＋滾輪」調整的工具（issue #114）。 */
+export type RadiusToolId = 'spray' | 'erase' | 'handfulGrab';
+
+/** `adjustActiveRadius` 的回報（issue #114）：調的是哪個工具、新半徑多少。 */
+export interface ToolRadius {
+  tool: RadiusToolId;
+  radius: number;
+}
 
 /** `setHandfulParams` 接受的部分更新（issue #113）——目前只有半徑一個欄位。 */
 export interface HandfulParams {
@@ -513,6 +546,29 @@ export class ToolRouter {
   /** 面板「大把抓取半徑」拉霸的即時寫入口（issue #113）——只影響**下一次**按下。 */
   setHandfulParams(params: Partial<HandfulParams>): void {
     if (params.radius !== undefined) this.handfulRadius = params.radius;
+  }
+
+  /**
+   * 「右鍵＋滾輪」調整目前工具的半徑（issue #114）：`steps` 格（正 = 放大），每格一個
+   * 拉霸 step，夾在該拉霸範圍內，回報新值讓呼叫端同步面板與圓圈。目前工具沒有半徑
+   * 就回 `null`（「不處理」——呼叫端照舊縮放相機）。跟拉霸一樣只影響**下一次**按下：
+   * 進行中的大把抓取 session 已經在按下時記下自己的半徑。
+   */
+  adjustActiveRadius(steps: number): ToolRadius | null {
+    const tool = this.activeTool;
+    if (tool === 'spray') {
+      this.sprayRadius = stepRadius(this.sprayRadius, steps, SPRAY_RADIUS_RANGE);
+      return { tool, radius: this.sprayRadius };
+    }
+    if (tool === 'erase') {
+      this.eraseRadius = stepRadius(this.eraseRadius, steps, ERASE_RADIUS_RANGE);
+      return { tool, radius: this.eraseRadius };
+    }
+    if (tool === 'handfulGrab') {
+      this.handfulRadius = stepRadius(this.handfulRadius, steps, HANDFUL_RADIUS_RANGE);
+      return { tool, radius: this.handfulRadius };
+    }
+    return null;
   }
 
   get currentTool(): ToolId {
@@ -913,4 +969,9 @@ export class ToolRouter {
 /** `point` 是否距離 `others` 裡任何一點不到 `minDistance`（撒 Pin 的間距判定）。 */
 function isWithin(point: Point, others: readonly Point[], minDistance: number): boolean {
   return others.some((o) => Math.hypot(o.x - point.x, o.y - point.y) < minDistance);
+}
+
+/** 半徑往上／下走 `steps` 格拉霸 step，夾在範圍內（issue #114）。 */
+function stepRadius(radius: number, steps: number, range: RadiusRange): number {
+  return Math.min(range.max, Math.max(range.min, radius + steps * range.step));
 }
