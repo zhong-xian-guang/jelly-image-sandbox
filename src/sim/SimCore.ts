@@ -34,7 +34,8 @@
  *      翻正——不取絕對值）。compliant projection、1 iteration、`α̃ = compliance/h²`。
  *   5. Grab / Pin 位置約束：附著點（三角形 + 重心座標）→ 目標點，位置差按重心
  *      權重分回三個 Particle（ADR-0003）。Pin = 目標點凍結、β 恆 1 的 Grab
- *      （ADR-0004）。多條依序解、每 substep 一次；孤立 Pin 逐幀看幾乎不動，
+ *      （ADR-0004）。大把抓取（issue #113；ADR-0014）＝一條約束 N 個附著項，圈內每顆
+ *      各自拉向「目標 + 按下時的偏移」、硬度依距離衰減。多條依序解、每 substep 一次；孤立 Pin 逐幀看幾乎不動，
  *      共用 Particle 的密集 Pin 群仍會被下一 substep 的 shape matching 微擾。
  *      陣風觸發時對已 Pin 住的 Particle 一樣會把衝量烤進 `vel`、預測也照常積分，但
  *      這一步會把位置拉回鎖定點——附著點因此仍不動，力學上不需要另外特例判斷。
@@ -392,7 +393,11 @@ export class SimCore {
   applyInput(event: InputEvent): void {
     switch (event.type) {
       case 'grab':
-        this.doGrab(event.id, event.x, event.y, this.grabRadius(event.radius));
+        if (event.handfulRadius !== undefined) {
+          this.doHandfulGrab(event.id, event.x, event.y, event.handfulRadius);
+        } else {
+          this.doGrab(event.id, event.x, event.y, this.grabRadius(event.radius));
+        }
         break;
       case 'moveGrab': {
         const c = this.constraints.get(event.id);
@@ -413,8 +418,8 @@ export class SimCore {
           if (!this.doGrab(event.id, event.x, event.y, this.grabRadius(event.radius))) break;
         }
         const c = this.constraints.get(event.id);
-        if (c && !c.pinned) {
-          // 就地凍結：目標點移到目前附著點 → 不跳動。已是 Pin 則不動它。
+        if (c && !c.pinned && !c.handful) {
+          // 就地凍結（大把抓取不支援釘選，ADR-0014）：目標點移到目前附著點 → 不跳動。已是 Pin 則不動它。
           const a = this.weightedPoint(c.anchor);
           c.target.x = a.x;
           c.target.y = a.y;
@@ -436,7 +441,12 @@ export class SimCore {
         break;
       }
       case 'tap':
-        this.doTap(event.x, event.y, event.strength ?? this.params.tapStrength);
+        this.doTap(
+          event.x,
+          event.y,
+          event.strength ?? this.params.tapStrength,
+          event.radius ?? this.diag(this.bounds(this.pos)) * SimCore.TAP_RADIUS_FRAC,
+        );
         break;
       case 'clearPins':
         this.clearPins();
@@ -656,6 +666,50 @@ export class SimCore {
     return true;
   }
 
+  /**
+   * 大把抓取（issue #113；ADR-0014）：`(x, y)` 半徑 `radius` 內（嚴格小於）每顆 Particle
+   * 各一個附著項——偏移 = 按下當下相對 `(x, y)` 的位移（目標 = 指標 + 偏移，按下時誤差
+   * 0、不跳動）、硬度 `(1 − d/R)²`（中心 1、邊緣趨近 0，乘上 `grabBeta`）。成員依索引
+   * 順序、全部在此凍結。`anchor`（對外回報的附著點）= 按下點：命中三角形就用它的重心
+   * 座標，否則退回圈內最近那顆。圈內沒有 Particle → no-op，回傳 false。
+   */
+  private doHandfulGrab(id: PointerId, x: number, y: number, radius: number): boolean {
+    const attachments: Attachment[] = [];
+    let nearest = -1;
+    let nearestD = Infinity;
+    for (let i = 0; i < this.n; i++) {
+      const dx = this.pos[2 * i]! - x;
+      const dy = this.pos[2 * i + 1]! - y;
+      const d = Math.hypot(dx, dy);
+      if (!(d < radius)) continue;
+      const f = 1 - d / radius;
+      attachments.push({
+        tri: [i, i, i],
+        w: [1, 0, 0],
+        offsetX: dx,
+        offsetY: dy,
+        stiffness: f * f,
+      });
+      if (d < nearestD) {
+        nearestD = d;
+        nearest = i;
+      }
+    }
+    if (nearest < 0) return false;
+    const hit = this.pick(x, y);
+    const anchor: SurfacePoint = hit
+      ? { tri: [hit.tri[0], hit.tri[1], hit.tri[2]], w: [hit.w[0], hit.w[1], hit.w[2]] }
+      : { tri: [nearest, nearest, nearest], w: [1, 0, 0] };
+    this.constraints.set(id, {
+      anchor,
+      attachments,
+      target: { x, y },
+      pinned: false,
+      handful: true,
+    });
+    return true;
+  }
+
   /** 表面點世界座標＝三角形頂點的重心座標加權；`buf` 預設目前位置，傳 `rest` 得靜止形狀下的座標。 */
   private weightedPoint(g: SurfacePoint, buf: Float64Array = this.pos): Point {
     const [i0, i1, i2] = g.tri;
@@ -667,13 +721,12 @@ export class SimCore {
   }
 
   /**
-   * Tap（輕拍）：一次性向內徑向脈衝，直接改速度、不進 substep 迴圈。半徑
-   * `R = 目前 bbox 對角線 × TAP_RADIUS_FRAC` 內每個 Particle：
+   * Tap（輕拍）：一次性向內徑向脈衝，直接改速度、不進 substep 迴圈。半徑 `r`
+   * （事件沒帶時 = 目前 bbox 對角線 × TAP_RADIUS_FRAC）內每個 Particle：
    * `v += 正規化(tapPoint − pos) · strength · (1 − d/R)²`。向內 → 凹陷後彈回；
    * ring-down 交給 shape matching + 阻尼。半徑內無 Particle 時整體 no-op。
    */
-  private doTap(x: number, y: number, strength: number): void {
-    const r = this.diag(this.bounds(this.pos)) * SimCore.TAP_RADIUS_FRAC;
+  private doTap(x: number, y: number, strength: number, r: number): void {
     for (let i = 0; i < this.n; i++) {
       const dx = x - this.pos[2 * i]!;
       const dy = y - this.pos[2 * i + 1]!;

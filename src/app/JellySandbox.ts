@@ -158,6 +158,7 @@ import {
   DEFAULT_SPRAY_RADIUS,
   DEFAULT_SPRAY_SPACING,
   DEFAULT_ERASE_RADIUS,
+  DEFAULT_HANDFUL_RADIUS,
   PointerInput,
   routeForPinMode,
 } from '../input';
@@ -293,6 +294,8 @@ const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
  * 擦的時候多半想擦得精準一點，共用一個值會逼使用者每次切工具都重調。
  */
 const ERASE_RADIUS_RANGE = { min: 20, max: 400, step: 10 };
+/** 大把抓取半徑拉霸的範圍（issue #113），世界單位——跟撒 Pin 一致（spec #112）。 */
+const HANDFUL_RADIUS_RANGE = { min: 20, max: 400, step: 10 };
 /**
  * 「匯入尺寸」拉霸的範圍與預設（issue #88 / V3 T1-1，見 CONTEXT.md「匯入尺寸」），
  * 世界單位 = 未縮放時的 mask 像素。預設 512：一般解析度的圖進場大小跟以前差不多
@@ -310,11 +313,11 @@ const DEFAULT_SOURCE_ID = 'src/1';
  */
 const PIN_REMOVE_RADIUS_PX = 16;
 /**
- * 會被「播放時隱藏提示」（issue #71）蓋到的提示層，每層一個 key——即面板上那五顆
- * 顯示開關。撒 Pin／移除 Pin 的筆刷圓圈刻意不在此列，理由見
- * `JellySandbox.applyHintVisibility`。
+ * 會被「播放時隱藏提示」（issue #71）蓋到的提示層，每層一個 key——即面板上那六顆
+ * 顯示開關（issue #113 加上大把抓取範圍圈 `handfulRange`）。撒 Pin／移除 Pin 的筆刷
+ * 圓圈刻意不在此列，理由見 `JellySandbox.applyHintVisibility`。
  */
-type HintKey = 'wireframe' | 'pins' | 'fanRange' | 'fanIcon' | 'formation';
+type HintKey = 'wireframe' | 'pins' | 'fanRange' | 'fanIcon' | 'formation' | 'handfulRange';
 /** 各提示層的顯示狀態：可能是使用者的意圖（`hintIntent`），也可能是算完壓下之後的實際值（`effectiveHints`）。 */
 type HintVisibility = Record<HintKey, boolean>;
 /** 播放中被壓下時的實際狀態——全域開關沒有逐層覆寫，所以壓下就是全滅。 */
@@ -324,6 +327,7 @@ const ALL_HINTS_HIDDEN: Readonly<HintVisibility> = {
   fanRange: false,
   fanIcon: false,
   formation: false,
+  handfulRange: false,
 };
 
 /**
@@ -409,6 +413,12 @@ export class JellySandbox {
    */
   private readonly brushCursor: BrushCursor;
   /**
+   * 大把抓取的範圍圈（issue #113）——幾何沿用筆刷圓圈（另一顆 `BrushCursor`、自己的
+   * 顏色），但它是**提示**：有自己的顯示開關、受「播放時隱藏提示」壓下（見
+   * `applyHandfulRangeVisibility`），所以不跟撒 Pin／移除 Pin 共用 `brushCursor`。
+   */
+  private readonly handfulRange: BrushCursor;
+  /**
    * 指標在畫布上的懸停位置（issue #79 / V2 T3-8）——`PointerInput` 只追按下之後
    * 的移動，「按下去之前先讓使用者看到這一下會做什麼」的兩個預覽（筆刷圓圈、
    * 編隊形狀）都靠它。見 `CanvasHover` 說明。
@@ -469,6 +479,7 @@ export class JellySandbox {
     fanRange: true,
     fanIcon: true,
     formation: true,
+    handfulRange: true,
   };
   /**
    * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿目前值（issue #67）
@@ -489,6 +500,8 @@ export class JellySandbox {
   private spraySpacing = DEFAULT_SPRAY_SPACING;
   /** 「移除 Pin 範圍半徑」滑桿目前值（issue #70）——用途同 `sprayRadius`。 */
   private eraseRadius = DEFAULT_ERASE_RADIUS;
+  /** 「大把抓取半徑」拉霸目前值（issue #113）——用途同 `sprayRadius`（範圍圈的大小）。 */
+  private handfulRadius = DEFAULT_HANDFUL_RADIUS;
   /**
    * 「播放時隱藏提示」全域開關（issue #71 / V2 T3-7）——開著時，播放中把所有提示
    * 一律壓下（見 `hintsSuppressed`／`applyHintVisibility`）。它跟上面那幾個
@@ -655,6 +668,8 @@ export class JellySandbox {
         sprayRadius: this.sprayRadius,
         spraySpacing: this.spraySpacing,
         eraseRadius: this.eraseRadius,
+        handfulRadius: this.handfulRadius,
+        showHandfulRange: this.hintIntent.handfulRange,
         hideHintsDuringPlayback: this.hideHintsDuringPlayback,
         importSize: this.importSize,
         meshDensity: this.meshDensity,
@@ -670,6 +685,7 @@ export class JellySandbox {
       sprayRadiusRange: SPRAY_RADIUS_RANGE,
       spraySpacingRange: SPRAY_SPACING_RANGE,
       eraseRadiusRange: ERASE_RADIUS_RANGE,
+      handfulRadiusRange: HANDFUL_RADIUS_RANGE,
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
       onImportImage: () => this.fileImportInput.open(),
       onSaveClip: () => this.saveClip(),
@@ -688,6 +704,8 @@ export class JellySandbox {
       onSprayRadiusChange: (radius) => this.setSprayRadius(radius),
       onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
       onEraseRadiusChange: (radius) => this.setEraseRadius(radius),
+      onHandfulRadiusChange: (radius) => this.setHandfulRadius(radius),
+      onShowHandfulRangeChange: (visible) => this.setHintVisible('handfulRange', visible),
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onImportSizeChange: (size) => this.setImportSize(size),
       onMeshDensityChange: (density) => this.setMeshDensity(density),
@@ -735,6 +753,9 @@ export class JellySandbox {
     root.appendChild(this.formationOverlay.element);
     this.brushCursor = new BrushCursor();
     root.appendChild(this.brushCursor.element);
+    this.handfulRange = new BrushCursor();
+    this.handfulRange.setVariant('handful');
+    root.appendChild(this.handfulRange.element);
     this.canvasHover = new CanvasHover(root, {
       isCanvas: (target) => target === this.renderer.canvas,
     });
@@ -785,6 +806,7 @@ export class JellySandbox {
     this.pinMarkers.destroy();
     this.canvasHover.destroy(); // 它在 root 上掛了指標監聽（issue #79），一定要解掉
     this.brushCursor.destroy();
+    this.handfulRange.destroy();
     this.input.destroy();
     this.cameraInput.destroy();
     this.renderer.destroy();
@@ -1398,6 +1420,17 @@ export class JellySandbox {
     const brush = this.brushFor(tool);
     if (brush) this.brushCursor.setVariant(brush.variant);
     this.brushCursor.setActive(brush !== null);
+    this.applyHandfulRangeVisibility();
+  }
+
+  /**
+   * 大把抓取範圍圈（issue #113）顯示與否＝選著大把抓取 且 這層提示實際上可見（使用者
+   * 開著、沒被播放壓下）。「切工具」與「提示可見性變了」兩條路都呼叫這裡。
+   */
+  private applyHandfulRangeVisibility(): void {
+    this.handfulRange.setActive(
+      this.activeTool === 'handfulGrab' && this.effectiveHints().handfulRange,
+    );
   }
 
   /**
@@ -1453,6 +1486,12 @@ export class JellySandbox {
   private setEraseRadius(radius: number): void {
     this.eraseRadius = radius;
     this.input.setEraseParams({ radius });
+  }
+
+  /** 「大把抓取半徑」拉霸（issue #113）——下一次按下用，同時是範圍圈的大小。 */
+  private setHandfulRadius(radius: number): void {
+    this.handfulRadius = radius;
+    this.input.setHandfulParams({ radius });
   }
 
   /**
@@ -1610,6 +1649,7 @@ export class JellySandbox {
     this.fanOverlay.setShowRange(hints.fanRange);
     this.fanOverlay.setShowIcon(hints.fanIcon);
     this.formationOverlay.setVisible(hints.formation);
+    this.applyHandfulRangeVisibility();
   }
 
   /**
@@ -2332,6 +2372,11 @@ export class JellySandbox {
     const brush = this.brushFor(this.activeTool);
     if (brush) {
       this.brushCursor.setRadiusPx(brush.radius * this.cameraState.transform.scale);
+    }
+    // 大把抓取範圍圈（issue #113）：同一套幾何；拖曳中 `canvasHover` 照樣更新，圈跟著游標。
+    if (this.activeTool === 'handfulGrab') {
+      this.handfulRange.setPosition(this.canvasHover.point);
+      this.handfulRange.setRadiusPx(this.handfulRadius * this.cameraState.transform.scale);
     }
   }
 

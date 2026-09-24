@@ -156,6 +156,10 @@ export interface ControlPanelInitial {
   spraySpacing: number;
   /** 移除 Pin 半徑滑桿的初始值（issue #70）——見 `../input` 的 `DEFAULT_ERASE_RADIUS`。 */
   eraseRadius: number;
+  /** 大把抓取半徑拉霸的初始值（issue #113）——見 `../input` 的 `DEFAULT_HANDFUL_RADIUS`。 */
+  handfulRadius: number;
+  /** 大把抓取範圍圈（提示）顯示開關的初始值（issue #113）。 */
+  showHandfulRange: boolean;
   /** 「播放時隱藏提示」全域開關的初始值（issue #71）——見 `onHideHintsDuringPlaybackChange`。 */
   hideHintsDuringPlayback: boolean;
   /** 「匯入尺寸」拉霸的初始值（issue #88 / V3 T1-1），世界單位——見 `onImportSizeChange`。 */
@@ -186,6 +190,8 @@ export interface ControlPanelOptions {
   spraySpacingRange: RangeSpec;
   /** 移除 Pin「範圍半徑」滑桿的範圍（issue #70）。 */
   eraseRadiusRange: RangeSpec;
+  /** 「大把抓取半徑」拉霸的範圍（issue #113）。 */
+  handfulRadiusRange: RangeSpec;
   /** 「匯入尺寸」拉霸的範圍（issue #88）。 */
   importSizeRange: RangeSpec;
   /** 「網格密度」拉霸的範圍（issue #89）。 */
@@ -260,6 +266,13 @@ export interface ControlPanelOptions {
    * 值（見 `ToolRouter.setEraseParams`），這裡也就是兩個各自獨立的回呼。
    */
   onEraseRadiusChange: (radius: number) => void;
+  /**
+   * 「大把抓取半徑」拉霸變更（issue #113 / V3 T4-1）——影響下一次按下（已抓住的那一把
+   * 不變）與畫布上的範圍圈，兩件事都交給 `JellySandbox`。
+   */
+  onHandfulRadiusChange: (radius: number) => void;
+  /** 「顯示大把抓取範圍」開關（issue #113）——範圍圈是提示層，同 `onShowFormationHintChange`，純視覺。 */
+  onShowHandfulRangeChange: (visible: boolean) => void;
   /**
    * 「播放時隱藏提示」全域開關（issue #71 / V2 T3-7）——開啟後只要有任何 Track／
    * Demo 在播放，所有視覺提示（顯示網格／顯示 Pin／風扇範圍／風扇圖示／編隊抓取
@@ -622,9 +635,32 @@ export class ControlPanel {
       ).row,
     ]);
 
+    // 大把抓取專屬參數（issue #113）：範圍圈提示開關 + 半徑拉霸。
+    const handfulParams = this.toolParams('大把抓取', [
+      this.checkboxRow(
+        '顯示大把抓取範圍',
+        opts.initial.showHandfulRange,
+        opts.onShowHandfulRangeChange,
+      ),
+      this.rangeRow(
+        '大把抓取半徑',
+        opts.handfulRadiusRange.min,
+        opts.handfulRadiusRange.max,
+        opts.handfulRadiusRange.step,
+        opts.initial.handfulRadius,
+        opts.onHandfulRadiusChange,
+      ).row,
+    ]);
+
     const toolSection = this.toolSection(
       opts.initial.activeTool,
-      { fan: fanParams, formation: formationParams, spray: sprayParams, erase: eraseParams },
+      {
+        fan: fanParams,
+        formation: formationParams,
+        spray: sprayParams,
+        erase: eraseParams,
+        handfulGrab: handfulParams,
+      },
       (t) => {
         opts.onToolChange(t);
         pins.setToolLocked(t !== 'general');
@@ -960,6 +996,7 @@ export class ControlPanel {
     // 第三欄 = 這個選項的鎖法（issue #97 / #98，見 `lockedToolOptions`）。
     for (const [value, text, lock] of [
       ['general', '一般操作', 'none'],
+      ['handfulGrab', '大把抓取', 'none'],
       ['fan', '電風扇', 'none'],
       ['formation', '編隊抓取', 'none'],
       ['spray', '撒 Pin', 'none'],

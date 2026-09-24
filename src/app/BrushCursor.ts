@@ -26,11 +26,12 @@ const ACTIVE_CLASS = 'is-active';
 
 /**
  * 圓圈的用途（issue #70）——只影響顏色（CSS `.is-<variant>`），幾何完全共用。
- * `'spray'` = 撒 Pin（琥珀），`'erase'` = 移除 Pin（紅）。
+ * `'spray'` = 撒 Pin（琥珀），`'erase'` = 移除 Pin（紅），`'handful'` = 大把抓取的
+ * 範圍圈（issue #113，青綠；那顆是提示、由 `JellySandbox` 另建一個實例管）。
  */
-export type BrushVariant = 'spray' | 'erase';
+export type BrushVariant = 'spray' | 'erase' | 'handful';
 
-const VARIANTS: readonly BrushVariant[] = ['spray', 'erase'];
+const VARIANTS: readonly BrushVariant[] = ['spray', 'erase', 'handful'];
 
 export class BrushCursor {
   readonly element: HTMLDivElement;

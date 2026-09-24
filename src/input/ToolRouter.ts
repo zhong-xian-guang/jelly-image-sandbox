@@ -79,6 +79,15 @@
  * 只作用於 Pin：不碰 `release`，所以一般 Grab（含還跟著別的指標走的那些）完全
  * 不受影響。
  *
+ * **大把抓取**（issue #113 / V3 T4-1；ADR-0014）：手勢跟一般操作同形——`down`（落在
+ * Jelly 上才算，同 `hitTest`）→ `grab{handfulRadius}`、`move` → `moveGrab`、`up` →
+ * 快速按放（`isTap`，同一組門檻）先送 `tap{radius}`（打在按下點）再 `release`，
+ * `cancel` 只 `release`。id 直接用指標 id（`PointerInput` 每次按下都配新的），多指各自
+ * 一把。半徑存在 `handfulRadiusValue`（`setHandfulParams`，面板拉霸即時寫入），**按下
+ * 當下**拍進 session——之後改半徑只影響下一把。把 N 顆展開的工作不在這裡：輸入層只
+ * 送一個 `handfulRadius`，求解器依它決定性地挑出同一把（重播才一致）。進行中的 session
+ * 跟「點一下」一樣先於 `activeTool` 分支處理：按住途中切走工具，這一把仍照常跟隨、放開。
+ *
  * **電風扇**（issue #66；ADR-0010 v1 單一實例）：`down` 先問 `getFan` 場上目前
  * 有沒有風扇、世界座標是否落在它的矩形內（`isPointInFanRect`）——落在裡面＝
  * 「拖曳既有風扇」（`FanMoveSession`，issue #67 事後追加：使用者不必每次都
@@ -126,11 +135,19 @@ import {
 /**
  * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）、
  * `'erase'`（issue #70，＝「移除 Pin」）、`'spawn'`／`'removeJelly'`（issue #97）、
- * `'rebuildJelly'`（issue #98）加進 ADR-0011 選擇器；`'general'` 維持既有
- * Grab/Pin/Tap 手勢。
+ * `'rebuildJelly'`（issue #98）、`'handfulGrab'`（issue #113）加進 ADR-0011 選擇器；
+ * `'general'` 維持既有 Grab/Pin/Tap 手勢。
  */
 export type ToolId =
-  'general' | 'fan' | 'formation' | 'spray' | 'erase' | 'spawn' | 'removeJelly' | 'rebuildJelly';
+  | 'general'
+  | 'handfulGrab'
+  | 'fan'
+  | 'formation'
+  | 'spray'
+  | 'erase'
+  | 'spawn'
+  | 'removeJelly'
+  | 'rebuildJelly';
 
 /**
  * 「點一下就完成」的那幾個工具（issue #97）——`down`→`up` 無拖曳才作用，見
@@ -196,6 +213,18 @@ export const DEFAULT_ERASE_RADIUS = 100;
 /** `setEraseParams` 接受的部分更新（issue #70）——目前只有半徑一個欄位。 */
 export interface EraseParams {
   /** 橡皮擦的世界座標半徑（圓心 = 指標目前位置）。 */
+  radius: number;
+}
+
+/**
+ * 大把抓取半徑的預設值（issue #113；世界單位）——`setHandfulParams` 可在執行期間覆寫。
+ * 跟撒 Pin 同一個預設，拉霸範圍也相同（spec #112）。
+ */
+export const DEFAULT_HANDFUL_RADIUS = 140;
+
+/** `setHandfulParams` 接受的部分更新（issue #113）——目前只有半徑一個欄位。 */
+export interface HandfulParams {
+  /** 抓取範圍的世界座標半徑（圓心 = 按下處）。 */
   radius: number;
 }
 
@@ -307,6 +336,14 @@ interface ClickSession extends GestureStart {
   dragged: boolean;
 }
 
+/**
+ * 進行中的一次大把抓取手勢（issue #113）：按下當下的定格（輕拍判定與 `tap` 座標用）
+ * + 按下當下的半徑（這一把的 `grab` 與可能的 `tap` 都用它，之後改拉霸不影響）。
+ */
+interface HandfulSession extends GestureStart {
+  radius: number;
+}
+
 export class ToolRouter {
   private readonly gestureTracker: GestureTracker;
   private readonly screenToWorld: (x: number, y: number) => Point;
@@ -346,6 +383,10 @@ export class ToolRouter {
   private eraseRadius = DEFAULT_ERASE_RADIUS;
   /** 進行中的擦除手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly eraseSessions = new Map<PointerId, EraseSession>();
+  /** 大把抓取半徑（issue #113）——面板拉霸即時寫入，按下當下拍進 session。 */
+  private handfulRadiusValue = DEFAULT_HANDFUL_RADIUS;
+  /** 進行中的大把抓取手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
+  private readonly handfulSessions = new Map<PointerId, HandfulSession>();
   /** 進行中的「點一下」手勢（issue #97），鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly clickSessions = new Map<PointerId, ClickSession>();
   /**
@@ -469,6 +510,16 @@ export class ToolRouter {
     if (params.radius !== undefined) this.eraseRadius = params.radius;
   }
 
+  /** 面板「大把抓取半徑」拉霸的即時寫入口（issue #113）——只影響**下一次**按下。 */
+  setHandfulParams(params: Partial<HandfulParams>): void {
+    if (params.radius !== undefined) this.handfulRadiusValue = params.radius;
+  }
+
+  /** 目前的大把抓取半徑（世界單位）——範圍圈提示讀它。 */
+  get handfulRadius(): number {
+    return this.handfulRadiusValue;
+  }
+
   get currentTool(): ToolId {
     return this.activeTool;
   }
@@ -476,6 +527,20 @@ export class ToolRouter {
   down(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
     if (this.activeTool === 'general') {
       this.gestureTracker.down(id, screenX, screenY, timeMs);
+      return;
+    }
+    if (this.activeTool === 'handfulGrab') {
+      const world = this.screenToWorld(screenX, screenY);
+      if (this.hitTest && !this.hitTest(world)) return; // 背景拖曳 → 不歸求解器
+      const radius = this.handfulRadiusValue;
+      this.handfulSessions.set(id, {
+        startX: screenX,
+        startY: screenY,
+        startT: timeMs,
+        startWorld: world,
+        radius,
+      });
+      this.emit({ type: 'grab', id, x: world.x, y: world.y, handfulRadius: radius });
       return;
     }
     if (this.activeTool === 'fan') {
@@ -567,6 +632,12 @@ export class ToolRouter {
       }
       return;
     }
+    // 大把抓取同理：這一把屬於按下當下的工具（issue #113）。
+    if (this.handfulSessions.has(id)) {
+      const world = this.screenToWorld(screenX, screenY);
+      this.emit({ type: 'moveGrab', id, x: world.x, y: world.y });
+      return;
+    }
     if (this.activeTool === 'general') {
       this.gestureTracker.move(id, screenX, screenY);
       return;
@@ -616,6 +687,21 @@ export class ToolRouter {
       if (!click.dragged) this.onClickTool?.(click.tool, click.startWorld);
       return;
     }
+    const handful = this.handfulSessions.get(id);
+    if (handful) {
+      this.handfulSessions.delete(id);
+      // 快速按放＝以同一個半徑對按下點 Tap（ADR-0014），跟一般操作的 grab → tap → release 同形。
+      if (isTap(handful, screenX, screenY, timeMs, this.config)) {
+        this.emit({
+          type: 'tap',
+          x: handful.startWorld.x,
+          y: handful.startWorld.y,
+          radius: handful.radius,
+        });
+      }
+      this.emit({ type: 'release', id });
+      return;
+    }
     if (this.activeTool === 'general') {
       this.gestureTracker.up(id, screenX, screenY, timeMs);
       return;
@@ -651,6 +737,11 @@ export class ToolRouter {
     // 生成／移除都還沒發生（要等 `up`），中斷就是整個作廢，不留痕跡（issue #97）。
     // 先攔的理由同 `up`：手勢屬於按下當下那個工具。
     if (this.clickSessions.delete(id)) return;
+    // 大把抓取已經是活著的約束：中斷要真的放開（同一般 Grab），不送 tap。
+    if (this.handfulSessions.delete(id)) {
+      this.emit({ type: 'release', id });
+      return;
+    }
     if (this.activeTool === 'general') {
       this.gestureTracker.cancel(id);
       return;

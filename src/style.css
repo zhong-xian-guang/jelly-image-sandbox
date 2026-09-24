@@ -714,3 +714,9 @@ body {
   border-color: rgba(255, 105, 105, 0.9);
   background: rgba(255, 105, 105, 0.12);
 }
+
+/* 大把抓取的範圍圈（issue #113）：同一套幾何、青綠色，是可開關的提示。 */
+.jelly-brush-cursor-circle.is-handful {
+  border-color: rgba(90, 220, 200, 0.9);
+  background: rgba(90, 220, 200, 0.08);
+}

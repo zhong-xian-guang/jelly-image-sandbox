@@ -510,3 +510,172 @@ describe('World — 跨塊碰撞（issue #96 / V3 T3-3）', () => {
     });
   });
 });
+
+describe('World — 大把抓取與範圍 Tap（issue #113 / V3 T4-1；ADR-0014）', () => {
+  /** 13×13 頂點、間距 10 的方格（120×120）——夠大，圈內外都有足夠 Particle。 */
+  const bigProvider: MeshProvider = () => gridMesh(13, 13, 10);
+
+  function bigWorld(params: ConstructorParameters<typeof World>[1] = {}): World {
+    const world = new World(bigProvider, params);
+    world.applyInput(spawnEvent('jelly/1', { x: 0, y: 0 }));
+    return world;
+  }
+
+  /** 按下 `(60, 60)`、分 30 幀把指標往下拖 `distance`，每幀推進一步。 */
+  function dragDown(world: World, grab: InputEvent & { type: 'grab' }, distance: number): void {
+    world.applyInput(grab);
+    for (let f = 1; f <= 30; f++) {
+      world.applyInput({
+        type: 'moveGrab',
+        id: grab.id,
+        x: grab.x,
+        y: grab.y + (distance * f) / 30,
+      });
+      world.step(1 / 60);
+    }
+    run(world, 30);
+  }
+
+  function particle(world: World, i: number, jelly = 0): { x: number; y: number } {
+    const p = world.jellies()[jelly]!.positions;
+    return { x: p[2 * i]!, y: p[2 * i + 1]! };
+  }
+
+  /** rest 座標落在 `(cx, cy)` 半徑 `r` 內的 Particle 索引（13×13 方格，索引 = j·13 + i）。 */
+  function restIndicesWithin(cx: number, cy: number, r: number): number[] {
+    const out: number[] = [];
+    for (let k = 0; k < 169; k++) {
+      if (Math.hypot((k % 13) * 10 - cx, Math.floor(k / 13) * 10 - cy) < r) out.push(k);
+    }
+    return out;
+  }
+
+  /** 圈內各 Particle 相對中心 Particle（索引 84 = (60, 60)）的位移偏離 rest 的均方根——越小越維持形狀。 */
+  function shapeDistortion(world: World, members: number[]): number {
+    const c = particle(world, 84);
+    let sum = 0;
+    for (const k of members) {
+      const p = particle(world, k);
+      const dx = p.x - c.x - ((k % 13) * 10 - 60);
+      const dy = p.y - c.y - (Math.floor(k / 13) * 10 - 60);
+      sum += dx * dx + dy * dy;
+    }
+    return Math.sqrt(sum / members.length);
+  }
+
+  it('拖很遠時圈內整團維持形狀：相對位置變化明顯小於單點 Grab', () => {
+    const members = restIndicesWithin(60, 60, 25);
+    const single = bigWorld();
+    dragDown(single, { type: 'grab', id: 'g', x: 60, y: 60 }, 300);
+    const handful = bigWorld();
+    dragDown(handful, { type: 'grab', id: 'g', x: 60, y: 60, handfulRadius: 40 }, 300);
+    expect(shapeDistortion(handful, members)).toBeLessThan(shapeDistortion(single, members) * 0.5);
+  });
+
+  it('中心附近的 Particle 比邊緣更貼近「指標 + 偏移」', () => {
+    const world = bigWorld();
+    dragDown(world, { type: 'grab', id: 'g', x: 60, y: 60, handfulRadius: 40 }, 300);
+    const err = (k: number) => {
+      const p = particle(world, k);
+      return Math.hypot(p.x - (k % 13) * 10, p.y - (Math.floor(k / 13) * 10 + 300));
+    };
+    expect(err(84)).toBeLessThan(1); // 中心（d = 0）
+    expect(err(84)).toBeLessThan(err(84 + 3)); // (90, 60)：d = 30
+  });
+
+  it('兩塊相貼時只有被點中那塊被拉動', () => {
+    const world = new World(bigProvider);
+    world.applyInput(spawnEvent('jelly/1', { x: 0, y: 0 }));
+    world.applyInput(spawnEvent('jelly/2', { x: 130, y: 0 }));
+    const before = Array.from(world.jellies()[1]!.positions);
+    // 圈（半徑 60）涵蓋 B 的左緣，但按在 A 上
+    world.applyInput({ type: 'grab', id: 'g', x: 115, y: 60, handfulRadius: 60 });
+    world.applyInput({ type: 'moveGrab', id: 'g', x: -100, y: 60 });
+    run(world, 30);
+    expect(Array.from(world.jellies()[1]!.positions)).toEqual(before);
+    expect(particle(world, 84).x).toBeLessThan(0);
+  });
+
+  it('同一串事件跑兩次逐位元相同', () => {
+    const once = () => {
+      const world = bigWorld();
+      dragDown(world, { type: 'grab', id: 'g', x: 60, y: 60, handfulRadius: 40 }, 300);
+      world.applyInput({ type: 'release', id: 'g' });
+      run(world, 20);
+      return Array.from(world.jellies()[0]!.positions);
+    };
+    expect(once()).toEqual(once());
+  });
+
+  it('沒帶 handfulRadius 跟原本的單點 Grab 完全相同', () => {
+    const a = bigWorld();
+    dragDown(a, { type: 'grab', id: 'g', x: 60, y: 60 }, 200);
+    const b = bigWorld();
+    dragDown(b, { type: 'grab', id: 'g', x: 60, y: 60, handfulRadius: undefined }, 200);
+    expect(Array.from(b.jellies()[0]!.positions)).toEqual(Array.from(a.jellies()[0]!.positions));
+    expect(b.restAttachPoint('g')).toEqual(a.restAttachPoint('g'));
+  });
+
+  it('附近的 Pin 不被拖走', () => {
+    const world = bigWorld();
+    world.applyInput({ type: 'pin', id: 'p', x: 60, y: 80 });
+    dragDown(world, { type: 'grab', id: 'g', x: 60, y: 60, handfulRadius: 40 }, 300);
+    const pin = world.listPins()[0]!;
+    expect(Math.hypot(pin.point.x - 60, pin.point.y - 80)).toBeLessThan(0.5);
+  });
+
+  it('附著點回報按下點；release 整把放開、放開後帶速度離手（Fling）', () => {
+    const world = bigWorld();
+    world.applyInput({ type: 'grab', id: 'g', x: 65, y: 65, handfulRadius: 40 });
+    expect(world.restAttachPoint('g')!.x).toBeCloseTo(65, 9);
+    expect(world.restAttachPoint('g')!.y).toBeCloseTo(65, 9);
+    expect(world.grabCount).toBe(1);
+    for (let f = 1; f <= 5; f++) {
+      world.applyInput({ type: 'moveGrab', id: 'g', x: 65 + 20 * f, y: 65 });
+      world.step(1 / 60);
+    }
+    world.applyInput({ type: 'release', id: 'g' });
+    expect(world.grabCount).toBe(0);
+    expect(world.restAttachPoint('g')).toBeNull();
+    const x0 = particle(world, 84).x;
+    run(world, 5);
+    expect(particle(world, 84).x).toBeGreaterThan(x0 + 10); // 帶著往右的速度
+  });
+
+  it('對大把抓取 id 送無座標 pin 為 no-op', () => {
+    const world = bigWorld();
+    world.applyInput({ type: 'grab', id: 'g', x: 60, y: 60, handfulRadius: 40 });
+    world.applyInput({ type: 'pin', id: 'g' });
+    expect(world.pinCount).toBe(0);
+    expect(world.grabCount).toBe(1);
+  });
+
+  it('圈內沒有 Particle 時為 no-op', () => {
+    const world = bigWorld();
+    world.applyInput({ type: 'grab', id: 'g', x: 65, y: 65, handfulRadius: 2 });
+    expect(world.grabCount).toBe(0);
+    expect(world.restAttachPoint('g')).toBeNull();
+  });
+
+  describe('tap{radius}', () => {
+    /** 關掉 shape matching／XPBD：一步之後的位移 = 脈衝給的速度 × h，圈外完全不動。 */
+    const inert = { alphaSm: 0, xpbd: false };
+
+    it('圈外 Particle 速度不變、圈內有變', () => {
+      const world = bigWorld(inert);
+      world.applyInput({ type: 'tap', x: 60, y: 60, radius: 25 });
+      world.step(1 / 60);
+      expect(particle(world, 84 + 2)).not.toEqual({ x: 80, y: 60 }); // d = 20
+      expect(particle(world, 84 + 3)).toEqual({ x: 90, y: 60 }); // d = 30
+      expect(particle(world, 84 - 3)).toEqual({ x: 30, y: 60 });
+    });
+
+    it('沒帶 radius 時跟原本相同（bbox 對角線 × 0.2 ≈ 34）', () => {
+      const world = bigWorld(inert);
+      world.applyInput({ type: 'tap', x: 60, y: 60 });
+      world.step(1 / 60);
+      expect(particle(world, 84 + 3)).not.toEqual({ x: 90, y: 60 }); // d = 30 < 34
+      expect(particle(world, 84 + 4)).toEqual({ x: 100, y: 60 }); // d = 40
+    });
+  });
+});

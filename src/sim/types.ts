@@ -22,15 +22,22 @@ export type PointerId = number | string;
  * - `grab`：在世界座標 `(x, y)` 抓住 Jelly 表面那一點（picking → 三角形 + 重心座標）。
  *   `radius` 是「點落在所有三角形外」時退回吸附最近 Particle 的搜尋半徑；預設 =
  *   靜止 bbox 對角線 × 0.1。半徑內沒有 Particle → 整個 grab 為 no-op（ADR-0003）。
+ *   `handfulRadius`（issue #113；ADR-0014）＝大把抓取：以 `(x, y)` 為圓心、此半徑內那塊
+ *   的所有 Particle 抓成一把，各自記下按下當下相對 `(x, y)` 的偏移與依距離衰減的硬度
+ *   （中心 `grabBeta`、邊緣趨近 0，`(1 − d/R)²`），拖曳中各自拉向「目標 + 偏移」、整把不
+ *   旋轉。成員／偏移／硬度都在按下當下凍結；圈內沒有 Particle → no-op。沒帶＝單點 Grab。
+ *   跟 `radius` 語意不同、兩者並存（塊的路由仍照單點的規則，見 `World`）。
  * - `moveGrab`：更新既有（未鎖）Grab 的目標點。找不到／已鎖時 no-op。
  * - `release`：解除該 `id` 的 Grab。**不會**解除 Pin（要用 `unpin`）。被抓的
  *   Particle 本身帶著拖曳速度 → 放開即是 Fling。
  * - `pin`：建立／轉成 Pin（目標點凍結、絕對硬鎖，ADR-0004）。帶 `(x, y)` = 在該
- *   座標 picking 建立；不帶座標 = 把該 `id` 既有的 Grab 就地凍結（不跳動）。
+ *   座標 picking 建立；不帶座標 = 把該 `id` 既有的 Grab 就地凍結（不跳動）——大把抓取
+ *   不支援，對它的 `id` 送無座標 `pin` 為 no-op。
  * - `unpin`：解除該 `id` 的 Pin（未鎖的 Grab 不受影響）。
  * - `movePin`：把該 `id` 的 Pin 鎖定點移到 `(x, y)` 並在該處重新硬鎖。
  * - `tap`：在 `(x, y)` 施加一次性向內徑向脈衝（凹陷後彈回）。`strength` 預設
- *   `params.tapStrength`。半徑（目前 bbox 對角線 × 0.2）內無 Particle → no-op。
+ *   `params.tapStrength`。`radius`（issue #113，大把抓取的範圍 Tap）預設目前 bbox
+ *   對角線 × 0.2。半徑內無 Particle → no-op。
  *   無 `id`：Tap 不是持續狀態。
  * - `clearPins`：一次移除**所有** Pin（等同呼叫 `SimCore.clearPins()`）；未鎖的
  *   Grab 不受影響。無 `id`——不是針對單一約束。控制面板「清除所有 Pin」按鈕走
@@ -56,13 +63,13 @@ export type PointerId = number | string;
  *   `id` 加軌別前綴，塊的識別碼跨軌必須保持原樣。
  */
 export type InputEvent =
-  | { type: 'grab'; id: PointerId; x: number; y: number; radius?: number }
+  | { type: 'grab'; id: PointerId; x: number; y: number; radius?: number; handfulRadius?: number }
   | { type: 'moveGrab'; id: PointerId; x: number; y: number }
   | { type: 'release'; id: PointerId }
   | { type: 'pin'; id: PointerId; x?: number; y?: number; radius?: number }
   | { type: 'unpin'; id: PointerId }
   | { type: 'movePin'; id: PointerId; x: number; y: number }
-  | { type: 'tap'; x: number; y: number; strength?: number }
+  | { type: 'tap'; x: number; y: number; strength?: number; radius?: number }
   | { type: 'clearPins' }
   | {
       type: 'setFan';

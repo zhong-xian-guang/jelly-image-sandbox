@@ -42,6 +42,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       sprayRadius: 140,
       spraySpacing: 36,
       eraseRadius: 100,
+      handfulRadius: 140,
+      showHandfulRange: true,
       hideHintsDuringPlayback: false,
       importSize: 512,
       meshDensity: 350,
@@ -57,6 +59,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     sprayRadiusRange: { min: 20, max: 400, step: 10 },
     spraySpacingRange: { min: 12, max: 120, step: 2 },
     eraseRadiusRange: { min: 20, max: 400, step: 10 },
+    handfulRadiusRange: { min: 20, max: 400, step: 10 },
     demos: [],
     onImportImage: vi.fn(),
     onSaveClip: vi.fn(),
@@ -75,6 +78,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onSprayRadiusChange: vi.fn(),
     onSpraySpacingChange: vi.fn(),
     onEraseRadiusChange: vi.fn(),
+    onHandfulRadiusChange: vi.fn(),
+    onShowHandfulRangeChange: vi.fn(),
     onHideHintsDuringPlaybackChange: vi.fn(),
     onImportSizeChange: vi.fn(),
     onMeshDensityChange: vi.fn(),
@@ -598,6 +603,7 @@ describe('ControlPanel — 目前工具選擇器（issue #65 / V2 T3-1；ADR-001
     expect(select.value).toBe('general');
     expect([...select.options].map((o) => o.value)).toEqual([
       'general',
+      'handfulGrab',
       'fan',
       'formation',
       'spray',
@@ -844,7 +850,7 @@ describe('ControlPanel — 沙盒工具收合區塊（issue #67 事後檢視追�
     const blocks = () => [...panel.element.querySelectorAll('.jelly-tool-params')] as HTMLElement[];
     const visibleCount = () => blocks().filter((el) => !el.hidden).length;
 
-    expect(blocks()).toHaveLength(4); // 電風扇 + 編隊抓取 + 撒 Pin + 移除 Pin
+    expect(blocks()).toHaveLength(5); // 電風扇 + 編隊抓取 + 撒 Pin + 移除 Pin + 大把抓取
     expect(visibleCount()).toBe(0); // 一般操作：四組都收起來
 
     select.value = 'fan';
@@ -869,7 +875,7 @@ describe('ControlPanel — 沙盒工具收合區塊（issue #67 事後檢視追�
     const titles = [...panel.element.querySelectorAll('.jelly-tool-params-title')].map(
       (el) => el.textContent,
     );
-    expect(titles).toEqual(['電風扇', '編隊抓取', '撒 Pin', '移除 Pin']);
+    expect(titles).toEqual(['電風扇', '編隊抓取', '撒 Pin', '移除 Pin', '大把抓取']);
   });
 });
 
@@ -1421,5 +1427,59 @@ describe('ControlPanel — 「清空全部」按鈕（issue #95 / V3 T3-2；ADR-
     expect(button.disabled).toBe(true);
     panel.setPlaybackControlsEnabled(true);
     expect(button.disabled).toBe(false);
+  });
+});
+
+describe('ControlPanel — 大把抓取控制項（issue #113 / V3 T4-1）', () => {
+  function findToolSelect(panel: ControlPanel): HTMLSelectElement {
+    return [...panel.element.querySelectorAll('select')].find((s) =>
+      s.querySelector('option[value="handfulGrab"]'),
+    ) as HTMLSelectElement;
+  }
+
+  function handfulParams(panel: ControlPanel): HTMLElement {
+    return [...panel.element.querySelectorAll('.jelly-tool-params')].find((el) =>
+      el.textContent?.includes('大把抓取半徑'),
+    ) as HTMLElement;
+  }
+
+  it('工具選擇器有「大把抓取」；切過去 → onToolChange("handfulGrab")、專屬參數區塊顯示', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const select = findToolSelect(panel);
+    expect(select.querySelector('option[value="handfulGrab"]')!.textContent).toBe('大把抓取');
+
+    expect(handfulParams(panel).hidden).toBe(true);
+    select.value = 'handfulGrab';
+    select.dispatchEvent(new Event('change'));
+    expect(opts.onToolChange).toHaveBeenCalledWith('handfulGrab');
+    expect(handfulParams(panel).hidden).toBe(false);
+  });
+
+  it('「大把抓取半徑」拉霸範圍與初始值來自 options，拖動觸發 onHandfulRadiusChange', () => {
+    const opts = makeOptions({ initial: { ...makeOptions().initial, handfulRadius: 180 } });
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, '大把抓取半徑');
+    expect([input.min, input.max, input.step]).toEqual(['20', '400', '10']);
+    expect(Number(input.value)).toBe(180);
+
+    input.value = '260';
+    input.dispatchEvent(new Event('input'));
+    expect(opts.onHandfulRadiusChange).toHaveBeenCalledWith(260);
+    expect(opts.onSprayRadiusChange).not.toHaveBeenCalled();
+  });
+
+  it('「顯示大把抓取範圍」checkbox 初始值來自 initial.showHandfulRange，切換觸發回呼', () => {
+    const opts = makeOptions({ initial: { ...makeOptions().initial, showHandfulRange: false } });
+    const panel = new ControlPanel(opts);
+    const label = [...handfulParams(panel).querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('顯示大把抓取範圍'),
+    );
+    const checkbox = label!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    expect(opts.onShowHandfulRangeChange).toHaveBeenCalledWith(true);
   });
 });

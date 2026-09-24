@@ -304,6 +304,24 @@ describe('mergeTracks', () => {
       ]);
     });
 
+    it('重建的 grab 保留原事件的 handfulRadius／radius（issue #113：大把抓取重建後仍是同一把）', () => {
+      const track: OverlayTrack = {
+        startStep: 0,
+        idPrefix: 'A/',
+        inStep: 10,
+        steps: [
+          { atStep: 2, event: { type: 'grab', id: 'h', x: 5, y: 6, handfulRadius: 140 } },
+          { atStep: 3, event: { type: 'grab', id: 'r', x: 7, y: 8, radius: 12 } },
+          { atStep: 12, event: { type: 'release', id: 'h' } },
+          { atStep: 12, event: { type: 'release', id: 'r' } },
+        ],
+      };
+      expect(mergeTracks([track]).slice(0, 2)).toEqual([
+        { atStep: 0, event: { type: 'grab', id: 'A/h', x: 5, y: 6, handfulRadius: 140 } },
+        { atStep: 0, event: { type: 'grab', id: 'A/r', x: 7, y: 8, radius: 12 } },
+      ]);
+    });
+
     it('Grab 橫跨進場點但進場前沒被拖動 → 只重建 grab，不補多餘的 moveGrab', () => {
       const track: OverlayTrack = {
         startStep: 0,

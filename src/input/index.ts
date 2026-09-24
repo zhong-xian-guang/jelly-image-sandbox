@@ -12,6 +12,7 @@ export {
   DEFAULT_SPRAY_RADIUS,
   DEFAULT_SPRAY_SPACING,
   DEFAULT_ERASE_RADIUS,
+  DEFAULT_HANDFUL_RADIUS,
   CLICK_TOOL_IDS,
 } from './ToolRouter';
 export type {
@@ -21,6 +22,7 @@ export type {
   FanParams,
   SprayParams,
   EraseParams,
+  HandfulParams,
 } from './ToolRouter';
 export { PointerInput } from './PointerInput';
 export type { PointerInputOptions } from './PointerInput';
