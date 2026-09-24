@@ -10,6 +10,9 @@ import {
   DEFAULT_FAN_WIDTH,
   DEFAULT_HANDFUL_RADIUS,
   DEFAULT_TOOL,
+  ERASE_RADIUS_RANGE,
+  HANDFUL_RADIUS_RANGE,
+  SPRAY_RADIUS_RANGE,
   ToolRouter,
   type ToolRouterOptions,
 } from './ToolRouter';
@@ -1464,5 +1467,82 @@ describe('ToolRouter — 大把抓取（issue #113 / V3 T4-1；ADR-0014）', () 
       { type: 'tap', x: 1000, y: 1000 },
       { type: 'release', id: 1 },
     ]);
+  });
+});
+
+describe('ToolRouter — 調整目前工具半徑（issue #114 / V3 T4-2）', () => {
+  it('撒 Pin：每一格照拉霸 step 增減，回報新值', () => {
+    const { router } = makeRouter();
+    router.setActiveTool('spray');
+    router.setSprayParams({ radius: 140 });
+    expect(router.adjustActiveRadius(1)).toEqual({
+      tool: 'spray',
+      radius: 140 + SPRAY_RADIUS_RANGE.step,
+    });
+    expect(router.adjustActiveRadius(-3)).toEqual({
+      tool: 'spray',
+      radius: 140 - 2 * SPRAY_RADIUS_RANGE.step,
+    });
+  });
+
+  it('夾在拉霸的最小／最大值之間', () => {
+    const { router } = makeRouter();
+    router.setActiveTool('erase');
+    router.setEraseParams({ radius: ERASE_RADIUS_RANGE.max });
+    expect(router.adjustActiveRadius(5)).toEqual({ tool: 'erase', radius: ERASE_RADIUS_RANGE.max });
+    router.setEraseParams({ radius: ERASE_RADIUS_RANGE.min + ERASE_RADIUS_RANGE.step });
+    expect(router.adjustActiveRadius(-10)).toEqual({
+      tool: 'erase',
+      radius: ERASE_RADIUS_RANGE.min,
+    });
+  });
+
+  it('三個工具的半徑各自獨立', () => {
+    const { router } = makeRouter();
+    router.setSprayParams({ radius: 100 });
+    router.setEraseParams({ radius: 100 });
+    router.setHandfulParams({ radius: 100 });
+    router.setActiveTool('erase');
+    router.adjustActiveRadius(2);
+    router.setActiveTool('spray');
+    expect(router.adjustActiveRadius(0)).toEqual({ tool: 'spray', radius: 100 });
+    router.setActiveTool('handfulGrab');
+    expect(router.adjustActiveRadius(0)).toEqual({ tool: 'handfulGrab', radius: 100 });
+    router.setActiveTool('erase');
+    expect(router.adjustActiveRadius(0)).toEqual({
+      tool: 'erase',
+      radius: 100 + 2 * ERASE_RADIUS_RANGE.step,
+    });
+  });
+
+  it('沒有半徑的工具回報「不處理」', () => {
+    const { router } = makeRouter();
+    for (const tool of ['general', 'fan', 'formation', ...CLICK_TOOL_IDS] as const) {
+      router.setActiveTool(tool);
+      expect(router.adjustActiveRadius(1)).toBeNull();
+    }
+  });
+
+  it('大把抓取：只影響下一次按下，抓住中的那一把不受影響', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('handfulGrab');
+    router.setHandfulParams({ radius: 140 });
+    router.down(1, 0, 0, 0);
+    router.adjustActiveRadius(4);
+    router.up(1, 0, 0, 50);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1000, y: 1000, handfulRadius: 140 },
+      { type: 'tap', x: 1000, y: 1000, radius: 140 },
+      { type: 'release', id: 1 },
+    ]);
+    events.length = 0;
+    router.down(2, 0, 0, 100);
+    expect(events[0]).toEqual({
+      type: 'grab',
+      id: 2,
+      x: 1000,
+      y: 1000,
+      handfulRadius: 140 + 4 * HANDFUL_RADIUS_RANGE.step,
+    });
   });
 });

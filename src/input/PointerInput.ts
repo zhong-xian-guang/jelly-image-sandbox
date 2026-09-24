@@ -33,6 +33,7 @@ import {
   type EraseParams,
   type HandfulParams,
   type FanParams,
+  type RadiusToolId,
   type SprayParams,
   type ToolId,
   ToolRouter,
@@ -115,6 +116,11 @@ export class PointerInput {
   /** 轉發給 `ToolRouter.setHandfulParams`（issue #113）——面板大把抓取半徑拉霸變更時呼叫。 */
   setHandfulParams(params: Partial<HandfulParams>): void {
     this.tracker.setHandfulParams(params);
+  }
+
+  /** 轉發給 `ToolRouter.adjustActiveRadius`（issue #114）——按住右鍵＋滾輪調目前工具的半徑。 */
+  adjustActiveRadius(steps: number): { tool: RadiusToolId; radius: number } | null {
+    return this.tracker.adjustActiveRadius(steps);
   }
 
   /** 轉發給 `ToolRouter`（issue #68）——面板「開始設定形狀」／「完成設定」按鈕呼叫。 */

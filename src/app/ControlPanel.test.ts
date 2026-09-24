@@ -1483,3 +1483,25 @@ describe('ControlPanel — 大把抓取控制項（issue #113 / V3 T4-1）', () 
     expect(opts.onShowHandfulRangeChange).toHaveBeenCalledWith(true);
   });
 });
+
+describe('ControlPanel — 右鍵＋滾輪調半徑的拉霸同步（issue #114 / V3 T4-2）', () => {
+  it('setToolRadius 只動對應工具的半徑拉霸，不觸發 onChange 回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const spray = findRangeInputByLabel(panel, '撒 Pin 範圍半徑');
+    const erase = findRangeInputByLabel(panel, '移除 Pin 範圍半徑');
+    const handful = findRangeInputByLabel(panel, '大把抓取半徑');
+    const before = [spray.value, erase.value, handful.value];
+
+    panel.setToolRadius('spray', 230);
+    expect([spray.value, erase.value, handful.value]).toEqual(['230', before[1], before[2]]);
+    panel.setToolRadius('erase', 50);
+    expect(erase.value).toBe('50');
+    panel.setToolRadius('handfulGrab', 310);
+    expect(handful.value).toBe('310');
+
+    expect(opts.onSprayRadiusChange).not.toHaveBeenCalled();
+    expect(opts.onEraseRadiusChange).not.toHaveBeenCalled();
+    expect(opts.onHandfulRadiusChange).not.toHaveBeenCalled();
+  });
+});

@@ -40,7 +40,7 @@
  * 不會產生多餘的 reflow（在想省效能的降級路徑上，多餘 DOM 寫入是反效果）。
  */
 
-import type { ToolId } from '../input';
+import type { RadiusToolId, ToolId } from '../input';
 import type { BoundaryMode } from '../sim';
 import type { RecordTarget } from './track';
 
@@ -463,6 +463,8 @@ export class ControlPanel {
   /** 「網格密度」拉霸與旁邊的數值——效能退路 `setMeshDensity` 兩個都要更新（issue #89）。 */
   private readonly meshDensityInput: HTMLInputElement;
   private readonly meshDensityOutput: HTMLOutputElement;
+  /** 三條工具半徑拉霸（issue #114）——「右鍵＋滾輪調半徑」經 `setToolRadius` 灌回。 */
+  private readonly radiusInputs: Record<RadiusToolId, HTMLInputElement>;
 
   constructor(opts: ControlPanelOptions) {
     this.onTrackStartTimeChange = opts.onTrackStartTimeChange;
@@ -603,15 +605,16 @@ export class ControlPanel {
     // 撒 Pin 專屬參數（issue #69）：範圍半徑 + 最小間距兩個滑桿，比照 `fanParams`
     // 的收合模式。半徑同時決定畫布上那圈筆刷游標的大小（見 `BrushCursor`），
     // 所以「調半徑」這件事在畫面上是所見即所得，不需要另外的預覽開關。
+    const sprayRadiusRow = this.rangeRow(
+      '撒 Pin 範圍半徑',
+      opts.sprayRadiusRange.min,
+      opts.sprayRadiusRange.max,
+      opts.sprayRadiusRange.step,
+      opts.initial.sprayRadius,
+      opts.onSprayRadiusChange,
+    );
     const sprayParams = this.toolParams('撒 Pin', [
-      this.rangeRow(
-        '撒 Pin 範圍半徑',
-        opts.sprayRadiusRange.min,
-        opts.sprayRadiusRange.max,
-        opts.sprayRadiusRange.step,
-        opts.initial.sprayRadius,
-        opts.onSprayRadiusChange,
-      ).row,
+      sprayRadiusRow.row,
       this.rangeRow(
         '撒 Pin 間距（越小越密）',
         opts.spraySpacingRange.min,
@@ -624,33 +627,39 @@ export class ControlPanel {
 
     // 移除 Pin 專屬參數（issue #70）：只有橡皮擦半徑一個滑桿。跟撒 Pin 的半徑
     // 各自獨立，所以是兩個區塊裡的兩條滑桿，而不是共用一條。
-    const eraseParams = this.toolParams('移除 Pin', [
-      this.rangeRow(
-        '移除 Pin 範圍半徑',
-        opts.eraseRadiusRange.min,
-        opts.eraseRadiusRange.max,
-        opts.eraseRadiusRange.step,
-        opts.initial.eraseRadius,
-        opts.onEraseRadiusChange,
-      ).row,
-    ]);
+    const eraseRadiusRow = this.rangeRow(
+      '移除 Pin 範圍半徑',
+      opts.eraseRadiusRange.min,
+      opts.eraseRadiusRange.max,
+      opts.eraseRadiusRange.step,
+      opts.initial.eraseRadius,
+      opts.onEraseRadiusChange,
+    );
+    const eraseParams = this.toolParams('移除 Pin', [eraseRadiusRow.row]);
 
     // 大把抓取專屬參數（issue #113）：範圍圈提示開關 + 半徑拉霸。
+    const handfulRadiusRow = this.rangeRow(
+      '大把抓取半徑',
+      opts.handfulRadiusRange.min,
+      opts.handfulRadiusRange.max,
+      opts.handfulRadiusRange.step,
+      opts.initial.handfulRadius,
+      opts.onHandfulRadiusChange,
+    );
     const handfulParams = this.toolParams('大把抓取', [
       this.checkboxRow(
         '顯示大把抓取範圍',
         opts.initial.showHandfulRange,
         opts.onShowHandfulRangeChange,
       ),
-      this.rangeRow(
-        '大把抓取半徑',
-        opts.handfulRadiusRange.min,
-        opts.handfulRadiusRange.max,
-        opts.handfulRadiusRange.step,
-        opts.initial.handfulRadius,
-        opts.onHandfulRadiusChange,
-      ).row,
+      handfulRadiusRow.row,
     ]);
+
+    this.radiusInputs = {
+      spray: sprayRadiusRow.input,
+      erase: eraseRadiusRow.input,
+      handfulGrab: handfulRadiusRow.input,
+    };
 
     const toolSection = this.toolSection(
       opts.initial.activeTool,
@@ -961,6 +970,16 @@ export class ControlPanel {
    */
   setMeshDensity(value: number): void {
     syncRangeRow(this.meshDensityInput, this.meshDensityOutput, value);
+  }
+
+  /**
+   * 「按住右鍵＋滾輪」調過半徑後把新值灌回對應工具的拉霸（issue #114）。同
+   * `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、不回呼 `onXRadiusChange`。
+   */
+  setToolRadius(tool: RadiusToolId, value: number): void {
+    const input = this.radiusInputs[tool];
+    const text = String(value);
+    if (input.value !== text) input.value = text;
   }
 
   /**
