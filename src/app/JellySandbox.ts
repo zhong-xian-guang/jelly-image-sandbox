@@ -455,8 +455,7 @@ export class JellySandbox {
   /** 目前邊界的外框幾何（給 `JellyRenderer.setBoundaryFrame` 畫）：`walled` 是 AABB、`floor` 是地板 y、`infinite` 為 `null`。 */
   private boundaryFrame: BoundaryFrame | null = null;
   /**
-   * 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，筆刷／Pin 視覺靠這個判定；
-   * `attachInputHandlers` 的 `applyInput` 也靠它決定要不要過 Pin 工具轉接（issue #115）。
+   * 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，筆刷／Pin 視覺靠這個判定。
    */
   private activeTool: ToolId = DEFAULT_TOOL;
   /**
@@ -1413,11 +1412,11 @@ export class JellySandbox {
   }
 
   /**
-   * 切換目前工具——工具列按鈕（`onToolChange`，issue #122）與數字鍵 1–4（issue #126）都走這裡。
-   * 轉發給 `PointerInput.setActiveTool`（只影響下一次按下）；`activeTool` 另外存一份給游標、
-   * 標記等視覺回饋與 `attachInputHandlers` 的派送判斷用。工具列高亮與參數卡也在這裡同步
-   *（從工具列按下時面板自己已經切過，重設一次無妨），切工具會改變游標／標記／圓圈的回饋，
-   * 所以要跟著重算。
+   * 目前工具變更（issue #65 / V2 T3-1）——側欄工具列（`onToolChange`，issue #122）與數字鍵
+   * 1–4（issue #126）都走這裡。轉發給 `PointerInput.setActiveTool`（只影響下一次按下）；
+   * `activeTool` 另外存一份，因為 `PointerInput` 沒有 getter，筆刷／Pin 標記等視覺回饋靠它判定。
+   * 工具列高亮與參數卡也在這裡同步（從工具列按下時面板自己已經切過，重設一次無妨）。切工具
+   * 會改變游標／標記／圓圈的視覺回饋，所以要跟著重算。
    */
   private setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
@@ -1660,8 +1659,8 @@ export class JellySandbox {
   /**
    * 所有「沙盒自己發的模擬事件」的單一出口（issue #95 收攏）：送進 `world.applyInput`，
    * 同時 `trackRecorder.record`（no-op 除非正在錄製）——ADR-0005「所有影響模擬的輸入
-   * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件另有
-   * `attachInputHandlers` 裡的派送點（先過 Pin 工具轉接），做的是同樣兩件事。
+   * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件（`PointerInput`
+   * 的 `applyInput`，見 `attachInputHandlers`）也直接走這裡。
    */
   private dispatchInput(event: InputEvent): void {
     this.world.applyInput(event);
