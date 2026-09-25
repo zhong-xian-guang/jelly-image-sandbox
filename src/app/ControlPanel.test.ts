@@ -58,6 +58,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       spraySpacing: 36,
       handfulRadius: 140,
       showHandfulRange: true,
+      formationPerPointHandful: false,
       hideHintsDuringPlayback: false,
       importSize: 512,
       meshDensity: 350,
@@ -95,6 +96,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onSpraySpacingChange: vi.fn(),
     onHandfulRadiusChange: vi.fn(),
     onShowHandfulRangeChange: vi.fn(),
+    onFormationPerPointHandfulChange: vi.fn(),
     onHideHintsDuringPlaybackChange: vi.fn(),
     onImportSizeChange: vi.fn(),
     onMeshDensityChange: vi.fn(),
@@ -777,7 +779,13 @@ describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () =
     const card = visibleCards(panel)[0]!;
     expect(card.querySelector('.jelly-mode-row')).not.toBeNull();
     const text = card.textContent!;
-    for (const part of ['大把抓取半徑', '顯示大把抓取範圍', '顯示編隊抓取提示', '開始設定形狀']) {
+    for (const part of [
+      '大把抓取半徑',
+      '顯示大把抓取範圍',
+      '顯示編隊抓取提示',
+      '每個點用大把抓',
+      '開始設定形狀',
+    ]) {
       expect(text).toContain(part);
     }
     // 順序照 spec #121「側欄」：模式鈕最上方。
@@ -1465,6 +1473,31 @@ describe('ControlPanel — 大把抓取控制項（issue #113；issue #122 併�
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event('change'));
     expect(opts.onShowHandfulRangeChange).toHaveBeenCalledWith(true);
+  });
+
+  it('「每個點用大把抓」（issue #135）在抓取的參數卡裡、預設關閉，切換觸發回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const label = [...handfulParams(panel).querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('每個點用大把抓'),
+    );
+    const checkbox = label!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    expect(opts.onFormationPerPointHandfulChange).toHaveBeenCalledWith(true);
+  });
+
+  it('「每個點用大把抓」初始值來自 initial.formationPerPointHandful', () => {
+    const opts = makeOptions({
+      initial: { ...makeOptions().initial, formationPerPointHandful: true },
+    });
+    const panel = new ControlPanel(opts);
+    const label = [...handfulParams(panel).querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('每個點用大把抓'),
+    );
+    expect((label!.querySelector('input') as HTMLInputElement).checked).toBe(true);
   });
 });
 

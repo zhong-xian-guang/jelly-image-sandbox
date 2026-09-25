@@ -30,6 +30,7 @@ export type {
   FanParams,
   PinBrushParams,
   HandfulParams,
+  FormationParams,
   ModalToolId,
   ToolMode,
   ToolModeOf,

@@ -18,6 +18,15 @@ describe('cursorLabelText（issue #122）', () => {
     expect(text({ mode: 'formation', formation: 'ready' })).toBe('編隊');
   });
 
+  it('編隊＋每點大把（issue #135）：「編隊 · 大把 <半徑>」；還沒設定形狀照舊不帶數值', () => {
+    expect(text({ mode: 'formation', formation: 'ready', value: 140 })).toBe('編隊 · 大把 140');
+    expect(text({ mode: 'formation', formation: 'none', value: 140 })).toBe('編隊（尚未設定形狀）');
+    // 定義中範圍圈已經畫在點下的點上、滾輪也調得動，所以數值照樣顯示。
+    expect(text({ mode: 'formation', formation: 'defining', value: 90 })).toBe(
+      '編隊（設定形狀中） · 大把 90',
+    );
+  });
+
   it('Pin 工具（issue #123）：放／拔加上 Pin 筆刷半徑', () => {
     expect(text({ mode: 'place', value: 120 })).toBe('放 · 120');
     expect(text({ mode: 'remove', value: 120 })).toBe('拔 · 120');
