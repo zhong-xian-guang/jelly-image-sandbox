@@ -291,8 +291,28 @@ body {
 .jelly-range-value {
   font-family: monospace;
   font-size: 0.8rem;
-  min-width: 3.5ch;
+  min-width: 5ch;
   text-align: right;
+}
+
+/**
+ * 「拉霸＋數值」（issue #131）：拉霸吃掉剩下的寬度，每列的數值都靠右對齊在同一條線上。
+ * 雙擊拉霸回到預設值（`title` 有寫）。
+ */
+.jelly-control-row input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+
+/**
+ * 「再按一次確認」待確認中（issue #131；「清空全部」「全部重建」）——警示色＋加粗，
+ * 提醒使用者再按一次就會執行；3 秒沒再按就還原。
+ */
+.jelly-control-row button.jelly-confirm-pending {
+  color: #fff;
+  background: #c62828;
+  border-color: #ff5a5a;
+  font-weight: 600;
 }
 
 /**
