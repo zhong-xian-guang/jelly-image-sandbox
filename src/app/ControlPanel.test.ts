@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ControlPanel, type ControlPanelOptions, type TrackListRow } from './ControlPanel';
+import { TOOL_HELP_LINES } from './helpText';
 import { PANEL_LAYOUT_STORAGE_KEY, type KeyValueStorage } from './panelLayout';
 
 /** 記憶體版的 `localStorage`（issue #128）——每個測試各拿一份，展開狀態不會跨測試殘留。 */
@@ -756,8 +757,20 @@ describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () =
     expect(card.querySelector('.jelly-mode-row')).toBeNull();
     expect(card.querySelectorAll('input, button, select')).toHaveLength(0);
     const text = card.textContent!;
-    expect(text).toContain('左鍵生成');
+    expect(text).toContain('左鍵：生成');
     expect(text).toContain('右鍵點果凍：重建／移除');
+  });
+
+  it('四張工具卡最底下都有一行操作說明（issue #132）', () => {
+    const panel = new ControlPanel(makeOptions());
+    for (const tool of ['grab', 'pin', 'fan', 'jelly'] as const) {
+      clickTool(panel, tool);
+      const card = visibleCards(panel)[0]!;
+      const last = card.lastElementChild as HTMLElement;
+      expect(last.classList.contains('jelly-tool-help')).toBe(true);
+      expect(last.textContent).toBe(TOOL_HELP_LINES[tool]);
+      expect(card.querySelectorAll('.jelly-tool-help')).toHaveLength(1);
+    }
   });
 
   it('抓取的參數卡：模式鈕、大把抓取半徑、顯示大把抓取範圍、顯示編隊抓取提示、設定形狀按鈕', () => {
