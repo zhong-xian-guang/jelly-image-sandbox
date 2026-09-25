@@ -113,7 +113,7 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
     entries: [
       { keys: '1–4', action: '切換工具：抓取、Pin、電風扇、Jelly' },
       { keys: '空白鍵', action: '播放中暫停／繼續' },
-      { keys: 'Esc', action: '關閉選單或這個說明' },
+      { keys: 'Esc', action: '關閉選單或這個說明；離開乾淨畫面' },
     ],
   },
 ];

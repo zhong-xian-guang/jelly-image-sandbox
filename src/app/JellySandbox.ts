@@ -207,6 +207,7 @@ import {
 } from './clipFile';
 import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { CanvasHover } from './CanvasHover';
+import { CleanView } from './CleanView';
 import { ContextMenu, jellyMenuItems, type JellyMenuItemId } from './ContextMenu';
 import { ControlPanel } from './ControlPanel';
 import { CursorLabel, cursorLabelText, type FormationShapeState } from './CursorLabel';
@@ -229,6 +230,7 @@ import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { FormationDefineHint } from './FormationDefineHint';
 import { FormationOverlay, type FormationOverlayGroup } from './FormationOverlay';
 import { HelpOverlay } from './HelpOverlay';
+import { visibleHints, type HintKey, type HintVisibility } from './hintVisibility';
 import { DEFAULT_MESH_DENSITY, halveMeshDensity, MESH_DENSITY_RANGE } from './meshDensity';
 import { browserStorage } from './panelLayout';
 import { PerfMonitor } from './PerfMonitor';
@@ -294,23 +296,6 @@ const IMPORT_SIZE_RANGE = { min: 128, max: 1024, step: 16 };
 const DEFAULT_IMPORT_SIZE = 512;
 /** 內建預設果凍在來源圖庫裡的 id（啟動時、「清空全部」後都重新註冊成它）。 */
 const DEFAULT_SOURCE_ID = 'src/1';
-/**
- * 會被「播放時隱藏提示」（issue #71）蓋到的提示層，每層一個 key——即面板上那六顆
- * 顯示開關（issue #113 加上大把抓取範圍圈 `handfulRange`）。Pin 工具的筆刷
- * 圓圈刻意不在此列，理由見 `JellySandbox.applyHintVisibility`。
- */
-type HintKey = 'wireframe' | 'pins' | 'fanRange' | 'fanIcon' | 'formation' | 'handfulRange';
-/** 各提示層的顯示狀態：可能是使用者的意圖（`hintIntent`），也可能是算完壓下之後的實際值（`effectiveHints`）。 */
-type HintVisibility = Record<HintKey, boolean>;
-/** 播放中被壓下時的實際狀態——全域開關沒有逐層覆寫，所以壓下就是全滅。 */
-const ALL_HINTS_HIDDEN: Readonly<HintVisibility> = {
-  wireframe: false,
-  pins: false,
-  fanRange: false,
-  fanIcon: false,
-  formation: false,
-  handfulRange: false,
-};
 
 /**
  * 這幾層提示是 DOM 覆蓋層，每幀要把世界座標投影成螢幕座標才畫得出來——都看不到
@@ -423,6 +408,11 @@ export class JellySandbox {
   private readonly helpOverlay: HelpOverlay;
   /** 定義編隊形狀時畫布上方那行說明（issue #132）——是提示，見 `updateFormationDefineHint`。 */
   private readonly formationDefineHint: FormationDefineHint;
+  /**
+   * 乾淨畫面（issue #130）：進入時藏起側欄、播放控制條、相機按鈕、匯入提示字，提示與游標回饋
+   * 由各自的出口多看一個 `cleanView.isActive`（見 `applyCleanView`）。不存檔。
+   */
+  private readonly cleanView: CleanView;
   /** 鍵盤快捷鍵（issue #126）：1–4 切工具、播放中空白鍵暫停／繼續。在 window 上聽，`destroy` 要解掉。 */
   private readonly keyboardShortcuts: KeyboardShortcuts;
   private readonly demoRunner = new DemoRunner();
@@ -776,6 +766,20 @@ export class JellySandbox {
     root.appendChild(this.helpOverlay.element);
     this.controlPanel.titleBarActions.prepend(this.helpOverlay.createOpenButton());
     this.helpOverlay.showIfFirstVisit();
+    // 乾淨畫面（issue #130）：進入鈕放在標題列「?」左邊；離開鈕浮在畫布左上角。
+    this.cleanView = new CleanView({
+      root,
+      hide: [
+        this.controlPanel.element,
+        this.controlPanel.playbackBar,
+        this.controlPanel.cameraControls,
+        this.importHint,
+      ],
+      onChange: () => this.applyCleanView(),
+      isEscapeClaimed: () => this.jellyMenu.isOpen,
+    });
+    root.appendChild(this.cleanView.element);
+    this.controlPanel.titleBarActions.prepend(this.cleanView.createEnterButton());
     this.keyboardShortcuts = new KeyboardShortcuts({
       selectTool: (tool) => this.setActiveTool(tool),
       isPlaying: () => this.demoRunner.isRunning,
@@ -832,6 +836,7 @@ export class JellySandbox {
     this.cursorLabel.destroy();
     this.jellyMenu.destroy(); // 開著時在 window 上掛了監聽
     this.helpOverlay.destroy(); // 開著時在 window 上掛了 Esc 監聽
+    this.cleanView.destroy(); // 乾淨畫面中在 document／root 上掛了監聽
     this.formationDefineHint.destroy();
     this.keyboardShortcuts.destroy(); // 在 window 上掛了鍵盤監聽
     this.input.destroy();
@@ -1383,7 +1388,8 @@ export class JellySandbox {
     this.pinMarkers.setRemovable(this.isPinMode('remove'));
     const brush = this.brushFor();
     if (brush) this.brushCursor.setVariant(brush.variant);
-    this.brushCursor.setActive(brush !== null);
+    // 乾淨畫面（issue #130）連游標回饋都藏，工具與模式不動。
+    this.brushCursor.setActive(brush !== null && !this.cleanView.isActive);
     this.applyHandfulRangeVisibility();
   }
 
@@ -1486,19 +1492,40 @@ export class JellySandbox {
 
   /**
    * 定義編隊形狀時畫布上方那行說明（issue #132；spec #127「操作說明」）。它是提示：「播放時
-   * 隱藏提示」壓下時一起藏（乾淨畫面也要藏，#130 在這裡加條件）。只在編隊模式下顯示——比照
+   * 隱藏提示」壓下時、乾淨畫面中（issue #130）一起藏。只在編隊模式下顯示——比照
    * 定義中的形狀標記（`formationOverlayGroups`），切去別的工具時點畫布不會加點，說明也不該在。
    */
   private updateFormationDefineHint(): void {
     this.formationDefineHint.setVisible(
-      this.input.isDefiningFormation && this.isGrabMode('formation') && !this.hintsSuppressed,
+      this.input.isDefiningFormation &&
+        this.isGrabMode('formation') &&
+        !this.hintsSuppressed &&
+        !this.cleanView.isActive,
     );
+  }
+
+  /**
+   * 進出乾淨畫面後（issue #130）：介面元素 `CleanView` 自己藏好了，這裡把「疊在各自開關上」的
+   * 東西重算一次——提示（`effectiveHints`）、編隊定義說明、筆刷圓圈、游標標籤。使用者的開關意圖
+   * 一個都不動，所以離開時各自回到進入前的樣子。進入時順手關掉開著的右鍵選單。
+   */
+  private applyCleanView(): void {
+    if (this.cleanView.isActive) this.jellyMenu.close();
+    this.applyHintVisibility();
+    this.updateFormationDefineHint();
+    this.applyToolVisuals();
+    this.applyCursorLabelEnabled();
   }
 
   /** 「顯示游標標籤」開關（issue #122）。 */
   private setShowCursorLabel(visible: boolean): void {
     this.showCursorLabel = visible;
-    this.cursorLabel.setEnabled(visible);
+    this.applyCursorLabelEnabled();
+  }
+
+  /** 游標標籤實際開不開＝使用者的開關 且 不在乾淨畫面（issue #130）；開關本身不動。 */
+  private applyCursorLabelEnabled(): void {
+    this.cursorLabel.setEnabled(this.showCursorLabel && !this.cleanView.isActive);
   }
 
   /**
@@ -1732,19 +1759,23 @@ export class JellySandbox {
 
   /**
    * 每層提示「現在實際上該不該顯示」（issue #71）——沒被壓下時就是使用者的意圖
-   * 原樣；被壓下時全體隱藏（這個開關是全域的，沒有逐層的覆寫，見 issue #64
-   * Out of Scope）。`applyHintVisibility`（推給各層）與 `frame()`（決定要不要花
-   * 力氣算每幀的螢幕座標投影）共用這一份，兩邊才不會各判斷一次而分岔。
+   * 原樣；被播放（`hintsSuppressed`）或乾淨畫面（issue #130）壓下時全體隱藏（這個開關是
+   * 全域的，沒有逐層的覆寫，見 issue #64 Out of Scope；規則見 `visibleHints`）。
+   * `applyHintVisibility`（推給各層）與 `frame()`（決定要不要花力氣算每幀的螢幕座標投影）
+   * 共用這一份，兩邊才不會各判斷一次而分岔。
    */
   private effectiveHints(): Readonly<HintVisibility> {
-    return this.hintsSuppressed ? ALL_HINTS_HIDDEN : this.hintIntent;
+    return visibleHints(this.hintIntent, {
+      playback: this.hintsSuppressed,
+      cleanView: this.cleanView.isActive,
+    });
   }
 
   /**
    * 把 `effectiveHints()` 推到各個提示層（issue #71）——所有「提示的顯示狀態可能
    * 變了」的路徑都收斂到這一個出口：`setHintVisible`（五顆開關）、
    * `setHideHintsDuringPlayback`、播放開始／結束（`setPlaybackLocked`）、重新
-   * 匯入圖片換新 Renderer（`replaceJelly`）。日後多一層提示，要動的是
+   * 匯入圖片換新 Renderer（`replaceJelly`）、進出乾淨畫面（`applyCleanView`）。日後多一層提示，要動的是
    * `HintKey`／`hintIntent` 的初始值、這裡一行、以及（若它需要每幀投影）
    * `needsHintProjection`——不必回頭找散在各處的旗標。
    *

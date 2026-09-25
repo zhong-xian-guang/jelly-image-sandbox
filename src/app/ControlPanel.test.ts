@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CleanView } from './CleanView';
 import { ControlPanel, type ControlPanelOptions, type TrackListRow } from './ControlPanel';
 import { TOOL_HELP_LINES } from './helpText';
 import { PANEL_LAYOUT_STORAGE_KEY, type KeyValueStorage } from './panelLayout';
@@ -1782,6 +1783,33 @@ describe('ControlPanel — 側欄收起（issue #128 / V4 U1）', () => {
     expect(buttonByText(panel, '清空全部').disabled).toBe(true);
     panel.setSidebarCollapsed(false);
     expect(buttonByText(panel, '全部重建').disabled).toBe(true);
+  });
+
+  it('進出乾淨畫面（issue #130）：整個側欄與畫布控制藏起來，離開後側欄收起與否維持原樣', () => {
+    for (const collapsed of [false, true]) {
+      const panel = new ControlPanel(makeOptions());
+      panel.setSidebarCollapsed(collapsed);
+      const view = new CleanView({
+        root: document.body,
+        hide: [panel.element, panel.playbackBar, panel.cameraControls],
+        onChange: () => {},
+      });
+      panel.titleBarActions.prepend(view.createEnterButton());
+      (panel.titleBarActions.querySelector('.jelly-clean-view-enter') as HTMLElement).click();
+      expect(panel.element.hidden).toBe(true); // 把手在側欄裡，一起藏
+      expect(panel.playbackBar.hidden).toBe(true);
+      expect(panel.cameraControls.hidden).toBe(true);
+      expect(panel.isSidebarCollapsed()).toBe(collapsed);
+
+      view.exit();
+      expect(panel.element.hidden).toBe(false);
+      expect(panel.playbackBar.hidden).toBe(false);
+      expect(panel.cameraControls.hidden).toBe(false);
+      expect(panel.isSidebarCollapsed()).toBe(collapsed);
+      expect(mainHidden(panel)).toBe(collapsed);
+      expect(handle(panel).hidden).toBe(!collapsed);
+      view.destroy();
+    }
   });
 });
 

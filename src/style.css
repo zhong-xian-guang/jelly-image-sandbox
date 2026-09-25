@@ -1207,3 +1207,32 @@ body {
 .jelly-formation-define-hint[hidden] {
   display: none;
 }
+
+/**
+ * 乾淨畫面的「離開」鈕（issue #130，見 `CleanView`）：游標在畫布左上角停一下才浮出，移開就藏。
+ * 疊在所有畫布上的東西之上（含通知），乾淨畫面中它是唯一的介面。
+ */
+.jelly-clean-view-exit {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 12;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font: inherit;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.jelly-clean-view-exit:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.jelly-clean-view-exit[hidden] {
+  display: none;
+}
