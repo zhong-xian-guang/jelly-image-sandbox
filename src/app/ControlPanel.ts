@@ -44,6 +44,10 @@
  * （`./panelLayout`，讀不到就用預設）。收起側欄時整塊縮成畫面左緣的小把手，點把手再展開。
  * 分區只是換位置：每顆控制的鎖定規則（播放中、錄製中變灰）跟分區前一樣。
  *
+ * **防呆與拉霸**（issue #131 / V4 U4；spec #127）：「清空全部」「全部重建」要再按一次確認
+ * （3 秒內；被鎖住時取消待確認）。每條拉霸都是「拉霸＋數值」元件：旁邊顯示數值、雙擊回到
+ * 預設值；`setSoftness` 等外部灌值同步數值、不回呼。兩者都在 `./panelControls`。
+ *
  * 「Substep」是 issue #16 追加的唯讀 debug 讀出，`JellySandbox` 每幀呼叫
  * `setPerfStatus` 同步目前的 `PerfMonitor.substeps` / `degraded`——手動測試「節流
  * CPU 降級」時（見該 issue 驗收條件）用眼睛確認 4→2→4 有沒有真的發生，不用開
@@ -70,6 +74,13 @@ import {
   type PanelLayout,
   type PanelSectionId,
 } from './panelLayout';
+import {
+  confirmOnSecondClick,
+  createRangeSlider,
+  setRangeSliderValue,
+  type ConfirmButton,
+  type RangeSlider,
+} from './panelControls';
 import { MODE_LABELS, TOOL_LABELS } from './toolLabels';
 import type { RecordTarget } from './track';
 
@@ -450,6 +461,9 @@ export class ControlPanel {
   private readonly rebuildAllButton: HTMLButtonElement;
   /** 「清空全部」鈕（issue #95）——同上鎖法。 */
   private readonly clearAllButton: HTMLButtonElement;
+  /** 上面兩顆的「再按一次確認」（issue #131）——被鎖住時 `cancel()` 取消待確認。 */
+  private readonly rebuildAllConfirm: ConfirmButton;
+  private readonly clearAllConfirm: ConfirmButton;
   /** 工具列按鈕與各工具的參數卡（issue #122）——`setActiveTool` 切高亮與顯示。 */
   private readonly toolButtons = new Map<ToolId, HTMLButtonElement>();
   private readonly toolCards = new Map<ToolId, HTMLElement>();
@@ -516,13 +530,11 @@ export class ControlPanel {
    */
   private readonly softnessInput: HTMLInputElement;
   private readonly tapStrengthInput: HTMLInputElement;
-  /** 「重力」拉霸與旁邊的數值（issue #91）——`setGravity` 兩個都要更新。 */
+  /** 「重力」拉霸（issue #91）——`setGravity` 連同旁邊的數值一起更新。 */
   private readonly gravityInput: HTMLInputElement;
-  private readonly gravityOutput: HTMLOutputElement;
   private readonly boundarySelect: HTMLSelectElement;
-  /** 「網格密度」拉霸與旁邊的數值——效能退路 `setMeshDensity` 兩個都要更新（issue #89）。 */
+  /** 「網格密度」拉霸——效能退路 `setMeshDensity` 連同旁邊的數值一起更新（issue #89）。 */
   private readonly meshDensityInput: HTMLInputElement;
-  private readonly meshDensityOutput: HTMLOutputElement;
   /** 「右鍵＋滾輪」調得到的數值拉霸（issue #114；issue #122 推廣）——經 `setModeValue` 灌回。 */
   private readonly valueInputs: Record<ModeValueKey, HTMLInputElement>;
 
@@ -568,28 +580,26 @@ export class ControlPanel {
       opts.onTapStrengthChange,
     );
     this.tapStrengthInput = tapStrength.input;
-    const gravity = this.rangeRowWithValue(
+    const gravity = createRangeSlider(
       '重力',
       opts.gravityRange,
       opts.initial.gravity,
       opts.onGravityChange,
     );
     this.gravityInput = gravity.input;
-    this.gravityOutput = gravity.output;
-    const importSize = this.rangeRowWithValue(
+    const importSize = createRangeSlider(
       '匯入尺寸',
       opts.importSizeRange,
       opts.initial.importSize,
       opts.onImportSizeChange,
     );
-    const meshDensity = this.rangeRowWithValue(
+    const meshDensity = createRangeSlider(
       '網格密度',
       opts.meshDensityRange,
       opts.initial.meshDensity,
       opts.onMeshDensityChange,
     );
     this.meshDensityInput = meshDensity.input;
-    this.meshDensityOutput = meshDensity.output;
 
     const fanWidth = this.rangeRow(
       '風扇寬度',
@@ -714,13 +724,17 @@ export class ControlPanel {
     );
 
     // 「全部重建」鈕（issue #90）放在「匯入」區最後：拉完拉霸按一下就看到效果。
-    const rebuildAll = this.rebuildAllRow(opts.onRebuildAll);
+    const rebuildAll = this.rebuildAllRow();
     this.rebuildAllButton = rebuildAll.button;
+    // 「清空全部」「全部重建」都要再按一次確認（issue #131；spec #127「防呆」）：一次誤觸
+    // 就會丟掉整個片段／讓 Pin 掉光。
+    this.rebuildAllConfirm = confirmOnSecondClick(rebuildAll.button, opts.onRebuildAll);
     // 「清空全部」（issue #95）跟儲存／載入片段排成一列（issue #128）：它是「新片段」的入口，
     // 跟「載入片段」同一組語意（整份片段換掉），放一起最直覺。
-    const clearAllButton = this.button('清空全部', opts.onClearAll);
+    const clearAllButton = this.button('清空全部');
     clearAllButton.title = '清掉桌上所有果凍、Track、群組與片段初始 Pin，從空桌面重新開始';
     this.clearAllButton = clearAllButton;
+    this.clearAllConfirm = confirmOnSecondClick(clearAllButton, opts.onClearAll);
     const clipRow = document.createElement('div');
     clipRow.className = 'jelly-control-row jelly-clip-row';
     clipRow.append(
@@ -1045,6 +1059,11 @@ export class ControlPanel {
     this.rebuildAllButton.disabled = busy;
     // 「清空全部」（issue #95）同理：它會清掉正在錄／正在播的片段本身。
     this.clearAllButton.disabled = busy;
+    // 被鎖住時一併取消待確認（issue #131），解鎖後要重新按兩下。
+    if (busy) {
+      this.rebuildAllConfirm.cancel();
+      this.clearAllConfirm.cancel();
+    }
     // 工具列按鈕永遠可按（issue #124）：Jelly 工具的播放中／錄製中限制改在畫布上的右鍵
     // 選單各項變灰（`ContextMenu`），生成則由 `JellySandbox` 用禁止游標＋提示擋。
     // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
@@ -1108,14 +1127,12 @@ export class ControlPanel {
    * 事件、不會呼叫 `onSoftnessChange` 造成迴圈）。
    */
   setSoftness(value: number): void {
-    const text = String(value);
-    if (this.softnessInput.value !== text) this.softnessInput.value = text;
+    setRangeSliderValue(this.softnessInput, value);
   }
 
   /** 載入片段後把輕拍力道滑桿位置灌回面板（issue #58）。同 `setSoftness` 的理由。 */
   setTapStrength(value: number): void {
-    const text = String(value);
-    if (this.tapStrengthInput.value !== text) this.tapStrengthInput.value = text;
+    setRangeSliderValue(this.tapStrengthInput, value);
   }
 
   /**
@@ -1123,7 +1140,7 @@ export class ControlPanel {
    * ——只動 DOM、不觸發 `input` 事件、不呼叫 `onGravityChange`。
    */
   setGravity(value: number): void {
-    syncRangeRow(this.gravityInput, this.gravityOutput, value);
+    setRangeSliderValue(this.gravityInput, value);
   }
 
   /** 載入片段後把邊界模式下拉灌回面板（issue #58）。同 `setSoftness` 的理由。 */
@@ -1137,7 +1154,7 @@ export class ControlPanel {
    * `onMeshDensityChange`（沙盒端自己已經改了狀態，再回呼會繞一圈）。
    */
   setMeshDensity(value: number): void {
-    syncRangeRow(this.meshDensityInput, this.meshDensityOutput, value);
+    setRangeSliderValue(this.meshDensityInput, value);
   }
 
   /**
@@ -1145,9 +1162,7 @@ export class ControlPanel {
    * 同 `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、不回呼 `onXChange`。
    */
   setModeValue(key: ModeValueKey, value: number): void {
-    const input = this.valueInputs[key];
-    const text = String(value);
-    if (input.value !== text) input.value = text;
+    setRangeSliderValue(this.valueInputs[key], value);
   }
 
   /**
@@ -1358,6 +1373,10 @@ export class ControlPanel {
     return { row, select };
   }
 
+  /**
+   * 一條拉霸列——一律是「拉霸＋數值」元件（issue #131；issue #88 起的帶數值拉霸推廣到
+   * 全部）：旁邊顯示數值、雙擊回到 `value`（建立時的值＝預設值），見 `./panelControls`。
+   */
   private rangeRow(
     labelText: string,
     min: number,
@@ -1365,58 +1384,17 @@ export class ControlPanel {
     step: number,
     value: number,
     onChange: (n: number) => void,
-  ): { row: HTMLElement; input: HTMLInputElement } {
-    const row = document.createElement('label');
-    row.className = 'jelly-control-row';
-
-    const input = document.createElement('input');
-    input.type = 'range';
-    input.min = String(min);
-    input.max = String(max);
-    input.step = String(step);
-    input.value = String(value);
-    input.addEventListener('input', () => onChange(Number(input.value)));
-
-    row.append(labelText, input);
-    return { row, input };
-  }
-
-  /**
-   * 帶數值顯示的滑桿列（issue #88）——`rangeRow` 旁再掛一個 `<output>`，拖動時同步
-   * 顯示目前值。匯入尺寸、重力這種「拉到多少就是多少世界單位」的絕對量，使用者需要
-   * 看到數字才知道自己設了多少；軟硬度那種 0–1 的相對量就不需要。
-   */
-  private rangeRowWithValue(
-    labelText: string,
-    range: RangeSpec,
-    value: number,
-    onChange: (n: number) => void,
-  ): { row: HTMLElement; input: HTMLInputElement; output: HTMLOutputElement } {
-    const { row, input } = this.rangeRow(
-      labelText,
-      range.min,
-      range.max,
-      range.step,
-      value,
-      onChange,
-    );
-    const output = document.createElement('output');
-    output.className = 'jelly-range-value';
-    output.textContent = String(value);
-    input.addEventListener('input', () => {
-      output.textContent = input.value;
-    });
-    row.appendChild(output);
-    return { row, input, output };
+  ): RangeSlider {
+    return createRangeSlider(labelText, { min, max, step }, value, onChange);
   }
 
   /**
    * 「全部重建」按鈕列（issue #90；issue #95 起對每一塊，issue #98 改用這個名字）
    * ——回傳按鈕本身讓建構子記進 `rebuildAllButton`，`updateTrackControlsState` 才管得到
-   * 它的 `disabled`。
+   * 它的 `disabled`。點擊由建構子接成「再按一次確認」（issue #131）。
    */
-  private rebuildAllRow(onRebuildAll: () => void): { row: HTMLElement; button: HTMLButtonElement } {
-    const result = this.buttonRowEl('全部重建', onRebuildAll);
+  private rebuildAllRow(): { row: HTMLElement; button: HTMLButtonElement } {
+    const result = this.buttonRowEl('全部重建');
     result.button.title =
       '用各塊的來源圖＋目前的匯入尺寸／網格密度，重新生成桌上每一塊果凍（位置不變、Pin 掉光；Track 保留）';
     return result;
@@ -1838,7 +1816,7 @@ export class ControlPanel {
    */
   private buttonRowEl(
     labelText: string,
-    onClick: () => void,
+    onClick?: () => void,
   ): { row: HTMLElement; button: HTMLButtonElement } {
     const row = document.createElement('div');
     row.className = 'jelly-control-row';
@@ -1847,12 +1825,15 @@ export class ControlPanel {
     return { row, button };
   }
 
-  /** 一顆 `type="button"` 的按鈕（不包列）——片段區三顆橫排、標題列控制鈕共用。 */
-  private button(labelText: string, onClick: () => void): HTMLButtonElement {
+  /**
+   * 一顆 `type="button"` 的按鈕（不包列）——片段區三顆橫排、標題列控制鈕共用。省略
+   * `onClick` 時由呼叫端自己接（例如「再按一次確認」，issue #131）。
+   */
+  private button(labelText: string, onClick?: () => void): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = labelText;
-    button.addEventListener('click', onClick);
+    if (onClick) button.addEventListener('click', onClick);
     return button;
   }
 
@@ -1872,15 +1853,4 @@ function formatSeconds(seconds: number): string {
 /** 「片段初始 Pin：N 個」讀出文字（issue #39）——初始渲染與 `setSetupPinCount` 共用，前綴字串只留一份。 */
 function setupPinCountText(count: number): string {
   return `片段初始 Pin：${count} 個`;
-}
-
-/**
- * 把值灌回一條帶數值顯示的拉霸（`rangeRowWithValue`）：拉霸位置與旁邊的 `<output>`
- * 一起更新、只在文字真的變了才寫 DOM、不觸發 `input` 事件（所以不會回呼 `onXChange`）。
- * `setMeshDensity`（issue #89）與 `setGravity`（issue #91）共用。
- */
-function syncRangeRow(input: HTMLInputElement, output: HTMLOutputElement, value: number): void {
-  const text = String(value);
-  if (input.value !== text) input.value = text;
-  if (output.textContent !== text) output.textContent = text;
 }
