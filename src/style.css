@@ -115,26 +115,158 @@ body {
   opacity: 1;
 }
 
-/** 玩家控制面板（issue #14 / T13）：疊在畫布左上角，`position:absolute` + `z-index`。 */
+/**
+ * 玩家控制面板（issue #14 / T13）：疊在畫布左上角，`position:absolute` + `z-index`。
+ * issue #128 起分成：標題列＋可捲動內容（`.jelly-panel-main`，固定寬度，分區展開收起時
+ * 不會左右跳），以及收起側欄後才出現的左緣把手（`.jelly-sidebar-handle`）。外層本身
+ * 不畫底色，收起時就只剩把手那一小塊會擋到畫布。
+ */
 .jelly-control-panel {
   position: absolute;
   top: 12px;
   left: 12px;
   z-index: 10;
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.jelly-control-panel.is-collapsed {
+  left: 0;
+}
+
+.jelly-panel-main {
+  display: flex;
+  flex-direction: column;
+  width: 310px;
+  /**
+   * Track／群組多起來時整個面板會比視窗還高（issue #43 回饋）——夾在視窗高度內、
+   * 內容捲動（標題列不跟著捲），不把畫面塞爆。
+   */
+  max-height: calc(100vh - 24px);
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 8px;
+}
+
+.jelly-panel-main[hidden] {
+  display: none;
+}
+
+/** 側欄標題列（issue #128）：名稱＋右側控制鈕（收起側欄；之後的乾淨畫面、「?」也放這裡）。 */
+.jelly-panel-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 4px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.jelly-panel-title {
+  flex: 1;
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.jelly-panel-titlebar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.jelly-panel-titlebar-actions button,
+.jelly-sidebar-handle {
+  min-width: 26px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.jelly-panel-titlebar-actions button:hover,
+.jelly-sidebar-handle:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/** 收起側欄後的把手（issue #128）——貼在畫面左緣的小凸片，點了展開。 */
+.jelly-sidebar-handle {
+  height: 40px;
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 1rem;
+}
+
+.jelly-sidebar-handle[hidden] {
+  display: none;
+}
+
+.jelly-panel-scroll {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.55);
-  border-radius: 8px;
-  color: #fff;
-  font-size: 0.85rem;
-  /**
-   * Track／群組多起來時整個面板會比視窗還高（issue #43 回饋）——夾在視窗高度內、
-   * 內部捲動，不把畫面塞爆。
-   */
-  max-height: calc(100vh - 24px);
+  min-height: 0;
+  padding: 8px 12px 10px;
   overflow-y: auto;
+}
+
+/** 可收合分區（issue #128）：整列可點的標題（▸／▾＋名稱）＋內容。 */
+.jelly-panel-section {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.jelly-panel-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.jelly-panel-section-header:hover {
+  opacity: 1;
+}
+
+.jelly-panel-section-chevron::before {
+  content: '▸';
+  display: inline-block;
+  width: 1em;
+}
+
+.jelly-panel-section-header[aria-expanded='true'] .jelly-panel-section-chevron::before {
+  content: '▾';
+}
+
+.jelly-panel-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 6px;
+}
+
+/** `display: flex` 會蓋掉 `[hidden]` 的預設隱藏，這裡補回來。 */
+.jelly-panel-section-body[hidden] {
+  display: none;
+}
+
+/** 片段區三顆按鈕橫排一列（issue #128）。 */
+.jelly-clip-row button {
+  flex: 1;
+  white-space: nowrap;
 }
 
 .jelly-control-row {
@@ -175,8 +307,7 @@ body {
 
 /**
  * 控制項旁的一行小提示（issue #67 事後檢視追加——「目前工具」非「一般操作」
- * 時，說明 Pin 控制項為何被鎖住）。低調小字，跟 `.jelly-control-heading`
- * 同量級但不加粗，避免搶走真正的分區標題。
+ * 時，說明 Pin 控制項為何被鎖住）。低調小字、不加粗，避免搶走分區標題。
  */
 .jelly-control-hint {
   font-size: 0.75rem;
@@ -307,14 +438,6 @@ body {
   font-size: 0.75rem;
   font-weight: 600;
   opacity: 0.75;
-}
-
-/** Demo／Track 按鈕列前的小標題（issue #15、issue #29 追加）——跟其他控制項分區，一眼看出這區是自動演出／自己錄的。 */
-.jelly-control-heading {
-  margin-top: 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  opacity: 0.7;
 }
 
 /**
