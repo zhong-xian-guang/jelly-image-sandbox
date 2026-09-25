@@ -1995,6 +1995,25 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
     }
   });
 
+  it('電風扇四條拉霸（issue #125 的右鍵＋滾輪）：setModeValue 同步數值顯示、不觸發回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const cases = [
+      ['fanWidth', '風扇寬度', 185, '185'],
+      ['fanStrength', '風扇強度', 4200, '4200'],
+      ['fanFalloffExponent', '風扇衰減程度', 2.3, '2.3'],
+      ['fanFrequency', '風扇頻率', 0.7, '0.7'],
+    ] as const;
+    for (const [key, label, value, shown] of cases) {
+      panel.setModeValue(key, value);
+      expect(valueOf(findRangeInputByLabel(panel, label)), label).toBe(shown);
+    }
+    expect(opts.onFanWidthChange).not.toHaveBeenCalled();
+    expect(opts.onFanStrengthChange).not.toHaveBeenCalled();
+    expect(opts.onFanFalloffChange).not.toHaveBeenCalled();
+    expect(opts.onFanFrequencyChange).not.toHaveBeenCalled();
+  });
+
   it('外部灌值不改預設值：雙擊仍回到建立時的值', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
