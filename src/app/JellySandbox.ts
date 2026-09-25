@@ -148,8 +148,13 @@ import {
 } from '../camera';
 import {
   type ClickToolId,
+  DEFAULT_TOOL,
   type FanParams,
+  type GrabMode,
+  type ModalToolId,
+  type ModeValueKey,
   type ToolId,
+  type ToolMode,
   DEFAULT_FAN_FALLOFF_EXPONENT,
   DEFAULT_FAN_FREQUENCY,
   DEFAULT_FAN_STRENGTH,
@@ -162,7 +167,6 @@ import {
   HANDFUL_RADIUS_RANGE,
   SPRAY_RADIUS_RANGE,
   PointerInput,
-  type RadiusToolId,
   routeForPinTool,
 } from '../input';
 import {
@@ -203,6 +207,7 @@ import {
 import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { CanvasHover } from './CanvasHover';
 import { ControlPanel } from './ControlPanel';
+import { CursorLabel, cursorLabelText, type FormationShapeState } from './CursorLabel';
 import { canvasToPng, drawDefaultTexture } from './defaultJelly';
 import {
   DEMOS,
@@ -415,6 +420,13 @@ export class JellySandbox {
    * 編隊形狀）都靠它。見 `CanvasHover` 說明。
    */
   private readonly canvasHover: CanvasHover;
+  /**
+   * 游標標籤（issue #122）——跟著指標顯示目前模式與滾輪調到的數值。游標回饋、不是提示：
+   * 只聽 `showCursorLabel`，不受「播放時隱藏提示」影響（見 `CursorLabel`）。
+   */
+  private readonly cursorLabel: CursorLabel;
+  /** 「顯示游標標籤」開關（issue #122），預設開、不存檔。 */
+  private showCursorLabel = true;
   private readonly demoRunner = new DemoRunner();
   private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
@@ -446,7 +458,7 @@ export class JellySandbox {
    * 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，筆刷／Pin 視覺靠這個判定；
    * `attachInputHandlers` 的 `applyInput` 也靠它決定要不要過 Pin 工具轉接（issue #115）。
    */
-  private activeTool: ToolId = 'general';
+  private activeTool: ToolId = DEFAULT_TOOL;
   /**
    * 「生成 Jelly」工具（issue #97）要放的那塊網格的 rest bbox，key 同 `meshMemo`
    * ——`null` = 這組參數建不出網格。游標的「放不放得下」判定每幀都要算一次，沒有
@@ -641,6 +653,8 @@ export class JellySandbox {
     this.controlPanel = new ControlPanel({
       initial: {
         activeTool: this.activeTool,
+        toolModes: { grab: this.input.modeOf('grab') },
+        showCursorLabel: this.showCursorLabel,
         boundary: this.boundaryMode,
         softness: DEFAULT_SOFTNESS,
         tapStrength: this.world.params.tapStrength,
@@ -682,6 +696,8 @@ export class JellySandbox {
       onSaveClip: () => this.saveClip(),
       onLoadClip: () => this.clipFileInput.open(),
       onToolChange: (tool) => this.setActiveTool(tool),
+      onModeChange: (tool, mode) => this.setToolMode(tool, mode),
+      onShowCursorLabelChange: (visible) => this.setShowCursorLabel(visible),
       onRemoveFan: () => this.removeFan(),
       onShowFanRangeChange: (visible) => this.setHintVisible('fanRange', visible),
       onShowFanIconChange: (visible) => this.setHintVisible('fanIcon', visible),
@@ -689,7 +705,7 @@ export class JellySandbox {
       onFanStrengthChange: (strength) => this.setFanStrength(strength),
       onFanFalloffChange: (falloffExponent) => this.setFanFalloffExponent(falloffExponent),
       onFanFrequencyChange: (frequency) => this.setFanFrequency(frequency),
-      onFormationDefineStart: () => this.input.beginFormationDefine(),
+      onFormationDefineStart: () => this.beginFormationDefine(),
       onFormationDefineEnd: () => this.input.endFormationDefine(),
       onShowFormationHintChange: (visible) => this.setHintVisible('formation', visible),
       onSprayRadiusChange: (radius) => this.setSprayRadius(radius),
@@ -749,6 +765,8 @@ export class JellySandbox {
     this.canvasHover = new CanvasHover(root, {
       isCanvas: (target) => target === this.renderer.canvas,
     });
+    this.cursorLabel = new CursorLabel();
+    root.appendChild(this.cursorLabel.element);
     this.applyPinToolVisuals();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
@@ -797,6 +815,7 @@ export class JellySandbox {
     this.canvasHover.destroy(); // 它在 root 上掛了指標監聽（issue #79），一定要解掉
     this.brushCursor.destroy();
     this.handfulRange.destroy();
+    this.cursorLabel.destroy();
     this.input.destroy();
     this.cameraInput.destroy();
     this.renderer.destroy();
@@ -1394,13 +1413,74 @@ export class JellySandbox {
   }
 
   /**
-   * 大把抓取範圍圈（issue #113）顯示與否＝選著大把抓取 且 這層提示實際上可見（使用者
-   * 開著、沒被播放壓下）。「切工具」與「提示可見性變了」兩條路都呼叫這裡。
+   * 某個工具的模式換了（issue #122）——參數卡模式鈕（`onModeChange`）走這裡；中鍵單擊走
+   * `cycleMode`。轉給 `ToolRouter`（只影響下一次按下）、同步面板高亮，再重算跟模式有關的
+   * 提示（大把抓取範圍圈只在大把模式出現）。游標標籤每幀自己重算，不必在這裡推。
+   */
+  private setToolMode(tool: ModalToolId, mode: ToolMode): void {
+    this.input.setMode(tool, mode as GrabMode);
+    this.controlPanel.setToolMode(tool, mode);
+    this.applyHandfulRangeVisibility();
+  }
+
+  /**
+   * 畫布上中鍵單擊（issue #122；`CameraInput` 判定）：輪替目前工具的模式。沒有模式的工具
+   * `cycleMode` 回 `null`，什麼都不做。
+   */
+  private cycleMode(): void {
+    const mode = this.input.cycleMode();
+    if (mode === null) return;
+    const tool = this.activeTool as ModalToolId;
+    this.controlPanel.setToolMode(tool, mode);
+    this.applyHandfulRangeVisibility();
+  }
+
+  /** 目前是不是抓取工具的這個模式（issue #122：範圍圈與編隊提示只在各自的模式出現）。 */
+  private isGrabMode(mode: GrabMode): boolean {
+    return this.activeTool === 'grab' && this.input.modeOf('grab') === mode;
+  }
+
+  /**
+   * 「開始設定形狀」（issue #68）：設定形狀是編隊模式的事，順手把抓取工具切到編隊模式
+   * （issue #122）——不然在單點模式下按了這顆鈕，點在畫布上的會被當成一般的抓取，
+   * 形狀提示也不會出現。
+   */
+  private beginFormationDefine(): void {
+    if (!this.isGrabMode('formation')) this.setToolMode('grab', 'formation');
+    this.input.beginFormationDefine();
+  }
+
+  /** 「顯示游標標籤」開關（issue #122）。 */
+  private setShowCursorLabel(visible: boolean): void {
+    this.showCursorLabel = visible;
+    this.cursorLabel.setEnabled(visible);
+  }
+
+  /**
+   * 游標標籤（issue #122）：位置取 `canvasHover`、文字由目前工具／模式／數值算出來，
+   * 每幀呼叫（`setText`／`setPosition` 值沒變就不寫 DOM）。
+   */
+  private updateCursorLabel(): void {
+    const tool = this.activeTool;
+    const mode = this.input.modeOf(tool);
+    const shape = this.input.formationShape;
+    const formation: FormationShapeState = this.input.isDefiningFormation
+      ? 'defining'
+      : shape && shape.length > 0
+        ? 'ready'
+        : 'none';
+    this.cursorLabel.setText(
+      cursorLabelText({ tool, mode, value: this.input.activeValue?.value ?? null, formation }),
+    );
+    this.cursorLabel.setPosition(this.canvasHover.point);
+  }
+
+  /**
+   * 大把抓取範圍圈（issue #113）顯示與否＝抓取工具的大把模式 且 這層提示實際上可見
+   * （使用者開著、沒被播放壓下）。「切工具」「切模式」與「提示可見性變了」都呼叫這裡。
    */
   private applyHandfulRangeVisibility(): void {
-    this.handfulRange.setActive(
-      this.activeTool === 'handfulGrab' && this.effectiveHints().handfulRange,
-    );
+    this.handfulRange.setActive(this.isGrabMode('handful') && this.effectiveHints().handfulRange);
   }
 
   /**
@@ -1465,21 +1545,22 @@ export class JellySandbox {
   }
 
   /**
-   * 按住右鍵＋滾輪（issue #114，`CameraInput` 呼叫）：目前工具有半徑就由 `ToolRouter`
-   * 增減並夾在範圍內，新值走跟拉霸同一條路（`setXRadius`：沙盒狀態＝圓圈大小 +
-   * `ToolRouter`），再灌回面板拉霸。回傳 `false`（工具沒有半徑）時相機照舊縮放。
+   * 按住右鍵＋滾輪（issue #114，`CameraInput` 呼叫；issue #122 從「調工具半徑」推廣成
+   * 「調目前模式的數值」）：目前模式有數值就由 `ToolRouter` 增減並夾在範圍內，新值走跟
+   * 拉霸同一條路（`setXRadius`：沙盒狀態＝圓圈大小 + `ToolRouter`），再灌回面板拉霸。
+   * 回傳 `false`（沒有數值，例如單點、編隊模式）時相機照舊縮放。
    */
-  private adjustToolRadius(steps: number): boolean {
-    const adjusted = this.input.adjustActiveRadius(steps);
+  private adjustModeValue(steps: number): boolean {
+    const adjusted = this.input.adjustActiveValue(steps);
     if (!adjusted) return false;
-    const { tool, radius } = adjusted;
-    const setRadius: Record<RadiusToolId, (r: number) => void> = {
-      spray: (r) => this.setSprayRadius(r),
-      erase: (r) => this.setEraseRadius(r),
-      handfulGrab: (r) => this.setHandfulRadius(r),
+    const { key, value } = adjusted;
+    const setValue: Record<ModeValueKey, (v: number) => void> = {
+      sprayRadius: (v) => this.setSprayRadius(v),
+      eraseRadius: (v) => this.setEraseRadius(v),
+      handfulRadius: (v) => this.setHandfulRadius(v),
     };
-    setRadius[tool](radius);
-    this.controlPanel.setToolRadius(tool, radius);
+    setValue[key](value);
+    this.controlPanel.setModeValue(key, value);
     return true;
   }
 
@@ -2173,7 +2254,8 @@ export class JellySandbox {
       screenToWorld: project,
       hitTest,
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
-      adjustToolRadius: (steps) => this.adjustToolRadius(steps),
+      adjustModeValue: (steps) => this.adjustModeValue(steps),
+      onMiddleClick: () => this.cycleMode(), // 中鍵單擊輪替模式（issue #122）
     });
     return { input, cameraInput };
   }
@@ -2234,6 +2316,8 @@ export class JellySandbox {
     // 不該落後指標，所以排在暫停守衛之前——暫停中果凍定格，但滑鼠還是會動。
     // 提示層（含編隊形狀預覽）則跟著暫停一起定格，見下方那一區。
     this.updateBrushCursor();
+    // 游標標籤（issue #122）同理：游標回饋，跟著指標、不跟著暫停定格。
+    this.updateCursorLabel();
     // 「生成 Jelly」的禁止游標跟著指標位置與邊界每幀重算（issue #97），理由同上：
     // 游標不該落後指標，所以一樣排在暫停守衛之前。
     this.applyCanvasCursor();
@@ -2361,7 +2445,7 @@ export class JellySandbox {
       this.brushCursor.setRadiusPx(brush.radius * this.cameraState.transform.scale);
     }
     // 大把抓取範圍圈（issue #113）：同一套幾何；拖曳中 `canvasHover` 照樣更新，圈跟著游標。
-    if (this.activeTool === 'handfulGrab') {
+    if (this.isGrabMode('handful')) {
       this.handfulRange.setPosition(this.canvasHover.point);
       this.handfulRange.setRadiusPx(this.handfulRadius * this.cameraState.transform.scale);
     }
@@ -2387,14 +2471,16 @@ export class JellySandbox {
    */
   private formationOverlayGroups(canvasSize: CanvasSize): FormationOverlayGroup[] {
     const project = (p: Point) => worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
-    if (this.input.isDefiningFormation) {
-      return [{ points: this.input.formationDefinePreview.map(project) }];
-    }
+    // 進行中的編隊手勢照畫到放開為止：按下之後才切走模式，這一組仍被抓著（issue #122）。
     const active = this.input.formationActiveGroups;
     if (active.length > 0) {
       return active.map((g) => ({ points: g.points.map(project) }));
     }
-    if (this.activeTool !== 'formation') return [];
+    // 定義中的點與懸停預覽只在編隊模式出現（issue #122）。
+    if (!this.isGrabMode('formation')) return [];
+    if (this.input.isDefiningFormation) {
+      return [{ points: this.input.formationDefinePreview.map(project) }];
+    }
     const hover = this.canvasHover.point;
     if (!hover) return [];
     const anchor = screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y);

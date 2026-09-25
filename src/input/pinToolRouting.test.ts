@@ -8,8 +8,8 @@ import { routeForPinTool } from './pinToolRouting';
 const NO_PINS = { pins: [] as PinInfo[], removeRadius: 0 };
 
 describe('routeForPinTool', () => {
-  it('目前工具不是 Pin（含一般操作、大把抓取）→ 所有事件原樣放行（context 不影響結果）', () => {
-    const others: ToolId[] = ['general', 'handfulGrab', 'formation'];
+  it('目前工具不是 Pin（含抓取工具的各模式）→ 所有事件原樣放行（context 不影響結果）', () => {
+    const others: ToolId[] = ['grab', 'spray', 'erase', 'fan'];
     const events: InputEvent[] = [
       { type: 'grab', id: 1, x: 1, y: 2 },
       { type: 'moveGrab', id: 1, x: 3, y: 4 },
