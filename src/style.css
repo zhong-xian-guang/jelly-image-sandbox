@@ -68,12 +68,15 @@ body {
  * 才出現——沒人告訴使用者「拖 PNG 進來可以匯入」這件事本身存在，第一次使用
  * 完全無從發現。低調小字放在角落，拖曳中時會被上面全螢幕的 `.jelly-drop-hint`
  * 蓋住，不會兩層提示疊在一起。issue #56 讓它本身可點（開檔案選擇器），所以
- * 收下指標事件並給游標／hover 回饋；它只佔右下角一小塊，不擋主要操作。
+ * 收下指標事件並給游標／hover 回饋；它只佔一小塊，不擋主要操作。issue #129 起右下角
+ * 讓給相機按鈕，改放在底部中央、播放控制條正上方。
  */
 .jelly-import-hint {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
+  left: 50%;
+  bottom: 60px;
+  transform: translateX(-50%);
+  white-space: nowrap;
   z-index: 4;
   padding: 4px 10px;
   border-radius: 6px;
@@ -444,8 +447,9 @@ body {
  * 「開始錄製」按鈕在錄製中的視覺提示（issue #29 追加）——比照 Pin 標記「可點掉」的
  * 手法（`.jelly-pin-markers.is-removable` 脈動）：
  * 文字變紅加粗，外加跟 Pin 標記同款的脈動 box-shadow，低頭一眼就知道正在錄。
+ * issue #129 起錄製鈕在畫布上的播放控制條，選擇器改成不綁側欄的列。
  */
-.jelly-control-row button.jelly-recording-active {
+.jelly-playback-bar button.jelly-recording-active {
   color: #ff5a5a;
   font-weight: 600;
   animation: jelly-recording-pulse 1s ease-in-out infinite;
@@ -559,28 +563,103 @@ body {
 }
 
 /**
- * 播放狀態列（issue #34 追加）——「⏸ 暫停／▶ 繼續」鈕 + 「目前 X.XX 秒」讀出。
- * `.jelly-control-row` 是 flex，`hidden` 屬性的預設 `display:none` 會被蓋過，
- * 這裡明確補一條讓「沒在播放時整列隱藏」成立。
+ * 畫布上的控制（issue #129 / V4 U2）：底部中央的播放控制條、右下角的相機按鈕。各自只是
+ * 一小塊浮在畫布上的膠囊，只吃自己範圍內的點擊，畫布其他地方照常操作。蓋在提示層
+ * （z-index 5–6）之上、控制面板與拖放提示（z-index 10）之下。
  */
-.jelly-playback-status[hidden] {
+.jelly-playback-bar,
+.jelly-camera-controls {
+  position: absolute;
+  bottom: 12px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.jelly-playback-bar {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.jelly-camera-controls {
+  right: 12px;
+}
+
+/** `display:flex` 會蓋掉 `hidden` 的預設 `display:none`——乾淨畫面（#130）靠 `hidden` 藏它們。 */
+.jelly-playback-bar[hidden],
+.jelly-camera-controls[hidden] {
   display: none;
 }
 
-.jelly-playback-status button.jelly-paused-active {
+.jelly-canvas-button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+/** 錄製鈕錄製中換成較長的「■ 停止錄製」——固定寬度，置中的控制條才不會跟著左右跳。 */
+.jelly-canvas-button[data-action='record'] {
+  min-width: 7.5em;
+}
+
+.jelly-canvas-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.jelly-canvas-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/** 「鎖定跟隨」鎖住時高亮（同工具列目前工具的樣式）。 */
+.jelly-canvas-button.is-active {
+  border-color: rgba(90, 200, 255, 0.9);
+  background: rgba(90, 200, 255, 0.28);
+  font-weight: 600;
+}
+
+/** 暫停中的「▶ 繼續」提示色（issue #34，沿用側欄時代的樣式）。 */
+.jelly-playback-bar button.jelly-paused-active {
   color: #ffb400;
   font-weight: 600;
 }
 
-.jelly-playback-time {
+/** 播放秒數讀數——等寬、固定最小寬度，數字跳動時控制條不會左右晃；沒在播放時變淡。 */
+.jelly-playback-time,
+.jelly-zoom-readout {
   font-family: monospace;
   font-size: 0.8rem;
+  text-align: right;
   opacity: 0.85;
 }
 
+.jelly-playback-time {
+  min-width: 7ch;
+}
+
+.jelly-playback-bar:not(.is-playing) .jelly-playback-time {
+  opacity: 0.45;
+}
+
+.jelly-zoom-readout {
+  min-width: 5ch;
+}
+
 /**
- * 依群組分區的 Track 清單（issue #43 / V2 T1-8）——夾在「▶ 播放」與「停止／
- * 重設」之間。每個群組一段：標頭列 `[開啟▢] 名稱(可改)（N 條）[獨奏][刪除]`，
+ * 依群組分區的 Track 清單（issue #43 / V2 T1-8）——側欄「錄製」區裡、片段初始 Pin
+ * 之下。每個群組一段：標頭列 `[開啟▢] 名稱(可改)（N 條）[獨奏][刪除]`，
  * 底下縮排接該群組的成員 Track 卡片（一條 Track 屬多組就每段各出現一次）。
  * 播放取所有開啟中群組的成員聯集；錄製中／播放中整區 `disabled`（見
  * `updateTrackControlsState`）。

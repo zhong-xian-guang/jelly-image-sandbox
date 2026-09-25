@@ -259,9 +259,7 @@ describe('ControlPanel — 依群組分區的 Track 清單（issue #43）', () =
   it('setPlayableTrackCount(0) → 「▶ 播放」變灰；> 0 且未忙 → 可按', () => {
     panel.setGroups(groupRows());
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
-    const playButton = [...panel.element.querySelectorAll('button')].find(
-      (b) => b.textContent === '▶ 播放',
-    ) as HTMLButtonElement;
+    const playButton = barButton(panel, 'play');
     panel.setPlayableTrackCount(0);
     expect(playButton.disabled).toBe(true);
     panel.setPlayableTrackCount(1);
@@ -1521,12 +1519,9 @@ describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () =>
       [labelByText(panel, '顯示游標標籤'), 'view'],
       [buttonByText(panel, 'Demo 一'), 'demo'],
       [labelByText(panel, '錄製目標'), 'record'],
-      [buttonByText(panel, '● 開始錄製 Track'), 'record'],
-      [buttonByText(panel, '▶ 播放'), 'record'],
       [buttonByText(panel, '設為目前 Pin'), 'record'],
       [panel.element.querySelector('.jelly-grouped-tracks')!, 'record'],
       [buttonByText(panel, '＋ 新增群組'), 'record'],
-      [buttonByText(panel, '停止／重設'), 'record'],
       [panel.element.querySelector('.jelly-perf-status')!, 'dev'],
       [labelByText(panel, '顯示網格'), 'dev'],
     ];
@@ -1552,6 +1547,7 @@ describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () =>
       buttonByText(panel, '全部重建').closest('.jelly-control-row')!,
     ].map((row) => rows.indexOf(row));
     expect(order).toEqual([0, 1, 2, 3]);
+    expect(rows).toHaveLength(4);
   });
 
   it('片段區三顆按鈕排成同一列', () => {
@@ -1707,5 +1703,259 @@ describe('ControlPanel — 側欄收起（issue #128 / V4 U1）', () => {
     expect(buttonByText(panel, '清空全部').disabled).toBe(true);
     panel.setSidebarCollapsed(false);
     expect(buttonByText(panel, '全部重建').disabled).toBe(true);
+  });
+});
+
+/** 播放控制條上的一顆鈕（issue #129）：`data-action` = record／play／pause／stop。 */
+function barButton(panel: ControlPanel, action: string): HTMLButtonElement {
+  const button = panel.playbackBar.querySelector(
+    `button[data-action="${action}"]`,
+  ) as HTMLButtonElement | null;
+  expect(button, action).not.toBeNull();
+  return button!;
+}
+
+/** 畫布右下角相機按鈕區的一顆鈕（issue #129）：`data-action` = follow-lock／frame。 */
+function cameraButton(panel: ControlPanel, action: string): HTMLButtonElement {
+  const button = panel.cameraControls.querySelector(
+    `button[data-action="${action}"]`,
+  ) as HTMLButtonElement | null;
+  expect(button, action).not.toBeNull();
+  return button!;
+}
+
+/** 控制條四顆鈕的可用狀態，照 [錄製, 播放, 暫停, 停止] 順序。 */
+function barEnabled(panel: ControlPanel): boolean[] {
+  return ['record', 'play', 'pause', 'stop'].map((a) => !barButton(panel, a).disabled);
+}
+
+describe('ControlPanel — 畫布上的播放控制條（issue #129 / V4 U2）', () => {
+  /** 已有一條可播放 Track 的面板。 */
+  function panelWithTrack(opts = makeOptions()): ControlPanel {
+    const panel = new ControlPanel(opts);
+    panel.setGroups(groupRows());
+    panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    panel.setPlayableTrackCount(1);
+    return panel;
+  }
+
+  it('控制條不在側欄裡：[● 錄製] [▶ 播放] [⏸ 暫停] [■ 停止／重設]＋時間讀數，照這個順序', () => {
+    const panel = new ControlPanel(makeOptions());
+    expect(panel.element.contains(panel.playbackBar)).toBe(false);
+    const buttons = [...panel.playbackBar.querySelectorAll('button')];
+    expect(buttons.map((b) => b.dataset.action)).toEqual(['record', 'play', 'pause', 'stop']);
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      '● 錄製',
+      '▶ 播放',
+      '⏸ 暫停',
+      '■ 停止／重設',
+    ]);
+    const time = panel.playbackBar.querySelector('.jelly-playback-time');
+    expect(time?.textContent).toBe('0.00 秒');
+    expect(buttons.at(-1)!.compareDocumentPosition(time!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it('沒有可播放的 Track：播放灰；錄製、停止可按；暫停只在播放中可按', () => {
+    const panel = new ControlPanel(makeOptions());
+    expect(barEnabled(panel)).toEqual([true, false, false, true]);
+    // 有 Track 但開啟中群組聯集是空的，一樣灰。
+    panel.setGroups(groupRows());
+    panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    panel.setPlayableTrackCount(0);
+    expect(barEnabled(panel)).toEqual([true, false, false, true]);
+  });
+
+  it('閒置且有可播放的 Track：錄製、播放、停止可按，暫停灰', () => {
+    expect(barEnabled(panelWithTrack())).toEqual([true, true, false, true]);
+  });
+
+  it('錄製中：錄製鈕變「■ 停止錄製」且脈動（仍可按），播放鎖住；停止錄製後還原', () => {
+    const panel = panelWithTrack();
+    panel.setRecordingActive(true);
+    const record = barButton(panel, 'record');
+    expect(record.textContent).toBe('■ 停止錄製');
+    expect(record.classList.contains('jelly-recording-active')).toBe(true);
+    expect(barEnabled(panel)).toEqual([true, false, false, true]);
+
+    panel.setRecordingActive(false);
+    expect(record.textContent).toBe('● 錄製');
+    expect(record.classList.contains('jelly-recording-active')).toBe(false);
+    expect(barEnabled(panel)).toEqual([true, true, false, true]);
+  });
+
+  it('播放中：錄製、播放鎖住，暫停、停止可按；播完回到閒置', () => {
+    const panel = panelWithTrack();
+    panel.setPlaybackControlsEnabled(false);
+    panel.setPlaybackActive(true);
+    expect(barEnabled(panel)).toEqual([false, false, true, true]);
+
+    panel.setPlaybackControlsEnabled(true);
+    panel.setPlaybackActive(false);
+    expect(barEnabled(panel)).toEqual([true, true, false, true]);
+  });
+
+  it('暫停中：暫停鈕變「▶ 繼續」並變色；新一輪播放開始時還原', () => {
+    const panel = panelWithTrack();
+    panel.setPlaybackControlsEnabled(false);
+    panel.setPlaybackActive(true);
+    panel.setPaused(true);
+    const pause = barButton(panel, 'pause');
+    expect(pause.textContent).toBe('▶ 繼續');
+    expect(pause.classList.contains('jelly-paused-active')).toBe(true);
+    expect(barEnabled(panel)).toEqual([false, false, true, true]);
+
+    panel.setPaused(false);
+    expect(pause.textContent).toBe('⏸ 暫停');
+    expect(pause.classList.contains('jelly-paused-active')).toBe(false);
+
+    panel.setPaused(true);
+    panel.setPlaybackActive(false);
+    panel.setPlaybackActive(true);
+    expect(pause.textContent).toBe('⏸ 暫停');
+  });
+
+  it('時間讀數：播放中跟著 setPlaybackTime 走，播完歸零', () => {
+    const panel = panelWithTrack();
+    const time = panel.playbackBar.querySelector('.jelly-playback-time')!;
+    panel.setPlaybackActive(true);
+    panel.setPlaybackTime(1.234);
+    expect(time.textContent).toBe('1.23 秒');
+    panel.setPlaybackActive(false);
+    expect(time.textContent).toBe('0.00 秒');
+  });
+
+  it('四顆鈕各自呼叫對應的回呼', () => {
+    const opts = makeOptions();
+    const panel = panelWithTrack(opts);
+    barButton(panel, 'record').click();
+    barButton(panel, 'play').click();
+    panel.setPlaybackControlsEnabled(false);
+    panel.setPlaybackActive(true);
+    barButton(panel, 'pause').click();
+    barButton(panel, 'stop').click();
+    expect(opts.onToggleRecording).toHaveBeenCalledTimes(1);
+    expect(opts.onPlayAll).toHaveBeenCalledTimes(1);
+    expect(opts.onTogglePause).toHaveBeenCalledTimes(1);
+    expect(opts.onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it('側欄收起不影響控制條（它不在側欄裡）', () => {
+    const panel = panelWithTrack();
+    panel.setSidebarCollapsed(true);
+    expect(panel.playbackBar.hidden).toBe(false);
+    expect(barEnabled(panel)).toEqual([true, true, false, true]);
+  });
+});
+
+describe('ControlPanel — 畫布右下角的相機按鈕（issue #129 / V4 U2）', () => {
+  it('相機按鈕不在側欄裡：鎖定跟隨、框住果凍、縮放倍率讀數', () => {
+    const panel = new ControlPanel(makeOptions());
+    expect(panel.element.contains(panel.cameraControls)).toBe(false);
+    expect(cameraButton(panel, 'follow-lock').textContent).toContain('鎖定跟隨');
+    expect(cameraButton(panel, 'frame').textContent).toContain('框住果凍');
+    expect(panel.cameraControls.querySelector('.jelly-zoom-readout')?.textContent).toBe('×1.0');
+  });
+
+  it('「鎖定跟隨」是切換鈕：初始值來自 initial.followLocked，按下切換並回呼', () => {
+    const opts = makeOptions({ initial: { ...makeOptions().initial, followLocked: true } });
+    const panel = new ControlPanel(opts);
+    const toggle = cameraButton(panel, 'follow-lock');
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(toggle.classList.contains('is-active')).toBe(true);
+
+    toggle.click();
+    expect(opts.onFollowLockChange).toHaveBeenLastCalledWith(false);
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(toggle.classList.contains('is-active')).toBe(false);
+
+    toggle.click();
+    expect(opts.onFollowLockChange).toHaveBeenLastCalledWith(true);
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('setFollowLocked（每幀從相機實際狀態灌回，例如相機軌播放改了跟隨）→ 鈕同步、不回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const toggle = cameraButton(panel, 'follow-lock');
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    panel.setFollowLocked(true);
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(toggle.classList.contains('is-active')).toBe(true);
+    expect(opts.onFollowLockChange).not.toHaveBeenCalled();
+    // 同步後再按一下 → 解鎖（以同步後的狀態為準，不是建構時的初始值）。
+    toggle.click();
+    expect(opts.onFollowLockChange).toHaveBeenCalledTimes(1);
+    expect(opts.onFollowLockChange).toHaveBeenCalledWith(false);
+  });
+
+  it('「框住果凍」→ onFrameJelly', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    cameraButton(panel, 'frame').click();
+    expect(opts.onFrameJelly).toHaveBeenCalledTimes(1);
+  });
+
+  it('縮放倍率讀數隨 setZoomFactor 更新（≥ 1 一位小數、< 1 兩位小數）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const readout = panel.cameraControls.querySelector('.jelly-zoom-readout')!;
+    panel.setZoomFactor(1.5);
+    expect(readout.textContent).toBe('×1.5');
+    panel.setZoomFactor(1.04);
+    expect(readout.textContent).toBe('×1.0');
+    panel.setZoomFactor(0.25);
+    expect(readout.textContent).toBe('×0.25');
+    panel.setZoomFactor(12.345);
+    expect(readout.textContent).toBe('×12.3');
+  });
+
+  it('播放中／錄製中相機按鈕照常可按（運鏡本來就可錄）', () => {
+    const panel = new ControlPanel(makeOptions());
+    panel.setRecordingActive(true);
+    panel.setPlaybackControlsEnabled(false);
+    expect(cameraButton(panel, 'follow-lock').disabled).toBe(false);
+    expect(cameraButton(panel, 'frame').disabled).toBe(false);
+  });
+});
+
+describe('ControlPanel — 側欄不再有播放與相機控制（issue #129）', () => {
+  it('側欄裡沒有錄製、播放、暫停、停止／重設、鎖定跟隨、框住果凍與時間讀數', () => {
+    const panel = new ControlPanel(makeOptions());
+    // 分區標題「錄製」本身不算。
+    const texts = [
+      ...panel.element.querySelectorAll('button:not(.jelly-panel-section-header), label'),
+    ].map((el) => el.textContent);
+    for (const gone of ['錄製', '播放', '暫停', '停止', '鎖定跟隨', '框住果凍']) {
+      expect(
+        texts.filter(
+          (t) => t?.includes(gone) && t !== '播放時隱藏提示' && !t.startsWith('錄製目標'),
+        ),
+        gone,
+      ).toEqual([]);
+    }
+    expect(panel.element.querySelector('.jelly-playback-time')).toBeNull();
+  });
+
+  it('錄製區只剩：錄製目標、片段初始 Pin、Track／群組清單（＋ 新增群組）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const rows = [...panel.sectionBody('record').children];
+    expect(rows).toEqual([
+      labelByText(panel, '錄製目標'),
+      panel.element.querySelector('.jelly-setup-pins-row'),
+      panel.element.querySelector('.jelly-grouped-tracks'),
+      buttonByText(panel, '＋ 新增群組').closest('.jelly-control-row'),
+    ]);
+  });
+
+  it('檢視區只剩顯示類開關與清除所有 Pin', () => {
+    const panel = new ControlPanel(makeOptions());
+    const rows = [...panel.sectionBody('view').children];
+    expect(rows.map((r) => r.textContent)).toEqual([
+      '顯示 Pin',
+      '清除所有 Pin',
+      '播放時隱藏提示',
+      '顯示游標標籤',
+    ]);
   });
 });

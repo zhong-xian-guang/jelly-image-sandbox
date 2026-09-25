@@ -141,6 +141,7 @@ import {
   type CameraState,
   type CanvasSize,
   createCameraState,
+  fitTransform,
   screenToWorld,
   updateCamera,
   worldToScreen,
@@ -741,6 +742,9 @@ export class JellySandbox {
       onTrackGroupsChange: (trackId, groupIds) => this.setTrackGroups(trackId, groupIds),
     });
     root.appendChild(this.controlPanel.element);
+    // 畫布上的播放控制條（底部中央）與相機按鈕（右下角）——issue #129；只吃自己範圍內的點擊。
+    root.appendChild(this.controlPanel.playbackBar);
+    root.appendChild(this.controlPanel.cameraControls);
 
     this.pinMarkers = new PinMarkers();
     root.appendChild(this.pinMarkers.element);
@@ -823,7 +827,7 @@ export class JellySandbox {
   /**
    * 「框住果凍」按鈕（issue #14）——一次性緩動 fit 當前 bbox。純一次性動作，
    * 不碰「鎖定跟隨」狀態（`updateCamera` 的 `frame` 指令不改 `followEnabled`），
-   * 按這顆鈕不會讓控制面板的「鎖定跟隨」勾選框跟實際狀態對不上。
+   * 按這顆鈕不會讓畫布右下角的「鎖定跟隨」切換鈕跟實際狀態對不上。
    */
   frameJelly(): void {
     this.emitCamera({ type: 'frame' });
@@ -1185,7 +1189,7 @@ export class JellySandbox {
   /**
    * 集中處理鎖定狀態變化，`frame()` 每幀同步一次時才不會對沒變的按鈕重複寫
    * `disabled`。`locked` 等同「Demo／Track 正在播放」——同步驅動 issue #34 的
-   * 播放狀態列（暫停鈕＋秒數讀出只在播放中出現），並在播放結束時把暫停旗標
+   * 播放控制條（issue #129：暫停鈕只在播放中可按、秒數讀數開始／結束時歸零），並在播放結束時把暫停旗標
    * 強制歸零，下一次播放不會殘留上一輪的定格狀態。
    *
    * 同時是「播放時隱藏提示」（issue #71）的唯一觸發點：開始播放時壓下所有提示、
@@ -1204,7 +1208,7 @@ export class JellySandbox {
   /**
    * 「⏸ 暫停／▶ 繼續」切換鈕（issue #34）——只在播放中有作用（沒在播放時
    * `demoRunner.isRunning` 為 false，直接忽略，對應「暫停鈕無作用」的驗收條件；
-   * 面板那邊此時整列也是隱藏的）。
+   * 播放控制條上的暫停鈕此時也是灰的）。
    */
   private togglePause(): void {
     if (!this.demoRunner.isRunning) return;
@@ -1226,8 +1230,8 @@ export class JellySandbox {
    *    網格後，還沒播完的排程繼續把事件砸進去（看起來像「重設沒生效」，或讓舊
    *    網格算的座標砸進新網格）。
    * 2. `setPlaybackLocked(false)` 解鎖被播放鎖住的所有控制項（Demo 鈕、開始錄製、
-   *    ▶ 播放、錄製目標選擇器、Track 清單編輯、群組區），並把暫停旗標歸零、收起
-   *    播放狀態列（見 `setPlaybackLocked`）。
+   *    ▶ 播放、錄製目標選擇器、Track 清單編輯、群組區），並把暫停旗標歸零、播放
+   *    控制條回到閒置（見 `setPlaybackLocked`）。
    * 3. 仍在進行中的錄製一併中斷並**丟棄**（不進清單）——「中斷」不是「存檔」。
    *
    * 差別只在呼叫端各自接的下一步：`resetSim` 呼 `world.reset()` 但**保留** Track／
@@ -2381,10 +2385,15 @@ export class JellySandbox {
         clampedElapsed,
       );
     }
-    // 「鎖定跟隨」勾選框同步到相機實際狀態（issue #36）——相機軌播放的 `setState`
-    // 硬切、錄進去的 `setFollow`，或 `playAll` 重設鏡頭都會在使用者沒點勾選框時
+    // 「鎖定跟隨」切換鈕同步到相機實際狀態（issue #36；issue #129 搬到畫布右下角）——相機軌
+    // 播放的 `setState` 硬切、錄進去的 `setFollow`，或 `playAll` 重設鏡頭都會在使用者沒按鈕時
     // 改動 `followEnabled`，不同步就會脫鉤。`setFollowLocked` 值沒變不寫 DOM。
     this.controlPanel.setFollowLocked(!this.cameraState.followEnabled);
+    // 縮放倍率讀數（issue #129）：相對「框住果凍」／自動跟隨的 zoom-to-fit 錨點——
+    // 框好時是 ×1.0，手動拉近兩倍是 ×2.0。
+    this.controlPanel.setZoomFactor(
+      this.cameraState.transform.scale / fitTransform(this.lastBbox, this.canvasSize()).scale,
+    );
 
     // 算繪端跟 World 的塊集合同步（新增／移除／順序），再逐塊上傳位置（issue #95）。
     this.syncRenderer();
