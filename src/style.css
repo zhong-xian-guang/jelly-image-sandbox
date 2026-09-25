@@ -1098,12 +1098,19 @@ body {
  * 跟上面的控制項隔一條細線，看得出它是說明、不是可按的東西。
  */
 .jelly-tool-help {
+  /* 一般文字流而非 `.jelly-control-row` 的 flex——段落（`.jelly-tool-help-part`）才會換行（issue #141）。 */
+  display: block;
   margin-top: 4px;
   padding-top: 6px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   font-size: 0.75rem;
   line-height: 1.45;
   color: rgba(255, 255, 255, 0.7);
+}
+
+/* 操作說明的一段（issue #141）：段內不斷行，只在段與段之間（「｜」之後）換行。 */
+.jelly-tool-help-part {
+  white-space: nowrap;
 }
 
 /**
