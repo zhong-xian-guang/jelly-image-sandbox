@@ -8,6 +8,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ControlPanel, type ControlPanelOptions, type TrackListRow } from './ControlPanel';
+import { PANEL_LAYOUT_STORAGE_KEY, type KeyValueStorage } from './panelLayout';
+
+/** 記憶體版的 `localStorage`（issue #128）——每個測試各拿一份，展開狀態不會跨測試殘留。 */
+function memoryStorage(initial: Record<string, string> = {}): KeyValueStorage {
+  const data = { ...initial };
+  return {
+    getItem: (key) => (key in data ? data[key]! : null),
+    setItem: (key, value) => {
+      data[key] = value;
+    },
+  };
+}
 
 /** 依 `<label>` 文字內容找出裡面的 range input——`rangeRow` 產生的每個滑桿都是這個形狀。 */
 function findRangeInputByLabel(panel: ControlPanel, labelText: string): HTMLInputElement {
@@ -60,6 +72,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     spraySpacingRange: { min: 12, max: 120, step: 2 },
     handfulRadiusRange: { min: 20, max: 400, step: 10 },
     demos: [],
+    storage: memoryStorage(),
     onImportImage: vi.fn(),
     onSaveClip: vi.fn(),
     onLoadClip: vi.fn(),
@@ -642,7 +655,9 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
 
   it('工具列在側欄最上方，每個工具一顆按鈕（圖示＋文字），照工具列順序', () => {
     const panel = new ControlPanel(makeOptions());
-    expect(panel.element.firstElementChild!.querySelector('.jelly-toolbar')).not.toBeNull();
+    // issue #128：最上方是側欄標題列，工具列＋工具卡緊接在它底下、所有分區之前。
+    const scroll = panel.element.querySelector('.jelly-panel-scroll')!;
+    expect(scroll.firstElementChild!.querySelector('.jelly-toolbar')).not.toBeNull();
     const buttons = [
       ...panel.element.querySelectorAll('.jelly-toolbar button'),
     ] as HTMLButtonElement[];
@@ -712,6 +727,14 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
 describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () => {
   const cardTitles = (panel: ControlPanel) =>
     visibleCards(panel).map((el) => el.querySelector('.jelly-tool-params-title')!.textContent);
+
+  it('每組參數卡都有自己的標題（照工具列順序）', () => {
+    const panel = new ControlPanel(makeOptions());
+    const titles = [...panel.element.querySelectorAll('.jelly-tool-card .jelly-tool-params')].map(
+      (el) => el.querySelector('.jelly-tool-params-title')?.textContent,
+    );
+    expect(titles).toEqual(['抓取', 'Pin', '電風扇', 'Jelly']);
+  });
 
   it('任一時刻只有一組參數卡顯示，跟著目前工具換', () => {
     const panel = new ControlPanel(makeOptions());
@@ -1219,12 +1242,10 @@ describe('ControlPanel — 播放時隱藏提示（issue #71 / V2 T3-7）', () =
 });
 
 describe('ControlPanel — 匯入區塊：匯入尺寸拉霸（issue #88 / V3 T1-1）', () => {
-  it('面板有「匯入」小標題', () => {
+  it('在「匯入」分區裡（issue #128）', () => {
     const panel = new ControlPanel(makeOptions());
-    const headings = [...panel.element.querySelectorAll('.jelly-control-heading')].map(
-      (h) => h.textContent,
-    );
-    expect(headings).toContain('匯入');
+    const input = findRangeInputByLabel(panel, '匯入尺寸');
+    expect(panel.sectionBody('import').contains(input)).toBe(true);
   });
 
   it('「匯入尺寸」拉霸初始值來自 initial.importSize（512），範圍來自 importSizeRange', () => {
@@ -1303,19 +1324,6 @@ describe('ControlPanel — 匯入區塊：網格密度拉霸（issue #89 / V3 T1
     expect(opts.onMeshDensityChange).not.toHaveBeenCalled();
   });
 
-  it('「網格密度」列在「匯入」小標題底下、跟「匯入尺寸」同區', () => {
-    const panel = new ControlPanel(makeOptions());
-    const heading = [...panel.element.querySelectorAll('.jelly-control-heading')].find(
-      (h) => h.textContent === '匯入',
-    )!;
-    const importSizeRow = findRangeInputByLabel(panel, '匯入尺寸').closest('label')!;
-    const densityRow = findRangeInputByLabel(panel, '網格密度').closest('label')!;
-    // 三者在同一個父節點下、且順序為 小標題 → 匯入尺寸 → 網格密度。
-    const siblings = [...heading.parentElement!.children];
-    expect(siblings.indexOf(heading)).toBeLessThan(siblings.indexOf(importSizeRow));
-    expect(siblings.indexOf(importSizeRow)).toBeLessThan(siblings.indexOf(densityRow));
-  });
-
   it('不受播放／錄製鎖定影響（拉霸只管「下一次」匯入）', () => {
     const panel = new ControlPanel(makeOptions());
     const input = findRangeInputByLabel(panel, '網格密度');
@@ -1341,18 +1349,6 @@ describe('ControlPanel — 匯入區塊：「全部重建」按鈕（issue #90 /
     const panel = new ControlPanel(opts);
     rebuildButton(panel).click();
     expect(opts.onRebuildAll).toHaveBeenCalledTimes(1);
-  });
-
-  it('「全部重建」列在「匯入」區塊最後（小標題 → 匯入尺寸 → 網格密度 → 全部重建）', () => {
-    const panel = new ControlPanel(makeOptions());
-    const heading = [...panel.element.querySelectorAll('.jelly-control-heading')].find(
-      (h) => h.textContent === '匯入',
-    )!;
-    const densityRow = findRangeInputByLabel(panel, '網格密度').closest('label')!;
-    const rebuildRow = rebuildButton(panel).closest('.jelly-control-row')!;
-    const siblings = [...heading.parentElement!.children];
-    expect(siblings.indexOf(heading)).toBeLessThan(siblings.indexOf(densityRow));
-    expect(siblings.indexOf(densityRow) + 1).toBe(siblings.indexOf(rebuildRow));
   });
 
   it('錄製中／播放中 → 按鈕變灰，結束後解鎖（不受 Track 數量影響）', () => {
@@ -1490,5 +1486,288 @@ describe('ControlPanel — 右鍵＋滾輪調數值的拉霸同步（issue #114�
     expect(opts.onFanStrengthChange).not.toHaveBeenCalled();
     expect(opts.onFanFalloffChange).not.toHaveBeenCalled();
     expect(opts.onFanFrequencyChange).not.toHaveBeenCalled();
+  });
+});
+
+/** 某個控制所在的側欄分區 id（issue #128）；不在任何分區（例如工具卡）回 `null`。 */
+function sectionOf(el: Element | null | undefined): string | null {
+  expect(el).toBeTruthy();
+  const section = el!.closest('.jelly-panel-section') as HTMLElement | null;
+  return section?.dataset.section ?? null;
+}
+
+function buttonByText(panel: ControlPanel, text: string): HTMLButtonElement {
+  const button = [...panel.element.querySelectorAll('button')].find((b) => b.textContent === text);
+  expect(button, text).toBeDefined();
+  return button!;
+}
+
+function labelByText(panel: ControlPanel, text: string): HTMLLabelElement {
+  const label = [...panel.element.querySelectorAll('label')].find((l) =>
+    l.textContent?.includes(text),
+  );
+  expect(label, text).toBeDefined();
+  return label!;
+}
+
+function sectionHeader(panel: ControlPanel, id: string): HTMLButtonElement {
+  const header = panel.element.querySelector(
+    `.jelly-panel-section[data-section="${id}"] .jelly-panel-section-header`,
+  ) as HTMLButtonElement | null;
+  expect(header, id).not.toBeNull();
+  return header!;
+}
+
+/** 目前展開著的分區（body 沒有 `hidden`）。 */
+function expandedSections(panel: ControlPanel): string[] {
+  return ([...panel.element.querySelectorAll('.jelly-panel-section')] as HTMLElement[])
+    .filter((s) => !(s.querySelector('.jelly-panel-section-body') as HTMLElement).hidden)
+    .map((s) => s.dataset.section!);
+}
+
+describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () => {
+  it('七個分區，照順序：匯入、片段、物理、檢視、Demo、錄製、開發者', () => {
+    const panel = new ControlPanel(makeOptions());
+    const sections = [...panel.element.querySelectorAll('.jelly-panel-section')] as HTMLElement[];
+    expect(sections.map((s) => s.dataset.section)).toEqual([
+      'import',
+      'clip',
+      'physics',
+      'view',
+      'demo',
+      'record',
+      'dev',
+    ]);
+    expect(
+      sections.map(
+        (s) =>
+          s.querySelector('.jelly-panel-section-header .jelly-panel-section-title')!.textContent,
+      ),
+    ).toEqual(['匯入', '片段', '物理', '檢視', 'Demo', '錄製', '開發者']);
+  });
+
+  it('工具列＋工具卡在所有分區之上、不在任何分區裡', () => {
+    const panel = new ControlPanel(makeOptions());
+    const toolSection = panel.element.querySelector('.jelly-tool-section')!;
+    expect(sectionOf(toolSection)).toBeNull();
+    const firstSection = panel.element.querySelector('.jelly-panel-section')!;
+    expect(
+      toolSection.compareDocumentPosition(firstSection) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('預設只有物理展開；標題的 aria-expanded 跟著', () => {
+    const panel = new ControlPanel(makeOptions());
+    expect(expandedSections(panel)).toEqual(['physics']);
+    expect(sectionHeader(panel, 'physics').getAttribute('aria-expanded')).toBe('true');
+    expect(sectionHeader(panel, 'import').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('各控制落在表格指定的區', () => {
+    const panel = new ControlPanel(makeOptions({ demos: [{ id: 'd1', label: 'Demo 一' }] }));
+    const expected: [Element, string][] = [
+      [buttonByText(panel, '匯入圖片…'), 'import'],
+      [labelByText(panel, '匯入尺寸'), 'import'],
+      [labelByText(panel, '網格密度'), 'import'],
+      [buttonByText(panel, '全部重建'), 'import'],
+      [buttonByText(panel, '儲存片段'), 'clip'],
+      [buttonByText(panel, '載入片段…'), 'clip'],
+      [buttonByText(panel, '清空全部'), 'clip'],
+      [labelByText(panel, '邊界'), 'physics'],
+      [labelByText(panel, '軟硬度'), 'physics'],
+      [labelByText(panel, '輕拍力道'), 'physics'],
+      [labelByText(panel, '重力'), 'physics'],
+      [labelByText(panel, '顯示 Pin'), 'view'],
+      [buttonByText(panel, '清除所有 Pin'), 'view'],
+      [labelByText(panel, '播放時隱藏提示'), 'view'],
+      [labelByText(panel, '顯示游標標籤'), 'view'],
+      [buttonByText(panel, 'Demo 一'), 'demo'],
+      [labelByText(panel, '錄製目標'), 'record'],
+      [buttonByText(panel, '● 開始錄製 Track'), 'record'],
+      [buttonByText(panel, '▶ 播放'), 'record'],
+      [buttonByText(panel, '設為目前 Pin'), 'record'],
+      [panel.element.querySelector('.jelly-grouped-tracks')!, 'record'],
+      [buttonByText(panel, '＋ 新增群組'), 'record'],
+      [buttonByText(panel, '停止／重設'), 'record'],
+      [panel.element.querySelector('.jelly-perf-status')!, 'dev'],
+      [labelByText(panel, '顯示網格'), 'dev'],
+    ];
+    for (const [el, section] of expected) {
+      expect([el.textContent, sectionOf(el)]).toEqual([el.textContent, section]);
+    }
+  });
+
+  it('工具專屬的顯示開關仍留在各自的工具卡，不在任何分區', () => {
+    const panel = new ControlPanel(makeOptions());
+    for (const text of ['顯示風扇範圍', '顯示風扇圖示', '顯示大把抓取範圍', '顯示編隊抓取提示']) {
+      expect(sectionOf(labelByText(panel, text))).toBeNull();
+    }
+  });
+
+  it('匯入區順序：匯入圖片… → 匯入尺寸 → 網格密度 → 全部重建', () => {
+    const panel = new ControlPanel(makeOptions());
+    const rows = [...panel.sectionBody('import').children];
+    const order = [
+      buttonByText(panel, '匯入圖片…').closest('.jelly-control-row')!,
+      labelByText(panel, '匯入尺寸'),
+      labelByText(panel, '網格密度'),
+      buttonByText(panel, '全部重建').closest('.jelly-control-row')!,
+    ].map((row) => rows.indexOf(row));
+    expect(order).toEqual([0, 1, 2, 3]);
+  });
+
+  it('片段區三顆按鈕排成同一列', () => {
+    const panel = new ControlPanel(makeOptions());
+    const row = buttonByText(panel, '儲存片段').parentElement!;
+    expect(buttonByText(panel, '載入片段…').parentElement).toBe(row);
+    expect(buttonByText(panel, '清空全部').parentElement).toBe(row);
+    expect(row.parentElement).toBe(panel.sectionBody('clip'));
+  });
+
+  it('點標題展開／收起，aria-expanded 跟著', () => {
+    const panel = new ControlPanel(makeOptions());
+    sectionHeader(panel, 'record').click();
+    expect(expandedSections(panel)).toEqual(['physics', 'record']);
+    expect(sectionHeader(panel, 'record').getAttribute('aria-expanded')).toBe('true');
+    sectionHeader(panel, 'physics').click();
+    expect(expandedSections(panel)).toEqual(['record']);
+    expect(panel.isSectionExpanded('physics')).toBe(false);
+  });
+
+  it('展開狀態存進 storage，下一個面板（重新整理）讀回來', () => {
+    const storage = memoryStorage();
+    const first = new ControlPanel(makeOptions({ storage }));
+    sectionHeader(first, 'demo').click();
+    sectionHeader(first, 'physics').click();
+
+    const second = new ControlPanel(makeOptions({ storage }));
+    expect(expandedSections(second)).toEqual(['demo']);
+  });
+
+  it('storage 讀寫都丟錯 → 照樣以預設渲染，點標題也照常切換', () => {
+    const throwing: KeyValueStorage = {
+      getItem: () => {
+        throw new Error('SecurityError');
+      },
+      setItem: () => {
+        throw new Error('QuotaExceededError');
+      },
+    };
+    const panel = new ControlPanel(makeOptions({ storage: throwing }));
+    expect(expandedSections(panel)).toEqual(['physics']);
+    expect(panel.isSidebarCollapsed()).toBe(false);
+    expect(() => sectionHeader(panel, 'view').click()).not.toThrow();
+    expect(expandedSections(panel)).toEqual(['physics', 'view']);
+  });
+
+  it('沒給 storage 時用瀏覽器的 localStorage；localStorage 丟錯時照樣以預設渲染', () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    try {
+      const panel = new ControlPanel(makeOptions({ storage: undefined }));
+      expect(getItem).toHaveBeenCalled();
+      expect(expandedSections(panel)).toEqual(['physics']);
+      expect(() => sectionHeader(panel, 'dev').click()).not.toThrow();
+      expect(setItem).toHaveBeenCalled();
+    } finally {
+      getItem.mockRestore();
+      setItem.mockRestore();
+    }
+  });
+
+  it('沒給 storage 時真的寫進 localStorage 並讀回', () => {
+    localStorage.removeItem(PANEL_LAYOUT_STORAGE_KEY);
+    try {
+      const first = new ControlPanel(makeOptions({ storage: undefined }));
+      sectionHeader(first, 'clip').click();
+      const second = new ControlPanel(makeOptions({ storage: undefined }));
+      expect(expandedSections(second)).toEqual(['clip', 'physics']);
+    } finally {
+      localStorage.removeItem(PANEL_LAYOUT_STORAGE_KEY);
+    }
+  });
+
+  it('setSectionExpanded 程式化展開／收起，並記住', () => {
+    const storage = memoryStorage();
+    const panel = new ControlPanel(makeOptions({ storage }));
+    panel.setSectionExpanded('record', true);
+    expect(panel.isSectionExpanded('record')).toBe(true);
+    expect(expandedSections(new ControlPanel(makeOptions({ storage })))).toEqual([
+      'physics',
+      'record',
+    ]);
+  });
+});
+
+describe('ControlPanel — 側欄收起（issue #128 / V4 U1）', () => {
+  function collapseButton(panel: ControlPanel): HTMLButtonElement {
+    const button = panel.element.querySelector(
+      '.jelly-panel-titlebar .jelly-sidebar-collapse',
+    ) as HTMLButtonElement | null;
+    expect(button).not.toBeNull();
+    return button!;
+  }
+
+  function handle(panel: ControlPanel): HTMLButtonElement {
+    const el = panel.element.querySelector('.jelly-sidebar-handle') as HTMLButtonElement | null;
+    expect(el).not.toBeNull();
+    return el!;
+  }
+
+  function mainHidden(panel: ControlPanel): boolean {
+    return (panel.element.querySelector('.jelly-panel-main') as HTMLElement).hidden;
+  }
+
+  it('預設展開：主體可見、把手藏起來', () => {
+    const panel = new ControlPanel(makeOptions());
+    expect(panel.isSidebarCollapsed()).toBe(false);
+    expect(mainHidden(panel)).toBe(false);
+    expect(handle(panel).hidden).toBe(true);
+    expect(panel.element.classList.contains('is-collapsed')).toBe(false);
+  });
+
+  it('按標題列的「收起側欄」→ 收成把手；按把手 → 展開', () => {
+    const panel = new ControlPanel(makeOptions());
+    collapseButton(panel).click();
+    expect(panel.isSidebarCollapsed()).toBe(true);
+    expect(mainHidden(panel)).toBe(true);
+    expect(handle(panel).hidden).toBe(false);
+    expect(panel.element.classList.contains('is-collapsed')).toBe(true);
+
+    handle(panel).click();
+    expect(panel.isSidebarCollapsed()).toBe(false);
+    expect(mainHidden(panel)).toBe(false);
+    expect(handle(panel).hidden).toBe(true);
+  });
+
+  it('收起狀態被記住（下一個面板一開始就是收起的）', () => {
+    const storage = memoryStorage();
+    collapseButton(new ControlPanel(makeOptions({ storage }))).click();
+    const second = new ControlPanel(makeOptions({ storage }));
+    expect(second.isSidebarCollapsed()).toBe(true);
+    expect(handle(second).hidden).toBe(false);
+    // 分區展開狀態不受收起側欄影響。
+    expect(expandedSections(second)).toEqual(['physics']);
+  });
+
+  it('壞掉的儲存內容 → 預設（側欄展開、只有物理展開）', () => {
+    const storage = memoryStorage({ [PANEL_LAYOUT_STORAGE_KEY]: '{壞掉' });
+    const panel = new ControlPanel(makeOptions({ storage }));
+    expect(panel.isSidebarCollapsed()).toBe(false);
+    expect(expandedSections(panel)).toEqual(['physics']);
+  });
+
+  it('收起側欄不影響播放／錄製鎖定規則', () => {
+    const panel = new ControlPanel(makeOptions());
+    panel.setSidebarCollapsed(true);
+    panel.setRecordingActive(true);
+    expect(buttonByText(panel, '全部重建').disabled).toBe(true);
+    expect(buttonByText(panel, '清空全部').disabled).toBe(true);
+    panel.setSidebarCollapsed(false);
+    expect(buttonByText(panel, '全部重建').disabled).toBe(true);
   });
 });

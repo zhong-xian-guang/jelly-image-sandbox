@@ -37,6 +37,13 @@
  * 錄好的那條。`setPlaybackControlsEnabled(false)` 也會一併鎖住這兩顆鈕：Track
  * 重播跟 Demo 播放共用同一個 `DemoRunner`，播放中不能再錄一次或重疊播放。
  *
+ * **分區與收起**（issue #128 / V4 U1；spec #127「側欄」）：最上方是側欄標題列（「收起側欄」
+ * 鈕；之後的乾淨畫面、「?」也放這裡，見 `titleBarActions`），底下工具列＋參數卡常駐，再往下
+ * 是七個可收合的分區（`PANEL_SECTION_IDS`：匯入、片段、物理、檢視、Demo、錄製、開發者），
+ * 點標題展開／收起。預設只有物理展開；各區展開狀態與側欄收起狀態存在 `localStorage`
+ * （`./panelLayout`，讀不到就用預設）。收起側欄時整塊縮成畫面左緣的小把手，點把手再展開。
+ * 分區只是換位置：每顆控制的鎖定規則（播放中、錄製中變灰）跟分區前一樣。
+ *
  * 「Substep」是 issue #16 追加的唯讀 debug 讀出，`JellySandbox` 每幀呼叫
  * `setPerfStatus` 同步目前的 `PerfMonitor.substeps` / `degraded`——手動測試「節流
  * CPU 降級」時（見該 issue 驗收條件）用眼睛確認 4→2→4 有沒有真的發生，不用開
@@ -54,8 +61,33 @@ import {
   type ToolModeOf,
 } from '../input';
 import type { BoundaryMode } from '../sim';
+import {
+  browserStorage,
+  loadPanelLayout,
+  PANEL_SECTION_IDS,
+  savePanelLayout,
+  type KeyValueStorage,
+  type PanelLayout,
+  type PanelSectionId,
+} from './panelLayout';
 import { MODE_LABELS, TOOL_LABELS } from './toolLabels';
 import type { RecordTarget } from './track';
+
+export type { PanelSectionId } from './panelLayout';
+
+/** 各分區標題（issue #128）。 */
+const SECTION_TITLES: Record<PanelSectionId, string> = {
+  import: '匯入',
+  clip: '片段',
+  physics: '物理',
+  view: '檢視',
+  demo: 'Demo',
+  record: '錄製',
+  dev: '開發者',
+};
+
+/** 分區 body 的 DOM id 流水號——`aria-controls` 要指到唯一的 id，同頁可能有多個面板（測試）。 */
+let nextSectionDomId = 0;
 
 /** 一顆 Demo 按鈕要顯示的最小資訊——`ControlPanel` 特意不 import `./demos`，維持跟 `SimCore`/`JellySandbox` 無關的薄接線層，這裡自己開一個形狀就好。 */
 export interface DemoMenuItem {
@@ -205,6 +237,11 @@ export interface ControlPanelOptions {
   meshDensityRange: RangeSpec;
   /** 「Demo」按鈕列表（issue #15），依序顯示；點下呼叫 `onRunDemo(id)`。 */
   demos: readonly DemoMenuItem[];
+  /**
+   * 存側欄版面（各分區展開、側欄收起）的地方（issue #128）。省略＝瀏覽器的
+   * `localStorage`（拿不到就不存）；`null`＝不存。測試塞記憶體版本，避免跨測試殘留。
+   */
+  storage?: KeyValueStorage | null;
   /**
    * 「匯入圖片」按鈕被按（issue #56 / V2 T2-3）——開瀏覽器原生檔案選擇器，選到的圖
    * 走跟拖放匯入完全相同的後續路徑。（角落常駐提示字點擊也開同一個選擇器，但那條
@@ -379,6 +416,23 @@ export interface ControlPanelOptions {
 
 export class ControlPanel {
   readonly element: HTMLElement;
+  /**
+   * 側欄標題列右側放控制鈕的容器（issue #128）——目前只有「收起側欄」；乾淨畫面（#130）
+   * 與「?」操作說明（#132）的按鈕往這裡 `prepend`／`append`。
+   */
+  readonly titleBarActions: HTMLElement;
+  /** 標題列＋可捲動的內容；收起側欄時整塊 `hidden`（issue #128）。 */
+  private readonly main: HTMLElement;
+  /** 收起側欄後畫面左緣的小把手，點了展開（issue #128）。 */
+  private readonly handle: HTMLButtonElement;
+  /** 各分區的標題鈕與內容（issue #128）——`setSectionExpanded` 切 `hidden`／`aria-expanded`。 */
+  private readonly sections = new Map<
+    PanelSectionId,
+    { header: HTMLButtonElement; body: HTMLElement }
+  >();
+  /** 目前的側欄版面（issue #128）——每次變動整份寫回 `storage`。 */
+  private readonly layout: PanelLayout;
+  private readonly storage: KeyValueStorage | null;
   /** 播放中鎖住，避免疊加播放兩個 Demo（issue #15）——見 `setPlaybackControlsEnabled`。 */
   private readonly demoButtons: HTMLButtonElement[] = [];
   private readonly recordButton: HTMLButtonElement;
@@ -484,9 +538,8 @@ export class ControlPanel {
     this.onGroupSolo = opts.onGroupSolo;
     this.onDeleteGroup = opts.onDeleteGroup;
     this.onTrackGroupsChange = opts.onTrackGroupsChange;
-
-    const panel = document.createElement('div');
-    panel.className = 'jelly-control-panel';
+    this.storage = opts.storage === undefined ? browserStorage() : opts.storage;
+    this.layout = loadPanelLayout(this.storage);
 
     this.perfStatus = this.perfStatusRow();
 
@@ -660,49 +713,20 @@ export class ControlPanel {
       opts.onToolChange,
     );
 
-    // 「全部重建」鈕（issue #90）放在「匯入」區塊最後：拉完拉霸按一下就看到效果。
+    // 「全部重建」鈕（issue #90）放在「匯入」區最後：拉完拉霸按一下就看到效果。
     const rebuildAll = this.rebuildAllRow(opts.onRebuildAll);
     this.rebuildAllButton = rebuildAll.button;
-    // 「清空全部」（issue #95）緊接在匯入／存取片段三顆鈕之後：它是「新片段」的入口，
+    // 「清空全部」（issue #95）跟儲存／載入片段排成一列（issue #128）：它是「新片段」的入口，
     // 跟「載入片段」同一組語意（整份片段換掉），放一起最直覺。
-    const clearAll = this.buttonRowEl('清空全部', opts.onClearAll);
-    clearAll.button.title = '清掉桌上所有果凍、Track、群組與片段初始 Pin，從空桌面重新開始';
-    this.clearAllButton = clearAll.button;
-
-    panel.append(
-      // 工具列＋參數卡在側欄最上方（issue #122；spec #121「側欄」）。
-      toolbarSection,
-      this.perfStatus,
-      this.buttonRow('匯入圖片…', opts.onImportImage),
-      this.buttonRow('儲存片段', opts.onSaveClip),
-      this.buttonRow('載入片段…', opts.onLoadClip),
-      clearAll.row,
-      boundary.row,
-      this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
-      // 游標標籤（issue #122）是游標回饋、不是提示，開關跟顯示類開關放一起。
-      this.checkboxRow('顯示游標標籤', opts.initial.showCursorLabel, opts.onShowCursorLabelChange),
-      // 全域一列（issue #71）：蓋掉的是所有提示，所以刻意放在工具專屬區塊外面、
-      // 緊接在「顯示網格」這類視覺開關旁邊，切工具不會讓它消失。
-      this.checkboxRow(
-        '播放時隱藏提示',
-        opts.initial.hideHintsDuringPlayback,
-        opts.onHideHintsDuringPlaybackChange,
-      ),
-      softness.row,
-      tapStrength.row,
-      gravity.row,
-      // 「匯入」區塊（issue #88）：管「下一次」匯入的全域參數，跟軟硬度這類全域
-      // 物理參數放一起、用小標題隔開；場上的果凍不受影響。
-      this.importHeading(),
-      importSize.row,
-      meshDensity.row,
-      rebuildAll.row,
-      ...pinRows,
-      followLock.row,
-      this.buttonRow('框住果凍', opts.onFrameJelly),
-      this.demoHeading(),
-      ...opts.demos.map((demo) => this.demoButtonRow(demo.label, () => opts.onRunDemo(demo.id))),
-      this.trackHeading(),
+    const clearAllButton = this.button('清空全部', opts.onClearAll);
+    clearAllButton.title = '清掉桌上所有果凍、Track、群組與片段初始 Pin，從空桌面重新開始';
+    this.clearAllButton = clearAllButton;
+    const clipRow = document.createElement('div');
+    clipRow.className = 'jelly-control-row jelly-clip-row';
+    clipRow.append(
+      this.button('儲存片段', opts.onSaveClip),
+      this.button('載入片段…', opts.onLoadClip),
+      clearAllButton,
     );
 
     const target = this.recordTargetRow(opts.initial.recordTarget, opts.onRecordTargetChange);
@@ -727,18 +751,177 @@ export class ControlPanel {
     this.pauseButton = playback.pauseButton;
     this.playbackTimeEl = playback.timeEl;
 
-    panel.append(
-      target.row,
-      track.row,
-      setupPins.row,
-      this.playbackStatusRow,
-      this.groupedTracksEl,
-      addGroup.row,
-      this.buttonRow('停止／重設', opts.onReset),
+    // 各分區內容（issue #128；spec #127「側欄」的表格）。
+    const sectionRows: Record<PanelSectionId, HTMLElement[]> = {
+      import: [
+        this.buttonRow('匯入圖片…', opts.onImportImage),
+        // 「匯入尺寸」「網格密度」（issue #88、#89）只管「下一次」匯入，場上的果凍不受影響。
+        importSize.row,
+        meshDensity.row,
+        rebuildAll.row,
+      ],
+      clip: [clipRow],
+      physics: [boundary.row, softness.row, tapStrength.row, gravity.row],
+      view: [
+        ...pinRows,
+        // 全域一列（issue #71）：蓋掉的是所有提示，所以放在工具卡外面，切工具不會讓它消失。
+        this.checkboxRow(
+          '播放時隱藏提示',
+          opts.initial.hideHintsDuringPlayback,
+          opts.onHideHintsDuringPlaybackChange,
+        ),
+        // 游標標籤（issue #122）是游標回饋、不是提示，開關跟顯示類開關放一起。
+        this.checkboxRow(
+          '顯示游標標籤',
+          opts.initial.showCursorLabel,
+          opts.onShowCursorLabelChange,
+        ),
+        // 相機兩顆暫放檢視區，#129 會搬到畫布右下角。
+        followLock.row,
+        this.buttonRow('框住果凍', opts.onFrameJelly),
+      ],
+      demo: opts.demos.map((demo) => this.demoButtonRow(demo.label, () => opts.onRunDemo(demo.id))),
+      // 錄製、播放、暫停、停止／重設這張票先留在錄製區，#129 才搬到畫布上的播放控制條。
+      record: [
+        target.row,
+        track.row,
+        setupPins.row,
+        this.playbackStatusRow,
+        this.groupedTracksEl,
+        addGroup.row,
+        this.buttonRow('停止／重設', opts.onReset),
+      ],
+      dev: [
+        this.perfStatus,
+        this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
+      ],
+    };
+
+    const scroll = document.createElement('div');
+    scroll.className = 'jelly-panel-scroll';
+    // 工具列＋參數卡常駐在分區之上（issue #122；spec #121「側欄」），不收合。
+    scroll.append(
+      toolbarSection,
+      ...PANEL_SECTION_IDS.map((id) => this.sectionEl(id, sectionRows[id])),
     );
 
+    const titleBar = this.titleBarEl();
+    this.titleBarActions = titleBar.actions;
+
+    this.main = document.createElement('div');
+    this.main.className = 'jelly-panel-main';
+    this.main.append(titleBar.bar, scroll);
+
+    this.handle = this.button('»', () => this.setSidebarCollapsed(false));
+    this.handle.className = 'jelly-sidebar-handle';
+    this.handle.title = '展開側欄';
+    this.handle.setAttribute('aria-label', '展開側欄');
+
+    const panel = document.createElement('div');
+    panel.className = 'jelly-control-panel';
+    panel.append(this.main, this.handle);
     this.element = panel;
+
+    this.applySidebarCollapsed();
     this.updateTrackControlsState();
+  }
+
+  /** 某分區的內容容器（issue #128）——之後的票要往某區加控制時從這裡拿。 */
+  sectionBody(id: PanelSectionId): HTMLElement {
+    return this.sections.get(id)!.body;
+  }
+
+  isSectionExpanded(id: PanelSectionId): boolean {
+    return this.layout.expanded[id];
+  }
+
+  /** 展開／收起某分區並記住（issue #128）——點標題走這裡，程式也可以直接呼叫。 */
+  setSectionExpanded(id: PanelSectionId, expanded: boolean): void {
+    this.layout.expanded[id] = expanded;
+    this.applySectionExpanded(id);
+    savePanelLayout(this.storage, this.layout);
+  }
+
+  isSidebarCollapsed(): boolean {
+    return this.layout.sidebarCollapsed;
+  }
+
+  /**
+   * 收起／展開整個側欄並記住（issue #128）——收起時標題列與內容整塊藏起來、只剩左緣的
+   * 小把手。只動顯示：控制項的狀態與鎖定都不變，畫布操作也不受影響。
+   */
+  setSidebarCollapsed(collapsed: boolean): void {
+    this.layout.sidebarCollapsed = collapsed;
+    this.applySidebarCollapsed();
+    savePanelLayout(this.storage, this.layout);
+  }
+
+  private applySidebarCollapsed(): void {
+    const collapsed = this.layout.sidebarCollapsed;
+    this.element.classList.toggle('is-collapsed', collapsed);
+    this.main.hidden = collapsed;
+    this.handle.hidden = !collapsed;
+  }
+
+  private applySectionExpanded(id: PanelSectionId): void {
+    const { header, body } = this.sections.get(id)!;
+    const expanded = this.layout.expanded[id];
+    header.setAttribute('aria-expanded', String(expanded));
+    body.hidden = !expanded;
+  }
+
+  /**
+   * 一個可收合分區（issue #128）：整列可點的標題鈕（▸／▾＋標題）＋內容。不用 `<details>`：
+   * 展開狀態要由面板自己掌握（讀存檔、程式化展開、寫回），用按鈕＋`hidden` 最直接。
+   */
+  private sectionEl(id: PanelSectionId, rows: readonly HTMLElement[]): HTMLElement {
+    const section = document.createElement('section');
+    section.className = 'jelly-panel-section';
+    section.dataset.section = id;
+
+    const body = document.createElement('div');
+    body.className = 'jelly-panel-section-body';
+    body.id = `jelly-panel-section-${id}-${nextSectionDomId++}`;
+    body.append(...rows);
+
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'jelly-panel-section-header';
+    header.setAttribute('aria-controls', body.id);
+    const chevron = document.createElement('span');
+    chevron.className = 'jelly-panel-section-chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+    const title = document.createElement('span');
+    title.className = 'jelly-panel-section-title';
+    title.textContent = SECTION_TITLES[id];
+    header.append(chevron, title);
+    header.addEventListener('click', () => this.setSectionExpanded(id, !this.layout.expanded[id]));
+
+    section.append(header, body);
+    this.sections.set(id, { header, body });
+    this.applySectionExpanded(id);
+    return section;
+  }
+
+  /** 側欄標題列（issue #128）：名稱＋右側控制鈕（目前是「收起側欄」）。 */
+  private titleBarEl(): { bar: HTMLElement; actions: HTMLElement } {
+    const bar = document.createElement('div');
+    bar.className = 'jelly-panel-titlebar';
+
+    const title = document.createElement('span');
+    title.className = 'jelly-panel-title';
+    title.textContent = '果凍圖片沙盒';
+
+    const actions = document.createElement('div');
+    actions.className = 'jelly-panel-titlebar-actions';
+    const collapse = this.button('«', () => this.setSidebarCollapsed(true));
+    collapse.className = 'jelly-sidebar-collapse';
+    collapse.title = '收起側欄';
+    collapse.setAttribute('aria-label', '收起側欄');
+    actions.append(collapse);
+
+    bar.append(title, actions);
+    return { bar, actions };
   }
 
   /**
@@ -1227,14 +1410,6 @@ export class ControlPanel {
     return { row, input, output };
   }
 
-  /** 「匯入」區塊小標題（issue #88）——底下是管「下一次」匯入的全域拉霸。 */
-  private importHeading(): HTMLElement {
-    const heading = document.createElement('div');
-    heading.className = 'jelly-control-heading';
-    heading.textContent = '匯入';
-    return heading;
-  }
-
   /**
    * 「全部重建」按鈕列（issue #90；issue #95 起對每一塊，issue #98 改用這個名字）
    * ——回傳按鈕本身讓建構子記進 `rebuildAllButton`，`updateTrackControlsState` 才管得到
@@ -1317,22 +1492,6 @@ export class ControlPanel {
     row.className = 'jelly-control-row jelly-perf-status';
     row.textContent = 'Substep：4';
     return row;
-  }
-
-  /** Demo 按鈕列前的小標題，跟其他控制項分開一眼看出這區是「自動演出」。 */
-  private demoHeading(): HTMLElement {
-    const heading = document.createElement('div');
-    heading.className = 'jelly-control-heading';
-    heading.textContent = 'Demo';
-    return heading;
-  }
-
-  /** Track 錄製列前的小標題（issue #29），跟 Demo 分開一眼看出這區是「使用者自己錄的」。 */
-  private trackHeading(): HTMLElement {
-    const heading = document.createElement('div');
-    heading.className = 'jelly-control-heading';
-    heading.textContent = 'Track';
-    return heading;
   }
 
   /** 「＋ 新增群組」列（issue #43）——新群組預設開啟，見 `JellySandbox.addGroup`。 */
@@ -1683,14 +1842,18 @@ export class ControlPanel {
   ): { row: HTMLElement; button: HTMLButtonElement } {
     const row = document.createElement('div');
     row.className = 'jelly-control-row';
+    const button = this.button(labelText, onClick);
+    row.appendChild(button);
+    return { row, button };
+  }
 
+  /** 一顆 `type="button"` 的按鈕（不包列）——片段區三顆橫排、標題列控制鈕共用。 */
+  private button(labelText: string, onClick: () => void): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = labelText;
     button.addEventListener('click', onClick);
-
-    row.appendChild(button);
-    return { row, button };
+    return button;
   }
 
   /** 同 `buttonRow`，另外把按鈕記進 `demoButtons`，讓 `setDemoButtonsEnabled` 管得到。 */
