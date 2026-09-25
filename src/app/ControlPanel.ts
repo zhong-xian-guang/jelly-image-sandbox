@@ -44,8 +44,9 @@
  * `updateTrackControlsState` 一處算，對外的 `setRecordingActive`／`setPlaybackActive`／
  * `setPaused`／`setPlaybackTime`／`setFollowLocked` 名稱不變。
  *
- * **分區與收起**（issue #128 / V4 U1；spec #127「側欄」）：最上方是側欄標題列（「收起側欄」
- * 鈕；之後的乾淨畫面、「?」也放這裡，見 `titleBarActions`），底下工具列＋參數卡常駐，再往下
+ * **分區與收起**（issue #128 / V4 U1；spec #127「側欄」）：最上方是側欄標題列（右側由左到右
+ * 是「乾淨畫面」「?」「收起側欄」三顆鈕；前兩顆由 `JellySandbox` 塞進 `titleBarActions`，
+ * issue #130、#132），底下工具列＋參數卡常駐，再往下
  * 是七個可收合的分區（`PANEL_SECTION_IDS`：匯入、片段、物理、檢視、Demo、錄製、開發者），
  * 點標題展開／收起。預設只有物理展開；各區展開狀態與側欄收起狀態存在 `localStorage`
  * （`./panelLayout`，讀不到就用預設）。收起側欄時整塊縮成畫面左緣的小把手，點把手再展開。
@@ -105,6 +106,13 @@ const SECTION_TITLES: Record<PanelSectionId, string> = {
   record: '錄製',
   dev: '開發者',
 };
+
+/** 一個可收合分區的 DOM（issue #128）：整個 `<section>`、標題鈕與內容容器。 */
+interface PanelSectionParts {
+  element: HTMLElement;
+  header: HTMLButtonElement;
+  body: HTMLElement;
+}
 
 /** 分區 body 的 DOM id 流水號——`aria-controls` 要指到唯一的 id，同頁可能有多個面板（測試）。 */
 let nextSectionDomId = 0;
@@ -237,6 +245,9 @@ export interface RangeSpec {
   max: number;
   step: number;
 }
+
+/** 「軟硬度」拉霸的範圍——0–1 的量，旁邊顯示成百分比。 */
+const SOFTNESS_RANGE: RangeSpec = { min: 0, max: 1, step: 0.01 };
 
 export interface ControlPanelOptions {
   initial: ControlPanelInitial;
@@ -444,8 +455,8 @@ export interface ControlPanelOptions {
 export class ControlPanel {
   readonly element: HTMLElement;
   /**
-   * 側欄標題列右側放控制鈕的容器（issue #128）——目前只有「收起側欄」；乾淨畫面（#130）
-   * 與「?」操作說明（#132）的按鈕往這裡 `prepend`／`append`。
+   * 側欄標題列右側放控制鈕的容器（issue #128）——面板自己放「收起側欄」；乾淨畫面（#130）
+   * 與「?」操作說明（#132）的按鈕由 `JellySandbox` 往這裡 `prepend`。
    */
   readonly titleBarActions: HTMLElement;
   /** 標題列＋可捲動的內容；收起側欄時整塊 `hidden`（issue #128）。 */
@@ -453,10 +464,7 @@ export class ControlPanel {
   /** 收起側欄後畫面左緣的小把手，點了展開（issue #128）。 */
   private readonly handle: HTMLButtonElement;
   /** 各分區的標題鈕與內容（issue #128）——`setSectionExpanded` 切 `hidden`／`aria-expanded`。 */
-  private readonly sections = new Map<
-    PanelSectionId,
-    { header: HTMLButtonElement; body: HTMLElement }
-  >();
+  private readonly sections: Record<PanelSectionId, PanelSectionParts>;
   /** 目前的側欄版面（issue #128）——每次變動整份寫回 `storage`。 */
   private readonly layout: PanelLayout;
   private readonly storage: KeyValueStorage | null;
@@ -542,15 +550,15 @@ export class ControlPanel {
    * 載入片段後靠 `setSoftness`／`setTapStrength`／`setGravity`／`setBoundary` 把存檔值
    * 灌回面板，不然面板顯示的滑桿位置會跟載入後實際生效的物理參數不一致。
    */
-  private readonly softnessInput: HTMLInputElement;
-  private readonly tapStrengthInput: HTMLInputElement;
+  private readonly softnessSlider: RangeSlider;
+  private readonly tapStrengthSlider: RangeSlider;
   /** 「重力」拉霸（issue #91）——`setGravity` 連同旁邊的數值一起更新。 */
-  private readonly gravityInput: HTMLInputElement;
+  private readonly gravitySlider: RangeSlider;
   private readonly boundarySelect: HTMLSelectElement;
   /** 「網格密度」拉霸——效能退路 `setMeshDensity` 連同旁邊的數值一起更新（issue #89）。 */
-  private readonly meshDensityInput: HTMLInputElement;
+  private readonly meshDensitySlider: RangeSlider;
   /** 「右鍵＋滾輪」調得到的數值拉霸（issue #114；issue #122 推廣）——經 `setModeValue` 灌回。 */
-  private readonly valueInputs: Record<ModeValueKey, HTMLInputElement>;
+  private readonly valueSliders: Record<ModeValueKey, RangeSlider>;
 
   constructor(opts: ControlPanelOptions) {
     this.onTrackStartTimeChange = opts.onTrackStartTimeChange;
@@ -588,31 +596,27 @@ export class ControlPanel {
 
     const boundary = this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange);
     this.boundarySelect = boundary.select;
-    const softness = this.rangeRow(
+    const softness = createRangeSlider(
       '軟硬度',
-      0,
-      1,
-      0.01,
+      SOFTNESS_RANGE,
       opts.initial.softness,
       opts.onSoftnessChange,
     );
-    this.softnessInput = softness.input;
-    const tapStrength = this.rangeRow(
+    this.softnessSlider = softness;
+    const tapStrength = createRangeSlider(
       '輕拍力道',
-      opts.tapStrengthRange.min,
-      opts.tapStrengthRange.max,
-      opts.tapStrengthRange.step,
+      opts.tapStrengthRange,
       opts.initial.tapStrength,
       opts.onTapStrengthChange,
     );
-    this.tapStrengthInput = tapStrength.input;
+    this.tapStrengthSlider = tapStrength;
     const gravity = createRangeSlider(
       '重力',
       opts.gravityRange,
       opts.initial.gravity,
       opts.onGravityChange,
     );
-    this.gravityInput = gravity.input;
+    this.gravitySlider = gravity;
     const importSize = createRangeSlider(
       '匯入尺寸',
       opts.importSizeRange,
@@ -625,37 +629,29 @@ export class ControlPanel {
       opts.initial.meshDensity,
       opts.onMeshDensityChange,
     );
-    this.meshDensityInput = meshDensity.input;
+    this.meshDensitySlider = meshDensity;
 
-    const fanWidth = this.rangeRow(
+    const fanWidth = createRangeSlider(
       '風扇寬度',
-      opts.fanWidthRange.min,
-      opts.fanWidthRange.max,
-      opts.fanWidthRange.step,
+      opts.fanWidthRange,
       opts.initial.fanWidth,
       opts.onFanWidthChange,
     );
-    const fanStrength = this.rangeRow(
+    const fanStrength = createRangeSlider(
       '風扇強度',
-      opts.fanStrengthRange.min,
-      opts.fanStrengthRange.max,
-      opts.fanStrengthRange.step,
+      opts.fanStrengthRange,
       opts.initial.fanStrength,
       opts.onFanStrengthChange,
     );
-    const fanFalloff = this.rangeRow(
+    const fanFalloff = createRangeSlider(
       '風扇衰減程度',
-      opts.fanFalloffRange.min,
-      opts.fanFalloffRange.max,
-      opts.fanFalloffRange.step,
+      opts.fanFalloffRange,
       opts.initial.fanFalloffExponent,
       opts.onFanFalloffChange,
     );
-    const fanFrequency = this.rangeRow(
+    const fanFrequency = createRangeSlider(
       '風扇頻率',
-      opts.fanFrequencyRange.min,
-      opts.fanFrequencyRange.max,
-      opts.fanFrequencyRange.step,
+      opts.fanFrequencyRange,
       opts.initial.fanFrequency,
       opts.onFanFrequencyChange,
     );
@@ -680,22 +676,18 @@ export class ControlPanel {
     // Pin 工具的參數卡（issue #123：Pin、撒 Pin、移除 Pin 合成 Pin 工具）——模式鈕、Pin 筆刷
     // 半徑（撒 Pin 與橡皮擦共用，同時是畫布上那圈筆刷游標的大小，見 `BrushCursor`，所以
     // 調半徑是所見即所得）、撒 Pin 間距。
-    const pinBrushRadiusRow = this.rangeRow(
+    const pinBrushRadiusRow = createRangeSlider(
       'Pin 筆刷半徑',
-      opts.pinBrushRadiusRange.min,
-      opts.pinBrushRadiusRange.max,
-      opts.pinBrushRadiusRange.step,
+      opts.pinBrushRadiusRange,
       opts.initial.pinBrushRadius,
       opts.onPinBrushRadiusChange,
     );
     const pinParams = this.toolParams('Pin', [
       this.modeRow('pin', opts.initial.toolModes.pin, opts.onModeChange),
       pinBrushRadiusRow.row,
-      this.rangeRow(
+      createRangeSlider(
         '撒 Pin 間距（越小越密）',
-        opts.spraySpacingRange.min,
-        opts.spraySpacingRange.max,
-        opts.spraySpacingRange.step,
+        opts.spraySpacingRange,
         opts.initial.spraySpacing,
         opts.onSpraySpacingChange,
       ).row,
@@ -704,11 +696,9 @@ export class ControlPanel {
     // 抓取工具的參數卡（issue #122：一般操作／大把抓取／編隊抓取合成抓取工具）——模式鈕、
     // 大把抓取半徑（issue #113）、兩顆提示開關、每點大把開關（issue #135）、編隊形狀的
     // 設定按鈕（issue #68）。
-    const handfulRadiusRow = this.rangeRow(
+    const handfulRadiusRow = createRangeSlider(
       '大把抓取半徑',
-      opts.handfulRadiusRange.min,
-      opts.handfulRadiusRange.max,
-      opts.handfulRadiusRange.step,
+      opts.handfulRadiusRange,
       opts.initial.handfulRadius,
       opts.onHandfulRadiusChange,
     );
@@ -734,13 +724,13 @@ export class ControlPanel {
       this.formationDefineRow(opts.onFormationDefineStart, opts.onFormationDefineEnd),
     ]);
 
-    this.valueInputs = {
-      pinBrushRadius: pinBrushRadiusRow.input,
-      handfulRadius: handfulRadiusRow.input,
-      fanWidth: fanWidth.input,
-      fanStrength: fanStrength.input,
-      fanFalloffExponent: fanFalloff.input,
-      fanFrequency: fanFrequency.input,
+    this.valueSliders = {
+      pinBrushRadius: pinBrushRadiusRow,
+      handfulRadius: handfulRadiusRow,
+      fanWidth,
+      fanStrength,
+      fanFalloffExponent: fanFalloff,
+      fanFrequency,
     };
 
     // Jelly 工具的參數卡（issue #124：生成、移除、重建 Jelly 合成 Jelly 工具）——沒有模式也
@@ -822,13 +812,23 @@ export class ControlPanel {
       ],
     };
 
+    // 逐區寫出來（而不是從 `PANEL_SECTION_IDS` 迴圈塞進 Map）：型別保證每一區都在，
+    // `sectionBody` 等查找不用斷言；之後加分區漏寫這裡會直接編譯失敗。
+    this.sections = {
+      import: this.sectionEl('import', sectionRows.import),
+      clip: this.sectionEl('clip', sectionRows.clip),
+      physics: this.sectionEl('physics', sectionRows.physics),
+      view: this.sectionEl('view', sectionRows.view),
+      demo: this.sectionEl('demo', sectionRows.demo),
+      record: this.sectionEl('record', sectionRows.record),
+      dev: this.sectionEl('dev', sectionRows.dev),
+    };
+    for (const id of PANEL_SECTION_IDS) this.applySectionExpanded(id);
+
     const scroll = document.createElement('div');
     scroll.className = 'jelly-panel-scroll';
     // 工具列＋參數卡常駐在分區之上（issue #122；spec #121「側欄」），不收合。
-    scroll.append(
-      toolbarSection,
-      ...PANEL_SECTION_IDS.map((id) => this.sectionEl(id, sectionRows[id])),
-    );
+    scroll.append(toolbarSection, ...PANEL_SECTION_IDS.map((id) => this.sections[id].element));
 
     const titleBar = this.titleBarEl();
     this.titleBarActions = titleBar.actions;
@@ -853,7 +853,7 @@ export class ControlPanel {
 
   /** 某分區的內容容器（issue #128）——之後的票要往某區加控制時從這裡拿。 */
   sectionBody(id: PanelSectionId): HTMLElement {
-    return this.sections.get(id)!.body;
+    return this.sections[id].body;
   }
 
   isSectionExpanded(id: PanelSectionId): boolean {
@@ -889,7 +889,7 @@ export class ControlPanel {
   }
 
   private applySectionExpanded(id: PanelSectionId): void {
-    const { header, body } = this.sections.get(id)!;
+    const { header, body } = this.sections[id];
     const expanded = this.layout.expanded[id];
     header.setAttribute('aria-expanded', String(expanded));
     body.hidden = !expanded;
@@ -898,8 +898,9 @@ export class ControlPanel {
   /**
    * 一個可收合分區（issue #128）：整列可點的標題鈕（▸／▾＋標題）＋內容。不用 `<details>`：
    * 展開狀態要由面板自己掌握（讀存檔、程式化展開、寫回），用按鈕＋`hidden` 最直接。
+   * 只建 DOM；展開狀態由建構子在全部分區建好後套上。
    */
-  private sectionEl(id: PanelSectionId, rows: readonly HTMLElement[]): HTMLElement {
+  private sectionEl(id: PanelSectionId, rows: readonly HTMLElement[]): PanelSectionParts {
     const section = document.createElement('section');
     section.className = 'jelly-panel-section';
     section.dataset.section = id;
@@ -923,12 +924,10 @@ export class ControlPanel {
     header.addEventListener('click', () => this.setSectionExpanded(id, !this.layout.expanded[id]));
 
     section.append(header, body);
-    this.sections.set(id, { header, body });
-    this.applySectionExpanded(id);
-    return section;
+    return { element: section, header, body };
   }
 
-  /** 側欄標題列（issue #128）：名稱＋右側控制鈕（目前是「收起側欄」）。 */
+  /** 側欄標題列（issue #128）：名稱＋右側控制鈕（這裡只放「收起側欄」，其餘見 `titleBarActions`）。 */
   private titleBarEl(): { bar: HTMLElement; actions: HTMLElement } {
     const bar = document.createElement('div');
     bar.className = 'jelly-panel-titlebar';
@@ -951,8 +950,8 @@ export class ControlPanel {
 
   /**
    * Demo／Track 播放中呼叫 `setPlaybackControlsEnabled(false)` 鎖住所有 Demo 按鈕、
-   * 「開始錄製」、「▶ 播放全部」、「錄製目標」選擇器與 Track 清單的所有編輯欄位
-   * （issue #15、issue #29、issue #33）——不然疊加按下另一個 Demo，前一個已建立的
+   * 畫布播放控制條的「● 錄製」「▶ 播放」（issue #129）、「錄製目標」選擇器與 Track 清單的
+   * 所有編輯欄位（issue #15、issue #29、issue #33）——不然疊加按下另一個 Demo，前一個已建立的
    * Pin/Grab 不會被清掉（`DemoRunner.start` 只換排程、不回頭釋放約束），會留下沒人
    * 記得的殘留；Track 疊加播放跟 Demo 共用同一個 `DemoRunner`，同樣的理由也適用。
    * 播完或按「停止／重設」都要解鎖，見 `JellySandbox.frame`／`setPlaybackLocked`。
@@ -964,9 +963,9 @@ export class ControlPanel {
   }
 
   /**
-   * 錄製中／已停止的視覺切換（issue #29）——按鈕文字變色
-   * 加粗＋脈動（`.jelly-recording-active`，樣式見 `style.css`），低頭一眼就知道
-   * 現在正在錄。錄製中「▶ 播放全部」與清單編輯一併鎖住（錄製／播放互斥，issue #33）。
+   * 錄製中／已停止的視覺切換（issue #29；issue #129 起在畫布播放控制條上）——錄製鈕從
+   * 「● 錄製」換成「■ 停止錄製」並變色＋脈動（樣式見 `style.css`），低頭一眼就知道現在
+   * 正在錄。錄製中「▶ 播放」與清單編輯一併鎖住（錄製／播放互斥，issue #33）。
    */
   setRecordingActive(active: boolean): void {
     this.recording = active;
@@ -1059,7 +1058,7 @@ export class ControlPanel {
    */
   private updateTrackControlsState(): void {
     const busy = this.playbackLocked || this.recording;
-    // 錄製中「開始錄製」要保持可按（它此時是「停止錄製」）；只有播放中才鎖它。
+    // 錄製中錄製鈕要保持可按（它此時是「■ 停止錄製」）；只有播放中才鎖它。
     this.bar.setEnabled('record', !this.playbackLocked);
     this.recordTargetSelect.disabled = busy;
     // 片段初始 Pin 的兩顆鈕比照 Track 清單編輯：錄製中／播放中鎖住（issue #39）。
@@ -1135,12 +1134,12 @@ export class ControlPanel {
    * 事件、不會呼叫 `onSoftnessChange` 造成迴圈）。
    */
   setSoftness(value: number): void {
-    setRangeSliderValue(this.softnessInput, value);
+    setRangeSliderValue(this.softnessSlider, value);
   }
 
   /** 載入片段後把輕拍力道滑桿位置灌回面板（issue #58）。同 `setSoftness` 的理由。 */
   setTapStrength(value: number): void {
-    setRangeSliderValue(this.tapStrengthInput, value);
+    setRangeSliderValue(this.tapStrengthSlider, value);
   }
 
   /**
@@ -1148,7 +1147,7 @@ export class ControlPanel {
    * ——只動 DOM、不觸發 `input` 事件、不呼叫 `onGravityChange`。
    */
   setGravity(value: number): void {
-    setRangeSliderValue(this.gravityInput, value);
+    setRangeSliderValue(this.gravitySlider, value);
   }
 
   /** 載入片段後把邊界模式下拉灌回面板（issue #58）。同 `setSoftness` 的理由。 */
@@ -1162,7 +1161,7 @@ export class ControlPanel {
    * `onMeshDensityChange`（沙盒端自己已經改了狀態，再回呼會繞一圈）。
    */
   setMeshDensity(value: number): void {
-    setRangeSliderValue(this.meshDensityInput, value);
+    setRangeSliderValue(this.meshDensitySlider, value);
   }
 
   /**
@@ -1170,7 +1169,7 @@ export class ControlPanel {
    * 同 `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、不回呼 `onXChange`。
    */
   setModeValue(key: ModeValueKey, value: number): void {
-    setRangeSliderValue(this.valueInputs[key], value);
+    setRangeSliderValue(this.valueSliders[key], value);
   }
 
   /**
@@ -1386,21 +1385,6 @@ export class ControlPanel {
 
     row.append('邊界', select);
     return { row, select };
-  }
-
-  /**
-   * 一條拉霸列——一律是「拉霸＋數值」元件（issue #131；issue #88 起的帶數值拉霸推廣到
-   * 全部）：旁邊顯示數值、雙擊回到 `value`（建立時的值＝預設值），見 `./panelControls`。
-   */
-  private rangeRow(
-    labelText: string,
-    min: number,
-    max: number,
-    step: number,
-    value: number,
-    onChange: (n: number) => void,
-  ): RangeSlider {
-    return createRangeSlider(labelText, { min, max, step }, value, onChange);
   }
 
   /**
