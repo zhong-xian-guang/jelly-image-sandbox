@@ -335,3 +335,121 @@ describe('CameraInput — 中鍵單擊輪替模式、中鍵拖曳平移（issue 
     expect(cmds).toEqual([]);
   });
 });
+
+describe('CameraInput — 右鍵單擊（issue #124；spec #121「滑鼠按鍵」）', () => {
+  let el: HTMLDivElement;
+
+  beforeEach(() => {
+    el = document.createElement('div');
+    document.body.appendChild(el);
+    el.getBoundingClientRect = () => ({ left: 10, top: 20, width: 200, height: 200 }) as DOMRect;
+    stubPointerCapture(el);
+  });
+
+  function setup(adjust: (steps: number) => boolean = () => true) {
+    const cmds: CameraCommand[] = [];
+    const clicks: { world: { x: number; y: number }; screen: { x: number; y: number } }[] = [];
+    const input = new CameraInput(el, {
+      screenToWorld: (x, y) => ({ x: x * 2, y: y * 2 }),
+      hitTest: () => true,
+      emit: (c) => cmds.push(c),
+      adjustModeValue: adjust,
+      onRightClick: (world, screenX, screenY) =>
+        clicks.push({ world, screen: { x: screenX, y: screenY } }),
+    });
+    return { cmds, clicks, input };
+  }
+
+  function fire(type: string, init: Parameters<typeof makePointerEvent>[1]): void {
+    el.dispatchEvent(makePointerEvent(type, init));
+  }
+
+  function wheel(deltaY: number, buttons: number): void {
+    el.dispatchEvent(
+      new WheelEvent('wheel', {
+        deltaY,
+        buttons,
+        clientX: 60,
+        clientY: 70,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }
+
+  it('右鍵點放（沒動）→ 觸發右鍵單擊，帶放開位置的畫布局部座標與世界座標；相機不動', () => {
+    const { cmds, clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 2 });
+    fire('pointermove', { pointerId: 1, clientX: 62, clientY: 71, buttons: 2 });
+    fire('pointerup', { pointerId: 1, clientX: 62, clientY: 71, button: 2, buttons: 0 });
+    expect(clicks).toEqual([{ world: { x: 104, y: 102 }, screen: { x: 52, y: 51 } }]);
+    expect(cmds).toEqual([]);
+  });
+
+  it('按住右鍵拖曳超過 Tap 門檻再放開 → 不算右鍵單擊（拖回原點也一樣）', () => {
+    const { clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 2 });
+    fire('pointermove', { pointerId: 1, clientX: 100, clientY: 70, buttons: 2 });
+    fire('pointermove', { pointerId: 1, clientX: 60, clientY: 70, buttons: 2 });
+    fire('pointerup', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 0 });
+    expect(clicks).toEqual([]);
+  });
+
+  it('按住右鍵期間滾過滾輪（拿去調數值）→ 放開不算右鍵單擊', () => {
+    const { clicks } = setup(() => true);
+    fire('pointerdown', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 2 });
+    wheel(-100, 2);
+    fire('pointerup', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 0 });
+    expect(clicks).toEqual([]);
+  });
+
+  it('按住右鍵期間滾過滾輪（沒數值、退回縮放）→ 同樣不算右鍵單擊', () => {
+    const { cmds, clicks } = setup(() => false);
+    fire('pointerdown', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 2 });
+    wheel(-100, 2);
+    fire('pointerup', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 0 });
+    expect(clicks).toEqual([]);
+    expect(cmds.some((c) => c.type === 'zoomBy')).toBe(true);
+  });
+
+  it('滾輪只在右鍵按下之前滾過 → 不影響之後的右鍵單擊', () => {
+    const { clicks } = setup();
+    wheel(-100, 0);
+    fire('pointerdown', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 2 });
+    fire('pointerup', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 0 });
+    expect(clicks).toHaveLength(1);
+  });
+
+  it('右鍵 pointercancel → 不算右鍵單擊', () => {
+    const { clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 2 });
+    fire('pointercancel', { pointerId: 1, clientX: 60, clientY: 70 });
+    fire('pointerup', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 0 });
+    expect(clicks).toEqual([]);
+  });
+
+  it('左鍵、中鍵點放 → 都不是右鍵單擊', () => {
+    const { clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 60, clientY: 70, button: 0, buttons: 1 });
+    fire('pointerup', { pointerId: 1, clientX: 60, clientY: 70, button: 0, buttons: 0 });
+    fire('pointerdown', { pointerId: 1, clientX: 60, clientY: 70, button: 1, buttons: 4 });
+    fire('pointerup', { pointerId: 1, clientX: 60, clientY: 70, button: 1, buttons: 0 });
+    expect(clicks).toEqual([]);
+  });
+
+  it('左鍵拖曳中再點右鍵（chorded，只有 pointermove）→ 不算右鍵單擊（那個指標正在做左鍵手勢）', () => {
+    const { clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 60, clientY: 70, button: 0, buttons: 1 });
+    fire('pointermove', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 3 });
+    fire('pointermove', { pointerId: 1, clientX: 60, clientY: 70, button: 2, buttons: 1 });
+    fire('pointerup', { pointerId: 1, clientX: 60, clientY: 70, button: 0, buttons: 0 });
+    expect(clicks).toEqual([]);
+  });
+
+  it('觸控的點放 → 不是右鍵單擊', () => {
+    const { clicks } = setup();
+    fire('pointerdown', { pointerId: 5, clientX: 60, clientY: 70, pointerType: 'touch' });
+    fire('pointerup', { pointerId: 5, clientX: 60, clientY: 70, pointerType: 'touch' });
+    expect(clicks).toEqual([]);
+  });
+});

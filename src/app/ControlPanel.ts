@@ -57,12 +57,6 @@ import type { BoundaryMode } from '../sim';
 import { MODE_LABELS, TOOL_LABELS } from './toolLabels';
 import type { RecordTarget } from './track';
 
-/**
- * 工具列上某顆按鈕什麼時候要變灰（issue #97 / #98；issue #122 從下拉選項搬到按鈕）——
- * `'none'` 永遠可選、`'playback'` 只在播放中鎖、`'busy'` 錄製中也鎖。見 `lockedToolButtons`。
- */
-type ToolLock = 'none' | 'playback' | 'busy';
-
 /** 一顆 Demo 按鈕要顯示的最小資訊——`ControlPanel` 特意不 import `./demos`，維持跟 `SimCore`/`JellySandbox` 無關的薄接線層，這裡自己開一個形狀就好。 */
 export interface DemoMenuItem {
   id: string;
@@ -402,16 +396,6 @@ export class ControlPanel {
   private readonly rebuildAllButton: HTMLButtonElement;
   /** 「清空全部」鈕（issue #95）——同上鎖法。 */
   private readonly clearAllButton: HTMLButtonElement;
-  /**
-   * 工具列上**會被鎖住**的按鈕，附各自的鎖法（issue #97 / #98；issue #122 從下拉選項
-   * 搬到按鈕）——鎖的是那幾顆而不是整排：播放中仍要能切到其他工具。兩種鎖法對應兩種語意：
-   *
-   * - `'playback'`（生成 Jelly／移除 Jelly）：只在播放中變灰。錄製中照常可用，那兩個
-   *   工具在錄製中本來就要錄成 `spawn`／`remove` 事件（ADR-0013）。
-   * - `'busy'`（重建 Jelly）：錄製中也變灰，跟「全部重建」／「清空全部」兩顆鈕同一組
-   *   ——重建只改 Scene、不是 Track 事件，錄製中點下去沒意義。
-   */
-  private readonly lockedToolButtons: { button: HTMLButtonElement; lock: ToolLock }[] = [];
   /** 工具列按鈕與各工具的參數卡（issue #122）——`setActiveTool` 切高亮與顯示。 */
   private readonly toolButtons = new Map<ToolId, HTMLButtonElement>();
   private readonly toolCards = new Map<ToolId, HTMLElement>();
@@ -656,9 +640,16 @@ export class ControlPanel {
       handfulRadius: handfulRadiusRow.input,
     };
 
+    // Jelly 工具的參數卡（issue #124：生成、移除、重建 Jelly 合成 Jelly 工具）——沒有模式也
+    // 沒有參數，只放一行操作說明：移除與重建藏在畫布上的右鍵選單，不寫出來沒人會發現。
+    const jellyHelp = document.createElement('div');
+    jellyHelp.className = 'jelly-control-row jelly-tool-help';
+    jellyHelp.textContent = '左鍵生成；右鍵點果凍：重建／移除';
+    const jellyParams = this.toolParams('Jelly', [jellyHelp]);
+
     const toolbarSection = this.toolbarSection(
       opts.initial.activeTool,
-      { grab: grabParams, pin: pinParams, fan: fanParams },
+      { grab: grabParams, pin: pinParams, fan: fanParams, jelly: jellyParams },
       opts.onToolChange,
     );
 
@@ -864,10 +855,8 @@ export class ControlPanel {
     this.rebuildAllButton.disabled = busy;
     // 「清空全部」（issue #95）同理：它會清掉正在錄／正在播的片段本身。
     this.clearAllButton.disabled = busy;
-    // 三個 Jelly 工具（issue #97 / #98）各自的鎖法，見 `lockedToolButtons`。
-    for (const { button, lock } of this.lockedToolButtons) {
-      button.disabled = lock === 'busy' ? busy : this.playbackLocked;
-    }
+    // 工具列按鈕永遠可按（issue #124）：Jelly 工具的播放中／錄製中限制改在畫布上的右鍵
+    // 選單各項變灰（`ContextMenu`），生成則由 `JellySandbox` 用禁止游標＋提示擋。
     // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
     this.playAllButton.disabled = busy || this.trackCount === 0 || this.playableTrackCount === 0;
     this.addGroupButton.disabled = busy;
@@ -1015,11 +1004,11 @@ export class ControlPanel {
    * 工具列＋參數卡（issue #122 / V4 T1；ADR-0016，取代 issue #65 的「目前工具」下拉與
    * issue #67 的「▸ 沙盒工具」收合區塊）。每個工具一顆按鈕（圖示＋文字，照 `TOOL_IDS`
    * 的順序），目前工具高亮（`.is-active` + `aria-pressed`）；按鈕下方是參數卡，只顯示
-   * 目前工具那一組（`toolParams`），沒有參數的工具（三個 Jelly 工具）就沒有卡。
+   * 目前工具那一組（`toolParams`）。
    */
   private toolbarSection(
     initialTool: ToolId,
-    toolParams: Partial<Record<ToolId, HTMLElement>>,
+    toolParams: Record<ToolId, HTMLElement>,
     onChange: (tool: ToolId) => void,
   ): HTMLElement {
     const section = document.createElement('div');
@@ -1029,12 +1018,6 @@ export class ControlPanel {
     toolbar.className = 'jelly-toolbar';
     toolbar.setAttribute('role', 'toolbar');
     toolbar.setAttribute('aria-label', '工具');
-    // 各按鈕的鎖法（issue #97 / #98，見 `lockedToolButtons`）；沒列到的永遠可按。
-    const locks: Partial<Record<ToolId, ToolLock>> = {
-      spawn: 'playback',
-      removeJelly: 'playback',
-      rebuildJelly: 'busy',
-    };
     for (const tool of TOOL_IDS) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -1053,8 +1036,6 @@ export class ControlPanel {
         this.setActiveTool(tool);
         onChange(tool);
       });
-      const lock = locks[tool];
-      if (lock) this.lockedToolButtons.push({ button, lock });
       this.toolButtons.set(tool, button);
       toolbar.appendChild(button);
     }
@@ -1063,7 +1044,6 @@ export class ControlPanel {
     card.className = 'jelly-tool-card';
     for (const tool of TOOL_IDS) {
       const params = toolParams[tool];
-      if (!params) continue;
       this.toolCards.set(tool, params);
       card.appendChild(params);
     }

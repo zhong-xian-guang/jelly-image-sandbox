@@ -72,13 +72,14 @@
  * 那些具體座標，重播時原樣送回去，不會重算隨機分佈——所以這裡刻意不需要有
  * 種子的 PRNG。
  *
- * **生成 Jelly／移除 Jelly**（issue #97 / V3 T3-4）：兩個「點一下」工具
- * （`CLICK_TOOL_IDS`）——`down` 記下按下處，`up` 時只要途中沒拖曳（位移 ≤
- * `tapMaxDist`，跟一般操作同一把尺）就呼叫 `onClickTool(tool, world)`，帶的是
- * 按下當下的工具與世界座標。進行中的點一下手勢在 `move`／`up`／`cancel` 都**先於**
- * `activeTool` 分支處理：按住途中切走工具時，這次手勢仍算在按下時那個工具頭上。
- * 這類工具是本檔唯一**不** emit `InputEvent` 的分支：要送進 `World` 的 `spawn`
- * 需要來源圖、兩條拉霸的值與網格 bbox，`remove` 需要先 `pick` 出 `jellyId`——那些
+ * **Jelly 工具**（issue #97 / V3 T3-4 的「點一下」手勢；issue #124 / V4 T3 把生成、移除、
+ * 重建三個工具合成一個、沒有模式）：左鍵——`down` 記下按下處，`up` 時只要途中沒拖曳
+ * （位移 ≤ `tapMaxDist`，跟一般操作同一把尺）就呼叫 `onJellyClick(world)`（生成），帶的是
+ * 按下當下的世界座標；點在既有 Jelly 上也照樣生成。分支在按下當下定下，按住途中切走工具，
+ * 這次手勢仍算 Jelly 工具的。右鍵單擊（`rightClick`，判定在 `CameraInput`）點中某塊
+ * Jelly（`hitTest`）→ `onJellyContextMenu(world, screen)` 開「重建／移除」選單；點在空白處
+ * 什麼都不做。這個工具是本檔唯一**不** emit `InputEvent` 的分支：要送進 `World` 的 `spawn`
+ * 需要來源圖、兩條拉霸的值與網格 bbox，`remove`／重建需要先 `pick` 出 `jellyId`——那些
  * 都是 `JellySandbox` 的狀態，輸入層只回報「在這個世界座標點了一下」（ADR-0005）。
  *
  * **橡皮擦**（issue #70 / V2 T3-6 的移除 Pin，issue #123 變成拔模式的拖曳）：每次
@@ -151,21 +152,13 @@ import {
 /**
  * 工具列上的工具（issue #122 / V4 T1；ADR-0016）。一般操作、大把抓取、編隊抓取合成
  * `'grab'`（三者變成它的模式，見 `TOOL_MODES`）；Pin、撒 Pin、移除 Pin 合成 `'pin'`
- * （issue #123，模式為放／拔）；其餘是還沒合併的舊工具，各佔一顆按鈕、沒有模式——#124
- * 把三個 Jelly 工具收成 `'jelly'`。工具與模式都不存檔、也不是 Track 事件，改名不影響
- * 舊片段檔。
+ * （issue #123，模式為放／拔）；生成、移除、重建 Jelly 合成 `'jelly'`（issue #124，沒有
+ * 模式，移除與重建走右鍵選單）。工具與模式都不存檔、也不是 Track 事件，改名不影響舊片段檔。
  */
-export type ToolId = 'grab' | 'pin' | 'fan' | 'spawn' | 'removeJelly' | 'rebuildJelly';
+export type ToolId = 'grab' | 'pin' | 'fan' | 'jelly';
 
 /** 工具列的順序（issue #122）——面板照這個順序排按鈕。 */
-export const TOOL_IDS: readonly ToolId[] = [
-  'grab',
-  'pin',
-  'fan',
-  'spawn',
-  'removeJelly',
-  'rebuildJelly',
-];
+export const TOOL_IDS: readonly ToolId[] = ['grab', 'pin', 'fan', 'jelly'];
 
 /**
  * 有模式的工具與它們的模式，依中鍵單擊輪替的順序排（issue #122；CONTEXT.md「模式」）。
@@ -204,21 +197,6 @@ export function modesOf(tool: ToolId): readonly ToolMode[] {
  */
 type Behavior =
   'single' | 'handful' | 'formation' | 'pinPlace' | 'pinRemove' | Exclude<ToolId, 'grab' | 'pin'>;
-
-/**
- * 「點一下就完成」的那幾個工具（issue #97）——`down`→`up` 無拖曳才作用，見
- * `ClickSession`。三個工具共用同一條手勢，所以清單在這裡集中一份：輸入層這邊加新的
- * 點一下工具只要加進這個陣列與 `ToolId`，手勢本身完全不必動；工具真正上線還要在
- * `ControlPanel` 的選項表補一列（含它的鎖法）、在 `JellySandbox.runClickTool` 補一條
- * 分派（issue #98 的「重建 Jelly」就是這樣加的）。
- */
-export const CLICK_TOOL_IDS = ['spawn', 'removeJelly', 'rebuildJelly'] as const;
-
-export type ClickToolId = (typeof CLICK_TOOL_IDS)[number];
-
-function isClickTool(behavior: Behavior): behavior is ClickToolId {
-  return (CLICK_TOOL_IDS as readonly string[]).includes(behavior);
-}
 
 export const DEFAULT_TOOL: ToolId = 'grab';
 
@@ -345,16 +323,19 @@ export interface ToolRouterOptions extends GestureTrackerOptions {
    */
   random?: () => number;
   /**
-   * 「點一下」工具（`CLICK_TOOL_IDS`）完成一次點擊的回呼（issue #97 / V3 T3-4）
-   * ——參數是按下當下選的那個工具，以及**按下當下**的世界座標。刻意不是
-   * `InputEvent`：真正要送進 `World` 的 `spawn` 事件得知道用哪張來源圖、目前兩條
-   * 拉霸的值、`offset` 要減掉網格 bbox 中心，`remove` 得先 `pick` 出 `jellyId`
-   * ——那些是 `JellySandbox` 的狀態，輸入層不該認識（ADR-0005：輸入層只回報
-   * 手勢）。也刻意是**一個**回呼而不是每個工具一個：這條手勢本身沒有分支，
-   * 分派是呼叫端的事，多一個工具不必在輸入層多開一條路。不帶這個選項等同
-   * 「這些工具沒接線」：點下去什麼都不會發生。
+   * Jelly 工具左鍵點一下（生成）的回呼（issue #97 的「點一下」手勢；issue #124 起只剩
+   * Jelly 工具用）——參數是**按下當下**的世界座標。刻意不是 `InputEvent`：真正要送進
+   * `World` 的 `spawn` 事件得知道用哪張來源圖、目前兩條拉霸的值、`offset` 要減掉網格
+   * bbox 中心——那些是 `JellySandbox` 的狀態，輸入層不該認識（ADR-0005：輸入層只回報
+   * 手勢）。不帶這個選項等同「沒接線」：點下去什麼都不會發生。
    */
-  onClickTool?: (tool: ClickToolId, world: Point) => void;
+  onJellyClick?: (world: Point) => void;
+  /**
+   * Jelly 工具右鍵單擊點中某塊 Jelly（issue #124）——`JellySandbox` 在 `screen`（畫布局部
+   * 座標）開「重建／移除」選單，作用在 `world` 點中的那一塊（`pick` 由它做，理由同上）。
+   * 點在空白處（`hitTest` 沒命中）不呼叫。
+   */
+  onJellyContextMenu?: (world: Point, screen: Point) => void;
 }
 
 /** 放置新風扇進行中的狀態：世界座標原點 + 目前（拖曳中或放開時）的終點。 */
@@ -426,20 +407,15 @@ interface PinRemoveSession extends GestureStart {
 }
 
 /**
- * 進行中的一次「點一下」手勢（issue #97，生成 Jelly／移除 Jelly 共用）：`world` 是
- * **按下當下**的世界座標（回呼拿的就是它，跟輕拍「打在按下點」同一條規則），
- * `dragged` 一旦在 `move` 途中被設起來就不會再放下——拖出去又拖回原點仍然不算
- * 點一下，使用者中途已經看到自己在拖了。
+ * 進行中的一次 Jelly 工具左鍵「點一下」手勢（issue #97）：`startWorld` 是**按下當下**的
+ * 世界座標（回呼拿的就是它，跟輕拍「打在按下點」同一條規則），`dragged` 一旦在 `move`
+ * 途中被設起來就不會再放下——拖出去又拖回原點仍然不算點一下，使用者中途已經看到自己
+ * 在拖了。
  *
- * 刻意**只**看位移、不看按住多久（跟 `isTap` 不同）：這兩個工具是「放在這裡」
- * 而不是「輕拍一下」，瞄準位置多按了一秒再放開仍該生成，不然會變成「按太久
- * 就沒反應」的謎樣失敗。
- *
- * `tool` 是按下當下選的那個工具——按住途中切換選擇器（觸控裝置做得到）時，
- * 這次手勢仍算在按下時那個工具頭上。
+ * 刻意**只**看位移、不看按住多久（跟 `isTap` 不同）：生成是「放在這裡」而不是「輕拍
+ * 一下」，瞄準位置多按了一秒再放開仍該生成，不然會變成「按太久就沒反應」的謎樣失敗。
  */
 interface ClickSession extends GestureStart {
-  tool: ClickToolId;
   dragged: boolean;
 }
 
@@ -459,7 +435,8 @@ export class ToolRouter {
   private readonly getFan: (() => FanState | null) | undefined;
   private readonly listPins: (() => readonly PinInfo[]) | undefined;
   private readonly random: () => number;
-  private readonly onClickTool: ((tool: ClickToolId, world: Point) => void) | undefined;
+  private readonly onJellyClick: ((world: Point) => void) | undefined;
+  private readonly onJellyContextMenu: ((world: Point, screen: Point) => void) | undefined;
   private activeTool: ToolId = DEFAULT_TOOL;
   /**
    * 每個有模式的工具各自目前的模式（issue #122）——整個 session 內記住、不存檔；切去
@@ -527,7 +504,8 @@ export class ToolRouter {
     this.getFan = opts.getFan;
     this.listPins = opts.listPins;
     this.random = opts.random ?? Math.random;
-    this.onClickTool = opts.onClickTool;
+    this.onJellyClick = opts.onJellyClick;
+    this.onJellyContextMenu = opts.onJellyContextMenu;
     this.config = resolveGestureConfig(opts.config);
   }
 
@@ -826,11 +804,10 @@ export class ToolRouter {
       }
       return;
     }
-    if (isClickTool(behavior)) {
-      // 生成／移除都要等 `up` 才算數（issue #97）——按下當下先記位置，拖曳與否
-      // 由 `move` 判定。刻意不在 `down` 就動手：按錯地方時還能拖開取消。
+    if (behavior === 'jelly') {
+      // 生成要等 `up` 才算數（issue #97）——按下當下先記位置，拖曳與否由 `move` 判定。
+      // 刻意不在 `down` 就動手：按錯地方時還能拖開取消。
       this.clickSessions.set(id, {
-        tool: behavior,
         startX: screenX,
         startY: screenY,
         startT: timeMs,
@@ -897,7 +874,7 @@ export class ToolRouter {
       this.eraseAt(this.screenToWorld(screenX, screenY), session);
       return;
     }
-    if (isClickTool(behavior)) {
+    if (behavior === 'jelly') {
       const click = this.clickSessions.get(id);
       // 超過輕拍的位移門檻（跟一般操作同一把尺）就不再是「點一下」。
       if (
@@ -960,11 +937,26 @@ export class ToolRouter {
       this.endPinSession(id);
       return;
     }
-    if (isClickTool(behavior)) {
+    if (behavior === 'jelly') {
       const click = this.clickSessions.get(id);
       if (!click) return;
       this.clickSessions.delete(id);
-      if (!click.dragged) this.onClickTool?.(click.tool, click.startWorld);
+      if (!click.dragged) this.onJellyClick?.(click.startWorld);
+    }
+  }
+
+  /**
+   * 畫布上的右鍵單擊（issue #124；判定在 `CameraInput`：按下到放開沒拖曳、也沒滾過滾輪），
+   * 帶放開位置的世界座標與畫布局部座標，交給**目前**工具（右鍵單擊是一瞬間的事，沒有
+   * 「按下當下定下分支」的問題）：
+   *
+   * - Jelly：點中某塊（`hitTest`）→ `onJellyContextMenu` 開選單；點空白不開。
+   * - 其他工具目前忽略（#125 的電風扇會在這裡接「點在風扇上＝移除」）。
+   */
+  rightClick(world: Point, screenX: number, screenY: number): void {
+    if (this.activeTool === 'jelly') {
+      if (this.hitTest && !this.hitTest(world)) return;
+      this.onJellyContextMenu?.(world, { x: screenX, y: screenY });
     }
   }
 
@@ -999,7 +991,7 @@ export class ToolRouter {
       this.endPinSession(id);
       return;
     }
-    // 生成／移除都還沒發生（要等 `up`），中斷就是整個作廢，不留痕跡（issue #97）。
+    // 生成還沒發生（要等 `up`），中斷就是整個作廢，不留痕跡（issue #97）。
     this.clickSessions.delete(id);
   }
 

@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { FanState, InputEvent, Point } from '../sim';
 import {
-  CLICK_TOOL_IDS,
   DEFAULT_FAN_FALLOFF_EXPONENT,
   DEFAULT_FAN_FREQUENCY,
   DEFAULT_FAN_STRENGTH,
@@ -821,66 +820,54 @@ describe('ToolRouter — 編隊抓取的輕拍（issue #81 / V2 T3-9）', () => 
   });
 });
 
-describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', () => {
-  /** 三個工具都只有「點一下」一種手勢，回呼依工具各自收集起來比對。 */
-  function makeClickTools() {
+describe('ToolRouter — Jelly 工具（issue #97 的點一下手勢；issue #124 合併＋右鍵選單）', () => {
+  /** 左鍵單擊（生成）與右鍵單擊（開選單）各自收集起來比對。 */
+  function makeJellyTool(hitTest?: (world: Point) => boolean) {
     const spawned: Point[] = [];
-    const removed: Point[] = [];
-    const rebuilt: Point[] = [];
-    const buckets = { spawn: spawned, removeJelly: removed, rebuildJelly: rebuilt };
+    const menus: { world: Point; screen: Point }[] = [];
     const { router, events } = makeRouter(undefined, undefined, {
-      onClickTool: (tool, world) => buckets[tool].push(world),
+      hitTest,
+      onJellyClick: (world) => spawned.push(world),
+      onJellyContextMenu: (world, screen) => menus.push({ world, screen }),
     });
-    return { router, events, spawned, removed, rebuilt };
+    router.setActiveTool('jelly');
+    return { router, events, spawned, menus };
   }
 
-  it('生成 Jelly：點一下 → onSpawn 收到按下處的世界座標，不 emit 任何 InputEvent', () => {
-    const { router, events, spawned, removed } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('左鍵點一下 → onJellyClick 收到按下處的世界座標，不 emit 任何 InputEvent', () => {
+    const { router, events, spawned } = makeJellyTool();
     router.down(1, 30, 40, 0);
     router.up(1, 30, 40, 120);
     expect(spawned).toEqual([{ x: 1030, y: 1040 }]);
-    expect(removed).toEqual([]);
     expect(events).toEqual([]);
   });
 
-  it('移除 Jelly：點一下 → onRemoveJelly 收到世界座標', () => {
-    const { router, spawned, removed } = makeClickTools();
-    router.setActiveTool('removeJelly');
+  it('點在既有 Jelly 上也照樣生成（不因命中 Jelly 改成別的動作）', () => {
+    const { router, spawned, menus } = makeJellyTool(() => true);
     router.down(1, 5, 7, 0);
     router.up(1, 5, 7, 80);
-    expect(removed).toEqual([{ x: 1005, y: 1007 }]);
-    expect(spawned).toEqual([]);
+    expect(spawned).toEqual([{ x: 1005, y: 1007 }]);
+    expect(menus).toEqual([]);
   });
 
   it('按住一陣子再放開（沒拖曳）仍算點一下——只要位置沒動就生成', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+    const { router, spawned } = makeJellyTool();
     router.down(1, 10, 10, 0);
     router.move(1, 12, 11);
     router.up(1, 12, 11, 3000);
     expect(spawned).toEqual([{ x: 1010, y: 1010 }]);
   });
 
-  it('拖曳（位移超過門檻）→ 不觸發回呼', () => {
-    const { router, spawned, removed } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('拖曳（位移超過門檻）→ 不生成', () => {
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.move(1, 40, 0);
     router.up(1, 40, 0, 100);
-
-    router.setActiveTool('removeJelly');
-    router.down(2, 0, 0, 200);
-    router.move(2, 0, 30);
-    router.up(2, 0, 30, 300);
-
     expect(spawned).toEqual([]);
-    expect(removed).toEqual([]);
   });
 
   it('拖出去又回到原點 → 仍不算點一下（中途已經判定為拖曳）', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.move(1, 50, 50);
     router.move(1, 0, 0);
@@ -888,18 +875,16 @@ describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', (
     expect(spawned).toEqual([]);
   });
 
-  it('cancel → 不觸發回呼；之後再 up 也不會補送', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('cancel → 不生成；之後再 up 也不會補送', () => {
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.cancel(1);
     router.up(1, 0, 0, 100);
     expect(spawned).toEqual([]);
   });
 
-  it('沒有 down 過的 up 不觸發回呼；同一次 up 不會重送兩次', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('沒有 down 過的 up 不生成；同一次 up 不會重送兩次', () => {
+    const { router, spawned } = makeJellyTool();
     router.up(9, 0, 0, 100);
     expect(spawned).toEqual([]);
 
@@ -910,8 +895,7 @@ describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', (
   });
 
   it('多指各自獨立：其中一指拖曳不影響另一指的點一下', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.down(2, 100, 100, 0);
     router.move(1, 60, 0); // 第一指拖曳
@@ -920,37 +904,23 @@ describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', (
     expect(spawned).toEqual([{ x: 1100, y: 1100 }]);
   });
 
-  it('按下與放開之間切換工具 → 送到按下當下那個工具的回呼', () => {
-    const { router, spawned, removed } = makeClickTools();
-    router.setActiveTool('spawn');
-    router.down(1, 0, 0, 0);
-    router.setActiveTool('removeJelly');
-    router.up(1, 0, 0, 100);
-    expect(spawned).toEqual([{ x: 1000, y: 1000 }]);
-    expect(removed).toEqual([]);
-  });
-
-  // 按住途中切到「一般操作」這類完全不同的工具也一樣：進行中的點一下手勢在
-  // `move`／`up`／`cancel` 都先於 `activeTool` 分支處理，不會被別的工具吃掉。
-  it('按住途中切到一般操作 → 放開時仍完成這次點一下，且不留殘餘 session', () => {
-    const { router, spawned, events } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('按住途中切到抓取工具 → 放開時仍完成這次點一下，且不留殘餘 session', () => {
+    const { router, spawned, events } = makeJellyTool();
     router.down(1, 20, 30, 0);
     selectGrab(router, 'single');
     router.up(1, 20, 30, 100);
     expect(spawned).toEqual([{ x: 1020, y: 1030 }]);
     expect(events).toEqual([]); // 沒有被當成一般操作的 Grab/Tap
 
-    // session 已清掉：接下來的一般操作是乾淨的一次 Grab。
+    // session 已清掉：接下來的單點抓取是乾淨的一次 Grab。
     router.down(2, 0, 0, 200);
     router.up(2, 0, 0, 1000);
     expect(events.map((e) => e.type)).toEqual(['grab', 'release']);
     expect(spawned).toHaveLength(1);
   });
 
-  it('按住途中切到一般操作、期間拖曳 → 仍判定為拖曳，不生成', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('按住途中切到抓取工具、期間拖曳 → 仍判定為拖曳，不生成', () => {
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     selectGrab(router, 'single');
     router.move(1, 50, 0);
@@ -958,58 +928,27 @@ describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', (
     expect(spawned).toEqual([]);
   });
 
-  it('按住途中切走工具後 cancel → 不觸發回呼', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('按住途中切走工具後 cancel → 不生成', () => {
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.setActiveTool('fan');
     router.cancel(1);
     expect(spawned).toEqual([]);
   });
 
-  it('重建 Jelly：點一下 → 回呼帶按下處的世界座標，不 emit 任何 InputEvent（issue #98）', () => {
-    const { router, events, spawned, removed, rebuilt } = makeClickTools();
-    router.setActiveTool('rebuildJelly');
-    router.down(1, 12, 34, 0);
-    router.up(1, 12, 34, 90);
-    expect(rebuilt).toEqual([{ x: 1012, y: 1034 }]);
-    expect(spawned).toEqual([]);
-    expect(removed).toEqual([]);
+  it('沒有注入回呼（未接線）→ 點一下、右鍵單擊什麼都不做，不爆炸', () => {
+    const { router, events } = makeRouter(undefined, undefined, { hitTest: () => true });
+    router.setActiveTool('jelly');
+    router.down(1, 0, 0, 0);
+    router.up(1, 0, 0, 100);
+    router.rightClick({ x: 0, y: 0 }, 0, 0);
     expect(events).toEqual([]);
   });
 
-  it('重建 Jelly：拖曳（位移超過門檻）→ 不觸發回呼（issue #98）', () => {
-    const { router, rebuilt } = makeClickTools();
-    router.setActiveTool('rebuildJelly');
-    router.down(1, 0, 0, 0);
-    router.move(1, 40, 0);
-    router.up(1, 40, 0, 120);
-    expect(rebuilt).toEqual([]);
-  });
-
-  it('CLICK_TOOL_IDS 就是會走這條手勢的工具清單', () => {
-    expect([...CLICK_TOOL_IDS]).toEqual(['spawn', 'removeJelly', 'rebuildJelly']);
-  });
-
-  it('沒有注入回呼（未接線）→ 點一下什麼都不做，不爆炸', () => {
-    const { router, events } = makeRouter();
-    router.setActiveTool('spawn');
+  it('Jelly 工具下，單點抓取的 Grab／Tap 完全不觸發；切回抓取工具後恢復', () => {
+    const { router, events } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.up(1, 0, 0, 100);
-    router.setActiveTool('removeJelly');
-    router.down(2, 0, 0, 200);
-    router.up(2, 0, 0, 300);
-    expect(events).toEqual([]);
-  });
-
-  it('兩個工具下，一般操作的 Grab／Tap 完全不觸發；切回一般操作後恢復', () => {
-    const { router, events } = makeClickTools();
-    router.setActiveTool('spawn');
-    router.down(1, 0, 0, 0);
-    router.up(1, 0, 0, 100);
-    router.setActiveTool('removeJelly');
-    router.down(2, 0, 0, 200);
-    router.up(2, 0, 0, 300);
     expect(events).toEqual([]);
 
     selectGrab(router, 'single');
@@ -1020,6 +959,32 @@ describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', (
       { type: 'tap', x: 1000, y: 1000 },
       { type: 'release', id: 3 },
     ]);
+  });
+
+  it('右鍵單擊點中 Jelly → onJellyContextMenu 收到世界座標與畫布局部座標，不 emit、不生成', () => {
+    const { router, events, spawned, menus } = makeJellyTool(() => true);
+    router.rightClick({ x: 1012, y: 1034 }, 12, 34);
+    expect(menus).toEqual([{ world: { x: 1012, y: 1034 }, screen: { x: 12, y: 34 } }]);
+    expect(spawned).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('右鍵單擊點在空白處（沒命中 Jelly）→ 不開選單', () => {
+    const { router, menus } = makeJellyTool((w) => w.x > 1500);
+    router.rightClick({ x: 1012, y: 1034 }, 12, 34);
+    expect(menus).toEqual([]);
+    router.rightClick({ x: 1600, y: 1034 }, 600, 34);
+    expect(menus).toHaveLength(1);
+  });
+
+  it('其他工具下的右鍵單擊 → 不開 Jelly 選單、不 emit', () => {
+    const { router, events, menus } = makeJellyTool(() => true);
+    for (const tool of ['grab', 'pin', 'fan'] as const) {
+      router.setActiveTool(tool);
+      router.rightClick({ x: 1000, y: 1000 }, 0, 0);
+    }
+    expect(menus).toEqual([]);
+    expect(events).toEqual([]);
   });
 });
 
@@ -1180,7 +1145,7 @@ describe('ToolRouter — 調整目前模式的數值（issue #114 調半徑；is
 
   it('沒有數值的工具回報「不處理」', () => {
     const { router } = makeRouter();
-    for (const tool of ['fan', ...CLICK_TOOL_IDS] as const) {
+    for (const tool of ['fan', 'jelly'] as const) {
       router.setActiveTool(tool);
       expect(router.adjustActiveValue(1)).toBeNull();
       expect(router.activeValue).toBeNull();
@@ -1224,8 +1189,8 @@ describe('ToolRouter — 調整目前模式的數值（issue #114 調半徑；is
 });
 
 describe('ToolRouter — 工具與模式（issue #122 / V4 T1；ADR-0016）', () => {
-  it('工具列的工具：抓取在最前（預設），Pin 合併了撒 Pin／移除 Pin，還沒合併的舊工具各佔一個', () => {
-    expect([...TOOL_IDS]).toEqual(['grab', 'pin', 'fan', 'spawn', 'removeJelly', 'rebuildJelly']);
+  it('工具列的四個工具：抓取在最前（預設）、Pin、電風扇、Jelly（合併了生成／移除／重建）', () => {
+    expect([...TOOL_IDS]).toEqual(['grab', 'pin', 'fan', 'jelly']);
   });
 
   it('有模式的工具：抓取（單點／大把／編隊）、Pin（放／拔）', () => {

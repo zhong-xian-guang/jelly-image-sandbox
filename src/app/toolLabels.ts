@@ -10,9 +10,7 @@ export const TOOL_LABELS: Readonly<Record<ToolId, { icon: string; text: string }
   grab: { icon: '✋', text: '抓取' },
   pin: { icon: '📌', text: 'Pin' },
   fan: { icon: '🌀', text: '電風扇' },
-  spawn: { icon: '➕', text: '生成 Jelly' },
-  removeJelly: { icon: '✖', text: '移除 Jelly' },
-  rebuildJelly: { icon: '↻', text: '重建 Jelly' },
+  jelly: { icon: '🍮', text: 'Jelly' },
 };
 
 /** 模式名稱（CONTEXT.md「模式」）。 */

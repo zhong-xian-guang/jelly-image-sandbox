@@ -646,21 +646,12 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
     const buttons = [
       ...panel.element.querySelectorAll('.jelly-toolbar button'),
     ] as HTMLButtonElement[];
-    expect(buttons.map((b) => b.dataset.tool)).toEqual([
-      'grab',
-      'pin',
-      'fan',
-      'spawn',
-      'removeJelly',
-      'rebuildJelly',
-    ]);
+    expect(buttons.map((b) => b.dataset.tool)).toEqual(['grab', 'pin', 'fan', 'jelly']);
     expect(buttons.map((b) => b.querySelector('.jelly-tool-button-text')!.textContent)).toEqual([
       '抓取',
       'Pin',
       '電風扇',
-      '生成 Jelly',
-      '移除 Jelly',
-      '重建 Jelly',
+      'Jelly',
     ]);
     for (const b of buttons) {
       expect(b.querySelector('.jelly-tool-button-icon')!.textContent).not.toBe('');
@@ -678,7 +669,7 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
     expect(highlightedTools(panel)).toEqual(['fan']);
     expect(toolButton(panel, 'grab').getAttribute('aria-pressed')).toBe('false');
 
-    for (const tool of ['pin', 'spawn', 'removeJelly', 'rebuildJelly']) {
+    for (const tool of ['pin', 'jelly']) {
       clickTool(panel, tool);
       expect(opts.onToolChange).toHaveBeenLastCalledWith(tool);
       expect(highlightedTools(panel)).toEqual([tool]);
@@ -704,28 +695,16 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
     expect(opts.onToolChange).not.toHaveBeenCalled();
   });
 
-  it('播放中三個 Jelly 工具都變灰，其餘照常可按（issue #97 / #98）', () => {
+  it('播放中、錄製中工具列按鈕照常可按——Jelly 工具的限制改在右鍵選單各項變灰（issue #124）', () => {
     const panel = new ControlPanel(makeOptions());
     const disabled = () =>
       ([...panel.element.querySelectorAll('.jelly-toolbar button')] as HTMLButtonElement[])
         .filter((b) => b.disabled)
         .map((b) => b.dataset.tool);
-    expect(disabled()).toEqual([]);
     panel.setPlaybackControlsEnabled(false);
-    expect(disabled()).toEqual(['spawn', 'removeJelly', 'rebuildJelly']);
-    panel.setPlaybackControlsEnabled(true);
     expect(disabled()).toEqual([]);
-  });
-
-  it('錄製中只有「重建 Jelly」變灰——生成／移除本來就要錄進 Track（issue #97 / #98）', () => {
-    const panel = new ControlPanel(makeOptions());
-    const disabled = () =>
-      ([...panel.element.querySelectorAll('.jelly-toolbar button')] as HTMLButtonElement[])
-        .filter((b) => b.disabled)
-        .map((b) => b.dataset.tool);
+    panel.setPlaybackControlsEnabled(true);
     panel.setRecordingActive(true);
-    expect(disabled()).toEqual(['rebuildJelly']);
-    panel.setRecordingActive(false);
     expect(disabled()).toEqual([]);
   });
 });
@@ -734,19 +713,28 @@ describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () =
   const cardTitles = (panel: ControlPanel) =>
     visibleCards(panel).map((el) => el.querySelector('.jelly-tool-params-title')!.textContent);
 
-  it('任一時刻最多只有一組參數卡顯示；沒有參數的工具不顯示任何一組', () => {
+  it('任一時刻只有一組參數卡顯示，跟著目前工具換', () => {
     const panel = new ControlPanel(makeOptions());
     expect(cardTitles(panel)).toEqual(['抓取']);
     clickTool(panel, 'fan');
     expect(cardTitles(panel)).toEqual(['電風扇']);
     clickTool(panel, 'pin');
     expect(cardTitles(panel)).toEqual(['Pin']);
-    for (const tool of ['spawn', 'removeJelly', 'rebuildJelly']) {
-      clickTool(panel, tool);
-      expect(cardTitles(panel)).toEqual([]);
-    }
+    clickTool(panel, 'jelly');
+    expect(cardTitles(panel)).toEqual(['Jelly']);
     clickTool(panel, 'grab');
     expect(cardTitles(panel)).toEqual(['抓取']);
+  });
+
+  it('Jelly 的參數卡只有一行操作說明，沒有模式鈕與控制項（issue #124）', () => {
+    const panel = new ControlPanel(makeOptions());
+    clickTool(panel, 'jelly');
+    const card = visibleCards(panel)[0]!;
+    expect(card.querySelector('.jelly-mode-row')).toBeNull();
+    expect(card.querySelectorAll('input, button, select')).toHaveLength(0);
+    const text = card.textContent!;
+    expect(text).toContain('左鍵生成');
+    expect(text).toContain('右鍵點果凍：重建／移除');
   });
 
   it('抓取的參數卡：模式鈕、大把抓取半徑、顯示大把抓取範圍、顯示編隊抓取提示、設定形狀按鈕', () => {

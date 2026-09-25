@@ -18,14 +18,14 @@
  * （空桌面，內建預設果凍重新註冊為來源但不自動放上桌）。算繪端每幀用
  * `World.jellies()` 的 id 序列跟 `JellyRenderer` diff 同步（`syncRenderer`）。
  *
- * **生成／移除／重建 Jelly 工具**（issue #97 / #98；ADR-0011 進工具選擇器）：三個
- * 「點一下」工具（手勢判定在 `ToolRouter`，只回報世界座標），分派口是
- * `runClickTool`。生成（`spawnAt`）以點擊處為中心放下一塊，圖用最近一次匯入的那張
- * （`sourceForSpawn`）、尺寸與密度用當下兩條拉霸，放不下（超出 Walled 範圍／掉到
- * Floor 地板下，見 `fitsInBoundary`）就不生成並提示，懸停時先用禁止游標預告
- * （`applyCanvasCursor`）。移除（`removeJellyAt`）點到哪塊移除哪塊、連同它的
- * Pin／Grab，點空白處無事。重建（`rebuildJellyAt`）點哪塊換哪塊的網格，跟「全部
- * 重建」按鈕共用 `rebuildJellies`。
+ * **Jelly 工具**（issue #97 / #98 的生成／移除／重建 Jelly；issue #124 合成一個工具＋右鍵
+ * 選單，ADR-0016）：手勢判定在 `ToolRouter`／`CameraInput`，只回報世界座標。左鍵點一下
+ * （`onJellyClick`）＝生成（`spawnAt`）：以點擊處為中心放下一塊（點在既有 Jelly 上也照樣
+ * 生成），圖用最近一次匯入的那張（`sourceForSpawn`）、尺寸與密度用當下兩條拉霸，放不下
+ * （超出 Walled 範圍／掉到 Floor 地板下，見 `fitsInBoundary`）就不生成並提示，懸停時先用
+ * 禁止游標預告（`applyCanvasCursor`）。右鍵點中某塊（`openJellyMenu`）在游標處開
+ * `ContextMenu` [重建｜移除]，作用在點中的那一塊：移除（`removeJelly`）連同它的
+ * Pin／Grab，重建（`rebuildJelly`）換那塊的網格，跟「全部重建」按鈕共用 `rebuildJellies`。
  *
  * 生成／移除的 Scene／錄製分工跟匯入一致：不在錄製中就 `setScene(sceneSnapshot())`、
  * 錄製中則只錄事件；重建是例外——它只改 Scene、永遠不錄（ADR-0013），所以錄製中
@@ -146,7 +146,6 @@ import {
   worldToScreen,
 } from '../camera';
 import {
-  type ClickToolId,
   DEFAULT_TOOL,
   type FanParams,
   type GrabMode,
@@ -203,6 +202,7 @@ import {
 } from './clipFile';
 import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { CanvasHover } from './CanvasHover';
+import { ContextMenu, jellyMenuItems, type JellyMenuItemId } from './ContextMenu';
 import { ControlPanel } from './ControlPanel';
 import { CursorLabel, cursorLabelText, type FormationShapeState } from './CursorLabel';
 import { canvasToPng, drawDefaultTexture } from './defaultJelly';
@@ -419,6 +419,11 @@ export class JellySandbox {
   private readonly cursorLabel: CursorLabel;
   /** 「顯示游標標籤」開關（issue #122），預設開、不存檔。 */
   private showCursorLabel = true;
+  /**
+   * Jelly 工具的右鍵選單（issue #124）——右鍵點中某塊 Jelly 在游標處開 [重建｜移除]，
+   * 作用在點中的那一塊（見 `openJellyMenu`）。切換工具時關掉。
+   */
+  private readonly jellyMenu: ContextMenu;
   private readonly demoRunner = new DemoRunner();
   private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
@@ -452,7 +457,7 @@ export class JellySandbox {
    */
   private activeTool: ToolId = DEFAULT_TOOL;
   /**
-   * 「生成 Jelly」工具（issue #97）要放的那塊網格的 rest bbox，key 同 `meshMemo`
+   * Jelly 工具生成（issue #97）要放的那塊網格的 rest bbox，key 同 `meshMemo`
    * ——`null` = 這組參數建不出網格。游標的「放不放得下」判定每幀都要算一次，沒有
    * 這層 memo 的話建不出來的那組會每幀重跑整條 mesh 管線（`meshFor` 只快取成功的）。
    * 跟著 `meshMemo` 一起清掉（「清空全部」／載入片段會換掉同名來源的內容）。
@@ -754,6 +759,8 @@ export class JellySandbox {
     });
     this.cursorLabel = new CursorLabel();
     root.appendChild(this.cursorLabel.element);
+    this.jellyMenu = new ContextMenu({ dismissBlockTarget: this.renderer.canvas });
+    root.appendChild(this.jellyMenu.element);
     this.applyToolVisuals();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
@@ -803,6 +810,7 @@ export class JellySandbox {
     this.brushCursor.destroy();
     this.handfulRange.destroy();
     this.cursorLabel.destroy();
+    this.jellyMenu.destroy(); // 開著時在 window 上掛了監聽
     this.input.destroy();
     this.cameraInput.destroy();
     this.renderer.destroy();
@@ -1358,7 +1366,7 @@ export class JellySandbox {
 
   /**
    * 畫布游標的單一出口（issue #97 收攏）——兩個來源：Pin 工具的十字（issue #14 / #115），
-   * 以及「生成 Jelly」工具在放不下的地方顯示的禁止樣式（issue #97 驗收條件）。
+   * 以及 Jelly 工具生成時在放不下的地方顯示的禁止樣式（issue #97 驗收條件）。
    * 前者是狀態、後者跟著指標位置每幀變，所以 `frame()` 每幀呼叫一次；值沒變就
    * 不寫 DOM。兩者互斥：各自只在自己的工具下出現。
    *
@@ -1380,13 +1388,13 @@ export class JellySandbox {
   }
 
   /**
-   * 「現在按下去會生不出來」嗎（issue #97）——只有選著生成工具、指標確實在畫布上
+   * 「現在按下去會生不出來」嗎（issue #97）——只有選著 Jelly 工具、指標確實在畫布上
    * （`CanvasHover`，見該檔：輸入層在單純懸停時是靜默的）時才判定；放不下的原因
    * 跟 `spawnAt` 完全同一組（播放中、建不出網格、超出邊界），使用者看到禁止游標
    * 就代表按下去真的不會有東西出現。
    */
   private spawnBlockedAtHover(): boolean {
-    if (this.activeTool !== 'spawn') return false;
+    if (this.activeTool !== 'jelly') return false;
     if (this.playbackLocked) return true;
     const point = this.canvasHover.point;
     if (!point) return false;
@@ -1403,6 +1411,7 @@ export class JellySandbox {
   private setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
     this.input.setActiveTool(tool);
+    this.jellyMenu.close(); // Jelly 右鍵選單在切換工具時關閉（issue #124）
     this.applyToolVisuals();
   }
 
@@ -1720,7 +1729,7 @@ export class JellySandbox {
 
   /**
    * 「全部重建」按鈕（issue #90 / V3 T1-3；issue #95 起對每一塊，issue #98 改名）：
-   * 場上每一塊都重建。跟「重建 Jelly」工具（`rebuildJellyAt`）只差在餵進去的清單是
+   * 場上每一塊都重建。跟 Jelly 右鍵選單的「重建」（`rebuildJelly`）只差在餵進去的清單是
    * 全部還是一塊——同一條路徑（`rebuildJellies`），行為因此保證一致。
    */
   private rebuildAll(): void {
@@ -1737,13 +1746,12 @@ export class JellySandbox {
    * 先把每塊的新網格都建好（`meshFor`，任何一塊失敗就整批放棄、場上不動＋提示），
    * 確定都成功才動場上的塊：不會重建到一半留下缺塊。失敗文案由呼叫端給（單塊與
    * 全場講法不同），跟 `runImport` 同一個手法。兩個入口（「全部重建」按鈕、
-   * 「重建 Jelly」工具）在錄製中／播放中分別已被面板與 `runClickTool` 擋掉，
+   * Jelly 右鍵選單的「重建」）在錄製中／播放中分別已被面板與 `runJellyMenuItem` 擋掉，
    * 這裡不再重複判定。
    */
   private rebuildJellies(entries: readonly SceneEntry[], failureNotice: string): void {
     // 匯入／載入片段進行中就讓開（跟 `runImport` 互斥）。會提示而不是無聲放棄：
-    // 「重建 Jelly」工具跟按鈕不一樣，畫布上的點擊沒有灰掉的外觀可看，靜靜沒反應
-    // 會被當成壞掉（issue #98 檢視回饋）。
+    // 選單項目不會因為匯入中變灰，靜靜沒反應會被當成壞掉（issue #98 檢視回饋）。
     if (this.importing) {
       this.showNotice('正在匯入圖片，請稍候再重建');
       return;
@@ -1848,28 +1856,50 @@ export class JellySandbox {
   }
 
   /**
-   * 「點一下」工具（`ToolRouter` 的 `onClickTool`）的分派口（issue #97 / #98）——
-   * 兩道守衛，對應面板上那兩種選項鎖法（`ControlPanel` 的 `lockedToolOptions`）。
-   * 面板已經把對應的選項變灰，這裡仍要再擋一次：工具可能在錄製／播放開始**之前**
-   * 就選著了，這時選擇器變灰也攔不住畫布上的點擊。
-   *
-   * - 播放中三個都不作用：Scene 快照不該把 Track 正在播、播完就消失的塊收進去
-   *   （同 `importImage` 先停播放的理由）。
-   * - 錄製中只擋重建：生成／移除要錄成 `spawn`／`remove` 事件（ADR-0013），重建卻
-   *   只改 Scene、不是事件，錄製中點下去沒意義。
+   * Jelly 工具左鍵點一下（`ToolRouter` 的 `onJellyClick`，issue #97 / #124）＝生成。播放中
+   * 不作用：Scene 快照不該把 Track 正在播、播完就消失的塊收進去（同 `importImage` 先停
+   * 播放的理由）；懸停時已經先用禁止游標預告（`spawnBlockedAtHover`）。
    */
-  private runClickTool(tool: ClickToolId, world: Point): void {
+  private onJellyClick(world: Point): void {
     if (this.playbackLocked) {
-      this.showNotice('播放中不能生成、移除或重建果凍——先按「停止／重設」');
+      this.showNotice('播放中不能生成果凍——先按「停止／重設」');
       return;
     }
-    if (tool === 'rebuildJelly' && this.trackRecorder.isRecording) {
-      this.showNotice('錄製中不能重建——重建換的是佈景的網格，不是可以錄的事件');
+    this.spawnAt(world);
+  }
+
+  /**
+   * Jelly 工具右鍵單擊點中某塊 Jelly（`ToolRouter` 的 `onJellyContextMenu`，issue #124）：
+   * 在游標處開 [重建｜移除]，作用在**點中的那一塊**（id 在開選單當下就定下，之後場上
+   * 怎麼變都不會換成別塊）。暫時不能用的項目變灰附原因（`jellyMenuItems`：播放中兩項都
+   * 不行、錄製中不能重建）；選了之後再照同一組規則擋一次（`runJellyMenuItem`），因為選單
+   * 開著的期間播放／錄製狀態可能已經變了。右鍵點空白處 `ToolRouter` 就不會叫到這裡。
+   */
+  private openJellyMenu(world: Point, screen: Point): void {
+    const hit = this.world.pick(world.x, world.y);
+    if (!hit) return;
+    const items = jellyMenuItems({
+      playing: this.playbackLocked,
+      recording: this.trackRecorder.isRecording,
+    });
+    this.jellyMenu.open(screen, items, (item) => this.runJellyMenuItem(item, hit.jellyId));
+  }
+
+  /** 選單項目的分派口（issue #124），守衛同 `jellyMenuItems` 的鎖法。 */
+  private runJellyMenuItem(item: JellyMenuItemId, jellyId: string): void {
+    if (this.playbackLocked) {
+      this.showNotice('播放中不能重建或移除果凍——先按「停止／重設」');
       return;
     }
-    if (tool === 'spawn') this.spawnAt(world);
-    else if (tool === 'removeJelly') this.removeJellyAt(world);
-    else this.rebuildJellyAt(world);
+    if (item === 'rebuild') {
+      if (this.trackRecorder.isRecording) {
+        this.showNotice('錄製中不能重建——重建換的是佈景的網格，不是可以錄的事件');
+        return;
+      }
+      this.rebuildJelly(jellyId);
+    } else {
+      this.removeJelly(jellyId);
+    }
   }
 
   /**
@@ -1883,7 +1913,7 @@ export class JellySandbox {
   }
 
   /**
-   * 「生成 Jelly」工具點一下畫布（issue #97 / V3 T3-4；ADR-0013）：以點擊處為中心
+   * Jelly 工具左鍵點一下畫布＝生成（issue #97 / V3 T3-4；ADR-0013）：以點擊處為中心
    * 放下一塊——圖 = 最近一次匯入的那張（見 `sourceForSpawn`），尺寸與密度 = 當下
    * 兩條拉霸（跟匯入走同一組「下一次」的意圖）。放不下（超出 Walled 範圍／掉到
    * Floor 地板下）就整個不生成並提示，判定與懸停時的禁止游標同一條路徑
@@ -1893,7 +1923,7 @@ export class JellySandbox {
    * Scene 與錄製的分工（ADR-0013，同 `importImage`）：不在錄製中 → 生成後
    * `setScene(sceneSnapshot())`，這塊成為佈景的一部分、`停止／重設` 後還在；
    * 錄製中 → 只走 `dispatchInput`，`spawn` 錄進 Action Track（播到那步才出現、
-   * 重設後消失），Scene 不動。播放中三個 Jelly 工具都不作用（面板那些選項也是灰的）：
+   * 重設後消失），Scene 不動。播放中不生成（`onJellyClick` 擋、懸停顯示禁止游標）：
    * Scene 快照不該把 Track 正在播、播完就消失的塊收進去。
    */
   private spawnAt(world: Point): void {
@@ -1911,30 +1941,26 @@ export class JellySandbox {
   }
 
   /**
-   * 「移除 Jelly」工具點一下畫布（issue #97）：點到哪塊移除哪塊（`World.pick`，
-   * 後生成的在上面先命中），連同附在它上面的 Pin／Grab 一起消失（`World.remove`
-   * 連那塊的 `SimCore` 整個丟掉、路由表也清乾淨）。點空白處什麼都不做——不是
-   * 「移除最近的一塊」，那會讓使用者不小心清掉沒瞄準的東西。Scene／錄製的分工
-   * 同 `spawnAt`。
+   * 右鍵選單的「移除」（issue #97 的移除 Jelly，issue #124 搬進選單）：移除開選單時點中的
+   * 那一塊（`World.pick`，後生成的在上面先命中），連同附在它上面的 Pin／Grab 一起消失
+   * （`World.remove` 連那塊的 `SimCore` 整個丟掉、路由表也清乾淨）。選單開著的期間那塊
+   * 已經不在了（例如播放中的事件移除了它）就什麼都不做。Scene／錄製的分工同 `spawnAt`：
+   * 錄製中照樣經 `dispatchInput` 錄成 `remove` 事件。
    */
-  private removeJellyAt(world: Point): void {
-    const hit = this.world.pick(world.x, world.y);
-    if (!hit) return;
-    this.dispatchInput({ type: 'remove', jellyId: hit.jellyId });
+  private removeJelly(jellyId: string): void {
+    if (!this.world.jellies().some((j) => j.id === jellyId)) return;
+    this.dispatchInput({ type: 'remove', jellyId });
     this.commitSceneUnlessRecording();
   }
 
   /**
-   * 「重建 Jelly」工具點一下畫布（issue #98 / V3 T3-5）：點到哪塊重建哪塊（`World.pick`，
-   * 後生成的在上面先命中），點空白處什麼都不做（同 `removeJellyAt`：不去猜最近的一塊）。
-   * 命中的塊在 `sceneSnapshot()` 裡一定找得到——它就是「場上每塊當初 spawn 的參數」——
-   * 找不到只可能是內部狀態對不上，那就當沒點到。實際重建交給 `rebuildJellies`，跟
-   * 「全部重建」按鈕同一條路徑，只差清單長度。
+   * 右鍵選單的「重建」（issue #98 的重建 Jelly，issue #124 搬進選單）：重建開選單時點中的
+   * 那一塊。那塊在 `sceneSnapshot()` 裡一定找得到——它就是「場上每塊當初 spawn 的參數」——
+   * 找不到（內部狀態對不上、或選單開著時那塊已經不在）就當沒點到。實際重建交給
+   * `rebuildJellies`，跟「全部重建」按鈕同一條路徑，只差清單長度。
    */
-  private rebuildJellyAt(world: Point): void {
-    const hit = this.world.pick(world.x, world.y);
-    if (!hit) return;
-    const entry = this.world.sceneSnapshot().find((e) => e.jellyId === hit.jellyId);
+  private rebuildJelly(jellyId: string): void {
+    const entry = this.world.sceneSnapshot().find((e) => e.jellyId === jellyId);
     if (!entry) return;
     this.rebuildJellies([entry], '重建失敗，這塊果凍維持不變');
   }
@@ -2219,9 +2245,10 @@ export class JellySandbox {
       // 撒 Pin 的間距判定要跟場上既有的 Pin 也比一次（issue #69），不然在撒過的
       // 地方再撒一次會疊成一坨；拔模式（issue #123）從這份清單挑要拔的。
       listPins: () => this.world.listPins(),
-      // 生成／移除 Jelly 兩個工具（issue #97）只回報「在這裡點了一下」，該放哪張圖、
-      // 該移除哪一塊由沙盒自己決定（見 `spawnAt`／`removeJellyAt`）。
-      onClickTool: (tool, world) => this.runClickTool(tool, world),
+      // Jelly 工具（issue #97 / #124）只回報「在這裡點了一下／右鍵點了一下」，該放哪張圖、
+      // 選單作用在哪一塊由沙盒自己決定（見 `spawnAt`／`openJellyMenu`）。
+      onJellyClick: (world) => this.onJellyClick(world),
+      onJellyContextMenu: (world, screen) => this.openJellyMenu(world, screen),
       // 進 World + no-op 除非正在錄製（issue #29）。Pin 工具直接送 pin／unpin（issue #123），
       // 不再經 `routeForPinTool` 轉換。
       applyInput: (event) => this.dispatchInput(event),
@@ -2232,6 +2259,8 @@ export class JellySandbox {
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
       adjustModeValue: (steps) => this.adjustModeValue(steps),
       onMiddleClick: () => this.cycleMode(), // 中鍵單擊輪替模式（issue #122）
+      // 右鍵單擊交給目前工具（issue #124）：Jelly 開選單，其他工具目前忽略。
+      onRightClick: (world, sx, sy) => input.rightClick(world, sx, sy),
     });
     return { input, cameraInput };
   }
