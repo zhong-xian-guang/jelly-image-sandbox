@@ -1492,3 +1492,188 @@ describe('ToolRouter — 電風扇的模式、滾輪調參數與右鍵移除（i
     expect(events).toEqual([]);
   });
 });
+
+describe('ToolRouter — 編隊抓取的每點大把（issue #135；CONTEXT.md「每點大把」）', () => {
+  /** 編隊模式、「主點 + 右 10」兩點形狀；`perPointHandful` 決定開關。 */
+  function withShape(perPointHandful: boolean, extra?: Partial<ToolRouterOptions>) {
+    const made = makeRouter(undefined, undefined, extra);
+    selectGrab(made.router, 'formation');
+    made.router.beginFormationDefine();
+    made.router.down(1, 0, 0, 0);
+    made.router.down(1, 10, 0, 0);
+    made.router.endFormationDefine();
+    made.router.setFormationParams({ perPointHandful });
+    made.events.length = 0;
+    return made;
+  }
+
+  it('開關預設關閉', () => {
+    const { router } = makeRouter();
+    expect(router.perPointHandful).toBe(false);
+  });
+
+  it('關閉：編隊的 grab 不帶 handfulRadius（跟原本的編隊抓取一樣）', () => {
+    const { router, events } = withShape(false);
+    router.down(2, 100, 100, 0);
+    router.up(2, 100, 100, 500);
+    expect(events).toEqual([
+      { type: 'grab', id: 'formation:1:0', x: 1100, y: 1100 },
+      { type: 'grab', id: 'formation:1:1', x: 1110, y: 1100 },
+      { type: 'release', id: 'formation:1:0' },
+      { type: 'release', id: 'formation:1:1' },
+    ]);
+    expect(events.some((e) => 'handfulRadius' in e || 'radius' in e)).toBe(false);
+  });
+
+  it('開啟：每個落在 Jelly 上的點送出的 grab 都帶目前的大把半徑；落在外面的點不送', () => {
+    // 只有主點（x = 1100）命中；右邊那點（x = 1110）落在果凍外。
+    const { router, events } = withShape(true, { hitTest: (p) => p.x < 1110 });
+    router.setHandfulParams({ radius: 90 });
+    router.down(2, 100, 100, 0);
+    router.move(2, 130, 100);
+    router.up(2, 130, 100, 500);
+    expect(events).toEqual([
+      { type: 'grab', id: 'formation:1:0', x: 1100, y: 1100, handfulRadius: 90 },
+      { type: 'moveGrab', id: 'formation:1:0', x: 1130, y: 1100 },
+      { type: 'release', id: 'formation:1:0' },
+    ]);
+  });
+
+  it('開啟：兩點都命中 → 兩把各自帶同一個半徑（共用大把模式那條）', () => {
+    const { router, events } = withShape(true);
+    router.down(2, 100, 100, 0);
+    expect(events).toEqual([
+      {
+        type: 'grab',
+        id: 'formation:1:0',
+        x: 1100,
+        y: 1100,
+        handfulRadius: DEFAULT_HANDFUL_RADIUS,
+      },
+      {
+        type: 'grab',
+        id: 'formation:1:1',
+        x: 1110,
+        y: 1100,
+        handfulRadius: DEFAULT_HANDFUL_RADIUS,
+      },
+    ]);
+  });
+
+  it('開啟時的快速按放：grab×N → tap×N（每個都帶 radius）→ release×N', () => {
+    const { router, events } = withShape(true);
+    router.setHandfulParams({ radius: 60 });
+    router.down(2, 100, 100, 0);
+    router.up(2, 101, 100, 100);
+    expect(events).toEqual([
+      { type: 'grab', id: 'formation:1:0', x: 1100, y: 1100, handfulRadius: 60 },
+      { type: 'grab', id: 'formation:1:1', x: 1110, y: 1100, handfulRadius: 60 },
+      { type: 'tap', x: 1100, y: 1100, radius: 60 },
+      { type: 'tap', x: 1110, y: 1100, radius: 60 },
+      { type: 'release', id: 'formation:1:0' },
+      { type: 'release', id: 'formation:1:1' },
+    ]);
+  });
+
+  it('按下後才關掉開關、改半徑：進行中這一抓不受影響（tap 仍帶按下當下的半徑）', () => {
+    const { router, events } = withShape(true);
+    router.setHandfulParams({ radius: 60 });
+    router.down(2, 100, 100, 0);
+    router.setFormationParams({ perPointHandful: false });
+    router.setHandfulParams({ radius: 200 });
+    router.up(2, 100, 100, 100);
+    expect(events.filter((e) => e.type === 'tap')).toEqual([
+      { type: 'tap', x: 1100, y: 1100, radius: 60 },
+      { type: 'tap', x: 1110, y: 1100, radius: 60 },
+    ]);
+    // 下一次按下才吃到新設定：開關已關 → 單點編隊。
+    events.length = 0;
+    router.down(3, 100, 100, 200);
+    expect(events[0]).toEqual({ type: 'grab', id: 'formation:2:0', x: 1100, y: 1100 });
+  });
+
+  it('按下後才打開開關：進行中這一抓仍是單點編隊（tap 不帶 radius）', () => {
+    const { router, events } = withShape(false);
+    router.down(2, 100, 100, 0);
+    router.setFormationParams({ perPointHandful: true });
+    router.up(2, 100, 100, 100);
+    expect(events.filter((e) => e.type === 'tap')).toEqual([
+      { type: 'tap', x: 1100, y: 1100 },
+      { type: 'tap', x: 1110, y: 1100 },
+    ]);
+    expect(events.some((e) => 'handfulRadius' in e || 'radius' in e)).toBe(false);
+  });
+
+  it('formationActiveGroups 帶這一抓按下當下的半徑（範圍圈用）；關閉時為 null', () => {
+    const on = withShape(true);
+    on.router.setHandfulParams({ radius: 70 });
+    on.router.down(2, 100, 100, 0);
+    on.router.setHandfulParams({ radius: 300 });
+    expect(on.router.formationActiveGroups.map((g) => g.handfulRadius)).toEqual([70]);
+
+    const off = withShape(false);
+    off.router.down(2, 100, 100, 0);
+    expect(off.router.formationActiveGroups.map((g) => g.handfulRadius)).toEqual([null]);
+  });
+
+  it('右鍵＋滾輪：開關開啟時編隊模式調大把半徑（跟大把模式同一條）；關閉時回報「不處理」', () => {
+    const { router } = withShape(false);
+    router.setHandfulParams({ radius: 140 });
+    expect(router.adjustActiveValue(1)).toBeNull();
+    expect(router.activeValue).toBeNull();
+
+    router.setFormationParams({ perPointHandful: true });
+    expect(router.activeValue).toEqual({ key: 'handfulRadius', value: 140 });
+    expect(router.adjustActiveValue(2)).toEqual({
+      key: 'handfulRadius',
+      value: 140 + 2 * HANDFUL_RADIUS_RANGE.step,
+    });
+    // 大把模式讀到的是同一個值。
+    router.setMode('grab', 'handful');
+    expect(router.activeValue).toEqual({
+      key: 'handfulRadius',
+      value: 140 + 2 * HANDFUL_RADIUS_RANGE.step,
+    });
+  });
+
+  it('開關只影響編隊模式：單點模式照舊沒有數值', () => {
+    const { router } = makeRouter();
+    router.setFormationParams({ perPointHandful: true });
+    expect(router.adjustActiveValue(1)).toBeNull();
+  });
+});
+
+describe('ToolRouter — 定義編隊形狀途中鎖住抓取工具的模式（issue #135 順帶修 #122 的邊角）', () => {
+  function defining() {
+    const made = makeRouter();
+    selectGrab(made.router, 'formation');
+    made.router.beginFormationDefine();
+    return made;
+  }
+
+  it('中鍵（cycleMode）不切離編隊，回 null；結束定義後照常輪替', () => {
+    const { router } = defining();
+    expect(router.cycleMode()).toBeNull();
+    expect(router.modeOf('grab')).toBe('formation');
+    router.endFormationDefine();
+    expect(router.cycleMode()).toBe('single');
+  });
+
+  it('模式鈕（setMode）在定義中也切不走；左鍵仍是記點、不送事件', () => {
+    const { router, events } = defining();
+    router.setMode('grab', 'single');
+    expect(router.modeOf('grab')).toBe('formation');
+    router.down(1, 0, 0, 0);
+    router.up(1, 0, 0, 50);
+    expect(events).toEqual([]);
+    expect(router.formationDefinePreview).toEqual([{ x: 1000, y: 1000 }]);
+  });
+
+  it('別的工具的模式不受影響', () => {
+    const { router } = defining();
+    router.setActiveTool('pin');
+    expect(router.cycleMode()).toBe('remove');
+    router.setMode('pin', 'place');
+    expect(router.modeOf('pin')).toBe('place');
+  });
+});

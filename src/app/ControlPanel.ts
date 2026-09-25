@@ -221,6 +221,8 @@ export interface ControlPanelInitial {
   handfulRadius: number;
   /** 大把抓取範圍圈（提示）顯示開關的初始值（issue #113）。 */
   showHandfulRange: boolean;
+  /** 編隊抓取「每個點用大把抓」開關的初始值（issue #135）——預設關閉。 */
+  formationPerPointHandful: boolean;
   /** 「播放時隱藏提示」全域開關的初始值（issue #71）——見 `onHideHintsDuringPlaybackChange`。 */
   hideHintsDuringPlayback: boolean;
   /** 「匯入尺寸」拉霸的初始值（issue #88 / V3 T1-1），世界單位——見 `onImportSizeChange`。 */
@@ -342,6 +344,11 @@ export interface ControlPanelOptions {
   onHandfulRadiusChange: (radius: number) => void;
   /** 「顯示大把抓取範圍」開關（issue #113）——範圍圈是提示層，同 `onShowFormationHintChange`，純視覺。 */
   onShowHandfulRangeChange: (visible: boolean) => void;
+  /**
+   * 「每個點用大把抓」開關（issue #135）——編隊的每個點改成一把大把抓取，影響下一次按下；
+   * 半徑共用「大把抓取半徑」那條拉霸。
+   */
+  onFormationPerPointHandfulChange: (enabled: boolean) => void;
   /**
    * 「播放時隱藏提示」全域開關（issue #71 / V2 T3-7）——開啟後只要有任何 Track／
    * Demo 在播放，所有視覺提示（顯示網格／顯示 Pin／風扇範圍／風扇圖示／編隊抓取
@@ -695,7 +702,8 @@ export class ControlPanel {
     ]);
 
     // 抓取工具的參數卡（issue #122：一般操作／大把抓取／編隊抓取合成抓取工具）——模式鈕、
-    // 大把抓取半徑（issue #113）、兩顆提示開關、編隊形狀的設定按鈕（issue #68）。
+    // 大把抓取半徑（issue #113）、兩顆提示開關、每點大把開關（issue #135）、編隊形狀的
+    // 設定按鈕（issue #68）。
     const handfulRadiusRow = this.rangeRow(
       '大把抓取半徑',
       opts.handfulRadiusRange.min,
@@ -716,6 +724,12 @@ export class ControlPanel {
         '顯示編隊抓取提示',
         opts.initial.showFormationHint,
         opts.onShowFormationHintChange,
+      ),
+      // 編隊的每點大把（issue #135）：半徑共用上面那條「大把抓取半徑」。
+      this.checkboxRow(
+        '每個點用大把抓',
+        opts.initial.formationPerPointHandful,
+        opts.onFormationPerPointHandfulChange,
       ),
       this.formationDefineRow(opts.onFormationDefineStart, opts.onFormationDefineEnd),
     ]);

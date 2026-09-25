@@ -30,6 +30,7 @@ import type { FanState, InputEvent, PinInfo, Point } from '../sim';
 import type { GestureConfig } from './GestureTracker';
 import {
   type HandfulParams,
+  type FormationParams,
   type FanParams,
   type ModalToolId,
   type ModeValue,
@@ -115,6 +116,16 @@ export class PointerInput {
   /** 轉發給 `ToolRouter.setHandfulParams`（issue #113）——面板大把抓取半徑拉霸變更時呼叫。 */
   setHandfulParams(params: Partial<HandfulParams>): void {
     this.tracker.setHandfulParams(params);
+  }
+
+  /** 轉發給 `ToolRouter.setFormationParams`（issue #135）——面板「每個點用大把抓」開關變更時呼叫。 */
+  setFormationParams(params: Partial<FormationParams>): void {
+    this.tracker.setFormationParams(params);
+  }
+
+  /** 每點大把開關目前的狀態（issue #135）——範圍圈要不要畫在編隊點上。 */
+  get perPointHandful(): boolean {
+    return this.tracker.perPointHandful;
   }
 
   /**

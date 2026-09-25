@@ -42,6 +42,12 @@
  * 的位置（`startWorld + offset`），跟 `GestureTracker` 一致。`cancel` 是例外，
  * 不送 `tap`：中斷不是完成一次輕拍。
  *
+ * **編隊抓取的每點大把**（issue #135；CONTEXT.md「編隊抓取」）：`setFormationParams`
+ * 的開關開著時，每個點的 `grab` 帶 `handfulRadius`（大把抓取那條半徑，同一個值）、快速
+ * 按放時每個 `tap` 帶同一個 `radius`——其餘（id、落點過濾、順序、`move`／`release`）
+ * 跟上面完全相同，不新增事件種類。開關與半徑都在按下當下拍進 session。開著時右鍵＋
+ * 滾輪在編隊模式下調的就是這條半徑（`MODE_VALUE_KEYS` 的條件格）。
+ *
  * **Pin 工具**（issue #123 / V4 T2；spec #121「Pin 工具」）：原本的 Pin、撒 Pin、移除 Pin
  * 三個工具合成一個，模式為 放／拔。兩個模式都直接送 `pin`／`unpin`（不新增 `InputEvent`
  * 種類），也都不送 `tap`——快速按放不觸發 Tap。以前 Pin 工具是照一般操作送 `grab`/`tap`
@@ -330,13 +336,30 @@ export const MODE_VALUE_RANGES: Readonly<Record<ModeValueKey, ValueRange>> = {
 };
 
 /**
+ * 模式以外、會決定「右鍵＋滾輪有沒有數值可調」的開關（issue #135）：編隊模式的每點大把。
+ * 讀值見 `ToolRouter.valueConditions`。
+ */
+type ModeValueCondition = 'perPointHandful';
+
+/**
+ * `MODE_VALUE_KEYS` 的一格：直接是數值，或「某個開關開著才有這個數值」（關著＝沒有數值，
+ * 右鍵＋滾輪照舊縮放）。
+ */
+type ModeValueEntry =
+  ModeValueKey | { readonly key: ModeValueKey; readonly when: ModeValueCondition };
+
+/**
  * 每個「工具＋模式」用右鍵＋滾輪調哪個數值（issue #125 從 if 串接改成表）；沒列到的模式
- * （單點、編隊）沒有數值可調，右鍵＋滾輪照舊縮放。
+ * （單點）沒有數值可調，右鍵＋滾輪照舊縮放。編隊模式只在每點大把開著時調大把抓取半徑
+ * （issue #135：跟大把模式共用同一條）。
  */
 const MODE_VALUE_KEYS: {
-  readonly [T in ModalToolId]: Readonly<Partial<Record<ToolModeOf<T>, ModeValueKey>>>;
+  readonly [T in ModalToolId]: Readonly<Partial<Record<ToolModeOf<T>, ModeValueEntry>>>;
 } = {
-  grab: { handful: 'handfulRadius' },
+  grab: {
+    handful: 'handfulRadius',
+    formation: { key: 'handfulRadius', when: 'perPointHandful' },
+  },
   pin: { place: 'pinBrushRadius', remove: 'pinBrushRadius' },
   fan: {
     width: 'fanWidth',
@@ -363,6 +386,15 @@ export interface ModeValue {
 export interface HandfulParams {
   /** 抓取範圍的世界座標半徑（圓心 = 按下處）。 */
   radius: number;
+}
+
+/** `setFormationParams` 接受的部分更新（issue #135）。 */
+export interface FormationParams {
+  /**
+   * 每點大把（CONTEXT.md「編隊抓取」）：編隊的每個點改成一把大把抓取，半徑共用大把抓取
+   * 那條（`handfulRadius`）。預設關閉。
+   */
+  perPointHandful: boolean;
 }
 
 export interface ToolRouterOptions extends GestureTrackerOptions {
@@ -445,6 +477,11 @@ interface FormationSession extends GestureStart {
    */
   lastWorld: Point;
   attached: readonly { offset: Point; id: string }[];
+  /**
+   * 每點大把（issue #135）：按下當下開著就記下當時的大把抓取半徑，每個點的 `grab`
+   * 與可能的 `tap` 都帶它；關著為 `null`（單點編隊）。之後切開關、改半徑都不影響這一抓。
+   */
+  handfulRadius: number | null;
 }
 
 /**
@@ -550,6 +587,8 @@ export class ToolRouter {
   private readonly pinRemoveSessions = new Map<PointerId, PinRemoveSession>();
   /** 大把抓取半徑（issue #113）——面板拉霸即時寫入，按下當下拍進 session。 */
   private handfulRadius = DEFAULT_HANDFUL_RADIUS;
+  /** 編隊抓取的每點大把開關（issue #135）——面板開關即時寫入，按下當下拍進 session。 */
+  private formationPerPointHandful = false;
   /** 進行中的大把抓取手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly handfulSessions = new Map<PointerId, HandfulSession>();
   /** 進行中的「點一下」手勢（issue #97），鍵為指標 `id`（`up`/`cancel` 後移除）。 */
@@ -602,23 +641,32 @@ export class ToolRouter {
 
   /**
    * 中鍵單擊（issue #122）：目前工具的模式換成清單裡的下一個（最後一個繞回第一個），
-   * 回報新模式讓呼叫端同步參數卡與游標標籤。目前工具沒有模式就回 `null`、什麼都不做。
+   * 回報新模式讓呼叫端同步參數卡與游標標籤。目前工具沒有模式、或模式被鎖住（定義編隊
+   * 形狀途中，見 `writeMode`）就回 `null`、什麼都不做。
    */
   cycleMode(): ToolMode | null {
     const tool = this.activeTool;
     if (!isModalTool(tool)) return null;
     const list: readonly ToolMode[] = TOOL_MODES[tool];
     const next = list[(list.indexOf(this.modes[tool]) + 1) % list.length]!;
-    this.writeMode(tool, next);
-    return next;
+    return this.writeMode(tool, next) ? next : null;
   }
 
   /**
-   * `modes` 的唯一寫入口。呼叫端（`setMode` 的型別參數、`cycleMode` 從該工具自己的清單
-   * 取值）已保證模式屬於這個工具；TS 對「以聯集鍵寫入對應型別」無法收窄，所以在這裡放寬。
+   * `modes` 的唯一寫入口；回報有沒有真的寫進去。呼叫端（`setMode` 的型別參數、`cycleMode`
+   * 從該工具自己的清單取值）已保證模式屬於這個工具；TS 對「以聯集鍵寫入對應型別」無法
+   * 收窄，所以在這裡放寬。
+   *
+   * 定義編隊形狀途中（issue #135 順帶修 #122 的邊角）抓取工具鎖在編隊模式：不然中鍵或
+   * 模式鈕一切走，定義點的預覽跟著消失、左鍵改走抓取，面板按鈕卻還停在「完成設定」。
+   * 要換模式就先按「完成設定」。
    */
-  private writeMode(tool: ModalToolId, mode: ToolMode): void {
+  private writeMode(tool: ModalToolId, mode: ToolMode): boolean {
+    if (tool === 'grab' && this.formationDefinePoints !== null && mode !== 'formation') {
+      return false;
+    }
     (this.modes as Record<ModalToolId, ToolMode>)[tool] = mode;
+    return true;
   }
 
   /** 這一次按下要走的分支：抓取、Pin 工具看模式，其餘工具就是自己。 */
@@ -685,13 +733,19 @@ export class ToolRouter {
    * Jelly 上、已經送出 `grab` 的點）——`down` 時被 `hitTest` 跳過的偏移點沒有
    * 對應的約束，提示不該把它畫成「也被抓住了」。
    */
-  get formationActiveGroups(): ReadonlyArray<{ anchor: Point; points: readonly Point[] }> {
+  get formationActiveGroups(): ReadonlyArray<{
+    anchor: Point;
+    points: readonly Point[];
+    /** 這一抓按下當下的每點大把半徑（issue #135，範圍圈用）；單點編隊為 `null`。 */
+    handfulRadius: number | null;
+  }> {
     return [...this.formationSessions.values()].map((s) => ({
       anchor: s.lastWorld,
       points: s.attached.map(({ offset }) => ({
         x: s.lastWorld.x + offset.x,
         y: s.lastWorld.y + offset.y,
       })),
+      handfulRadius: s.handfulRadius,
     }));
   }
 
@@ -722,6 +776,23 @@ export class ToolRouter {
   setHandfulParams(params: Partial<HandfulParams>): void {
     if (params.radius !== undefined) this.handfulRadius = params.radius;
   }
+
+  /** 面板「每個點用大把抓」開關的即時寫入口（issue #135）——只影響**下一次**按下。 */
+  setFormationParams(params: Partial<FormationParams>): void {
+    if (params.perPointHandful !== undefined) {
+      this.formationPerPointHandful = params.perPointHandful;
+    }
+  }
+
+  /** 每點大把開關目前的狀態（issue #135）——範圍圈與游標標籤用。 */
+  get perPointHandful(): boolean {
+    return this.formationPerPointHandful;
+  }
+
+  /** `MODE_VALUE_KEYS` 裡條件格的開關讀值（issue #135）。 */
+  private readonly valueConditions: { readonly [C in ModeValueCondition]: () => boolean } = {
+    perPointHandful: () => this.formationPerPointHandful,
+  };
 
   /**
    * 每個數值的範圍與讀寫口（issue #125：取代原本 `activeValueKey`／`adjustActiveValue`／
@@ -765,12 +836,18 @@ export class ToolRouter {
     return { range: MODE_VALUE_RANGES[key], get, set };
   }
 
-  /** 目前工具＋模式的數值是哪一個（issue #122；issue #125 改查表）；沒有數值回 `null`。 */
+  /**
+   * 目前工具＋模式的數值是哪一個（issue #122；issue #125 改查表；issue #135 加上條件格）；
+   * 沒有數值回 `null`。
+   */
   private activeValueKey(): ModeValueKey | null {
     const tool = this.activeTool;
     if (!isModalTool(tool)) return null;
-    const keys: Partial<Record<ToolMode, ModeValueKey>> = MODE_VALUE_KEYS[tool];
-    return keys[this.modes[tool]] ?? null;
+    const keys: Partial<Record<ToolMode, ModeValueEntry>> = MODE_VALUE_KEYS[tool];
+    const entry = keys[this.modes[tool]];
+    if (entry === undefined) return null;
+    if (typeof entry === 'string') return entry;
+    return this.valueConditions[entry.when]() ? entry.key : null;
   }
 
   /** 目前模式的數值與它現在的值（游標標籤用）；沒有數值回 `null`。 */
@@ -849,18 +926,26 @@ export class ToolRouter {
       // 還沒定義形狀：編隊模式下的左鍵拖曳不做任何事（spec #121）。
       if (!this.formationOffsets || this.formationOffsets.length === 0) return;
       const session = this.nextFormationSession++;
+      // 每點大把（issue #135）：開關與半徑在按下當下定下；每個點的 `grab` 帶同一個
+      // `handfulRadius`（沿用大把抓取的欄位，不新增事件種類），各自只抓落點那塊 Jelly。
+      const handfulRadius = this.formationPerPointHandful ? this.handfulRadius : null;
       const attached: { offset: Point; id: string }[] = [];
       this.formationOffsets.forEach((offset, index) => {
         const point = { x: world.x + offset.x, y: world.y + offset.y };
         if (this.hitTest && !this.hitTest(point)) return; // 落在果凍外——跳過這一點，其餘照常
         const formationId = `formation:${session}:${index}`;
         attached.push({ offset, id: formationId });
-        this.emit({ type: 'grab', id: formationId, x: point.x, y: point.y });
+        this.emit(
+          handfulRadius === null
+            ? { type: 'grab', id: formationId, x: point.x, y: point.y }
+            : { type: 'grab', id: formationId, x: point.x, y: point.y, handfulRadius },
+        );
       });
       if (attached.length > 0) {
         this.formationSessions.set(id, {
           lastWorld: { x: world.x, y: world.y },
           attached,
+          handfulRadius,
           startX: screenX,
           startY: screenY,
           startT: timeMs,
@@ -1227,12 +1312,12 @@ export class ToolRouter {
     const session = this.formationSessions.get(id);
     if (!session) return;
     if (!isTap(session, screenX, screenY, timeMs, this.config)) return;
+    const radius = session.handfulRadius;
     for (const { offset } of session.attached) {
-      this.emit({
-        type: 'tap',
-        x: session.startWorld.x + offset.x,
-        y: session.startWorld.y + offset.y,
-      });
+      const x = session.startWorld.x + offset.x;
+      const y = session.startWorld.y + offset.y;
+      // 每點大把（issue #135）：每個點各打一次範圍 Tap，半徑＝按下當下那把的半徑。
+      this.emit(radius === null ? { type: 'tap', x, y } : { type: 'tap', x, y, radius });
     }
   }
 

@@ -991,6 +991,21 @@ body {
   background: rgba(255, 105, 105, 0.12);
 }
 
+/*
+ * 大把抓取範圍圈的容器（issue #135，見 `HandfulRanges`）：大把模式一顆、編隊每點大把
+ * 每個點一顆，每顆是一個 `.jelly-brush-cursor`。整層由提示開關藏起來。
+ */
+.jelly-handful-ranges {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.jelly-handful-ranges.is-hidden {
+  display: none;
+}
+
 /* 大把抓取的範圍圈（issue #113）：同一套幾何、青綠色，是可開關的提示。 */
 .jelly-brush-cursor-circle.is-handful {
   border-color: rgba(90, 220, 200, 0.9);
