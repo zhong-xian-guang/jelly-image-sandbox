@@ -68,12 +68,15 @@ body {
  * 才出現——沒人告訴使用者「拖 PNG 進來可以匯入」這件事本身存在，第一次使用
  * 完全無從發現。低調小字放在角落，拖曳中時會被上面全螢幕的 `.jelly-drop-hint`
  * 蓋住，不會兩層提示疊在一起。issue #56 讓它本身可點（開檔案選擇器），所以
- * 收下指標事件並給游標／hover 回饋；它只佔右下角一小塊，不擋主要操作。
+ * 收下指標事件並給游標／hover 回饋；它只佔一小塊，不擋主要操作。issue #129 起右下角
+ * 讓給相機按鈕，改放在底部中央、播放控制條正上方。
  */
 .jelly-import-hint {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
+  left: 50%;
+  bottom: 60px;
+  transform: translateX(-50%);
+  white-space: nowrap;
   z-index: 4;
   padding: 4px 10px;
   border-radius: 6px;
@@ -115,26 +118,158 @@ body {
   opacity: 1;
 }
 
-/** 玩家控制面板（issue #14 / T13）：疊在畫布左上角，`position:absolute` + `z-index`。 */
+/**
+ * 玩家控制面板（issue #14 / T13）：疊在畫布左上角，`position:absolute` + `z-index`。
+ * issue #128 起分成：標題列＋可捲動內容（`.jelly-panel-main`，固定寬度，分區展開收起時
+ * 不會左右跳），以及收起側欄後才出現的左緣把手（`.jelly-sidebar-handle`）。外層本身
+ * 不畫底色，收起時就只剩把手那一小塊會擋到畫布。
+ */
 .jelly-control-panel {
   position: absolute;
   top: 12px;
   left: 12px;
   z-index: 10;
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.jelly-control-panel.is-collapsed {
+  left: 0;
+}
+
+.jelly-panel-main {
+  display: flex;
+  flex-direction: column;
+  width: 310px;
+  /**
+   * Track／群組多起來時整個面板會比視窗還高（issue #43 回饋）——夾在視窗高度內、
+   * 內容捲動（標題列不跟著捲），不把畫面塞爆。
+   */
+  max-height: calc(100vh - 24px);
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 8px;
+}
+
+.jelly-panel-main[hidden] {
+  display: none;
+}
+
+/** 側欄標題列（issue #128）：名稱＋右側控制鈕（收起側欄；之後的乾淨畫面、「?」也放這裡）。 */
+.jelly-panel-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 4px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.jelly-panel-title {
+  flex: 1;
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.jelly-panel-titlebar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.jelly-panel-titlebar-actions button,
+.jelly-sidebar-handle {
+  min-width: 26px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.jelly-panel-titlebar-actions button:hover,
+.jelly-sidebar-handle:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/** 收起側欄後的把手（issue #128）——貼在畫面左緣的小凸片，點了展開。 */
+.jelly-sidebar-handle {
+  height: 40px;
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 1rem;
+}
+
+.jelly-sidebar-handle[hidden] {
+  display: none;
+}
+
+.jelly-panel-scroll {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.55);
-  border-radius: 8px;
-  color: #fff;
-  font-size: 0.85rem;
-  /**
-   * Track／群組多起來時整個面板會比視窗還高（issue #43 回饋）——夾在視窗高度內、
-   * 內部捲動，不把畫面塞爆。
-   */
-  max-height: calc(100vh - 24px);
+  min-height: 0;
+  padding: 8px 12px 10px;
   overflow-y: auto;
+}
+
+/** 可收合分區（issue #128）：整列可點的標題（▸／▾＋名稱）＋內容。 */
+.jelly-panel-section {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.jelly-panel-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.jelly-panel-section-header:hover {
+  opacity: 1;
+}
+
+.jelly-panel-section-chevron::before {
+  content: '▸';
+  display: inline-block;
+  width: 1em;
+}
+
+.jelly-panel-section-header[aria-expanded='true'] .jelly-panel-section-chevron::before {
+  content: '▾';
+}
+
+.jelly-panel-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 6px;
+}
+
+/** `display: flex` 會蓋掉 `[hidden]` 的預設隱藏，這裡補回來。 */
+.jelly-panel-section-body[hidden] {
+  display: none;
+}
+
+/** 片段區三顆按鈕橫排一列（issue #128）。 */
+.jelly-clip-row button {
+  flex: 1;
+  white-space: nowrap;
 }
 
 .jelly-control-row {
@@ -159,8 +294,28 @@ body {
 .jelly-range-value {
   font-family: monospace;
   font-size: 0.8rem;
-  min-width: 3.5ch;
+  min-width: 5ch;
   text-align: right;
+}
+
+/**
+ * 「拉霸＋數值」（issue #131）：拉霸吃掉剩下的寬度，每列的數值都靠右對齊在同一條線上。
+ * 雙擊拉霸回到預設值（`title` 有寫）。
+ */
+.jelly-control-row input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+
+/**
+ * 「再按一次確認」待確認中（issue #131；「清空全部」「全部重建」）——警示色＋加粗，
+ * 提醒使用者再按一次就會執行；3 秒沒再按就還原。
+ */
+.jelly-control-row button.jelly-confirm-pending {
+  color: #fff;
+  background: #c62828;
+  border-color: #ff5a5a;
+  font-weight: 600;
 }
 
 /**
@@ -175,8 +330,7 @@ body {
 
 /**
  * 控制項旁的一行小提示（issue #67 事後檢視追加——「目前工具」非「一般操作」
- * 時，說明 Pin 控制項為何被鎖住）。低調小字，跟 `.jelly-control-heading`
- * 同量級但不加粗，避免搶走真正的分區標題。
+ * 時，說明 Pin 控制項為何被鎖住）。低調小字、不加粗，避免搶走分區標題。
  */
 .jelly-control-hint {
   font-size: 0.75rem;
@@ -309,20 +463,13 @@ body {
   opacity: 0.75;
 }
 
-/** Demo／Track 按鈕列前的小標題（issue #15、issue #29 追加）——跟其他控制項分區，一眼看出這區是自動演出／自己錄的。 */
-.jelly-control-heading {
-  margin-top: 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  opacity: 0.7;
-}
-
 /**
  * 「開始錄製」按鈕在錄製中的視覺提示（issue #29 追加）——比照 Pin 標記「可點掉」的
  * 手法（`.jelly-pin-markers.is-removable` 脈動）：
  * 文字變紅加粗，外加跟 Pin 標記同款的脈動 box-shadow，低頭一眼就知道正在錄。
+ * issue #129 起錄製鈕在畫布上的播放控制條，選擇器改成不綁側欄的列。
  */
-.jelly-control-row button.jelly-recording-active {
+.jelly-playback-bar button.jelly-recording-active {
   color: #ff5a5a;
   font-weight: 600;
   animation: jelly-recording-pulse 1s ease-in-out infinite;
@@ -436,28 +583,103 @@ body {
 }
 
 /**
- * 播放狀態列（issue #34 追加）——「⏸ 暫停／▶ 繼續」鈕 + 「目前 X.XX 秒」讀出。
- * `.jelly-control-row` 是 flex，`hidden` 屬性的預設 `display:none` 會被蓋過，
- * 這裡明確補一條讓「沒在播放時整列隱藏」成立。
+ * 畫布上的控制（issue #129 / V4 U2）：底部中央的播放控制條、右下角的相機按鈕。各自只是
+ * 一小塊浮在畫布上的膠囊，只吃自己範圍內的點擊，畫布其他地方照常操作。蓋在提示層
+ * （z-index 5–6）之上、控制面板與拖放提示（z-index 10）之下。
  */
-.jelly-playback-status[hidden] {
+.jelly-playback-bar,
+.jelly-camera-controls {
+  position: absolute;
+  bottom: 12px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.jelly-playback-bar {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.jelly-camera-controls {
+  right: 12px;
+}
+
+/** `display:flex` 會蓋掉 `hidden` 的預設 `display:none`——乾淨畫面（#130）靠 `hidden` 藏它們。 */
+.jelly-playback-bar[hidden],
+.jelly-camera-controls[hidden] {
   display: none;
 }
 
-.jelly-playback-status button.jelly-paused-active {
+.jelly-canvas-button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+/** 錄製鈕錄製中換成較長的「■ 停止錄製」——固定寬度，置中的控制條才不會跟著左右跳。 */
+.jelly-canvas-button[data-action='record'] {
+  min-width: 7.5em;
+}
+
+.jelly-canvas-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.jelly-canvas-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/** 「鎖定跟隨」鎖住時高亮（同工具列目前工具的樣式）。 */
+.jelly-canvas-button.is-active {
+  border-color: rgba(90, 200, 255, 0.9);
+  background: rgba(90, 200, 255, 0.28);
+  font-weight: 600;
+}
+
+/** 暫停中的「▶ 繼續」提示色（issue #34，沿用側欄時代的樣式）。 */
+.jelly-playback-bar button.jelly-paused-active {
   color: #ffb400;
   font-weight: 600;
 }
 
-.jelly-playback-time {
+/** 播放秒數讀數——等寬、固定最小寬度，數字跳動時控制條不會左右晃；沒在播放時變淡。 */
+.jelly-playback-time,
+.jelly-zoom-readout {
   font-family: monospace;
   font-size: 0.8rem;
+  text-align: right;
   opacity: 0.85;
 }
 
+.jelly-playback-time {
+  min-width: 7ch;
+}
+
+.jelly-playback-bar:not(.is-playing) .jelly-playback-time {
+  opacity: 0.45;
+}
+
+.jelly-zoom-readout {
+  min-width: 5ch;
+}
+
 /**
- * 依群組分區的 Track 清單（issue #43 / V2 T1-8）——夾在「▶ 播放」與「停止／
- * 重設」之間。每個群組一段：標頭列 `[開啟▢] 名稱(可改)（N 條）[獨奏][刪除]`，
+ * 依群組分區的 Track 清單（issue #43 / V2 T1-8）——側欄「錄製」區裡、片段初始 Pin
+ * 之下。每個群組一段：標頭列 `[開啟▢] 名稱(可改)（N 條）[獨奏][刪除]`，
  * 底下縮排接該群組的成員 Track 卡片（一條 Track 屬多組就每段各出現一次）。
  * 播放取所有開啟中群組的成員聯集；錄製中／播放中整區 `disabled`（見
  * `updateTrackControlsState`）。
@@ -769,6 +991,21 @@ body {
   background: rgba(255, 105, 105, 0.12);
 }
 
+/*
+ * 大把抓取範圍圈的容器（issue #135，見 `HandfulRanges`）：大把模式一顆、編隊每點大把
+ * 每個點一顆，每顆是一個 `.jelly-brush-cursor`。整層由提示開關藏起來。
+ */
+.jelly-handful-ranges {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.jelly-handful-ranges.is-hidden {
+  display: none;
+}
+
 /* 大把抓取的範圍圈（issue #113）：同一套幾何、青綠色，是可開關的提示。 */
 .jelly-brush-cursor-circle.is-handful {
   border-color: rgba(90, 220, 200, 0.9);
@@ -856,8 +1093,161 @@ body {
   white-space: nowrap;
 }
 
-/** Jelly 工具參數卡的一行操作說明（issue #124）。 */
+/**
+ * 工具卡最底下那一行滑鼠操作說明（issue #124 起只有 Jelly；issue #132 四張卡都有）。
+ * 跟上面的控制項隔一條細線，看得出它是說明、不是可按的東西。
+ */
 .jelly-tool-help {
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.75);
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/**
+ * 「?」操作說明浮層（issue #132，見 `HelpOverlay`）——整片半透明背景蓋住畫面（點背景＝點外面
+ * ＝關掉，那一下不會落到畫布上），中間一張可捲動的卡片。蓋在控制面板、右鍵選單、通知之上。
+ * `display: flex` 會蓋掉 `[hidden]`，這裡補回來。
+ */
+.jelly-help-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.jelly-help-backdrop[hidden] {
+  display: none;
+}
+
+.jelly-help-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  background: rgba(24, 24, 24, 0.97);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.jelly-help-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px 8px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.jelly-help-header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 1rem;
+}
+
+.jelly-help-close {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.jelly-help-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.jelly-help-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  padding: 12px 18px 16px;
+  overflow-y: auto;
+}
+
+.jelly-help-group h3 {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+}
+
+.jelly-help-group dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 10px;
+  margin: 0;
+}
+
+.jelly-help-group dt {
+  color: rgba(140, 210, 255, 0.95);
+  white-space: nowrap;
+}
+
+.jelly-help-group dd {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.45;
+}
+
+/**
+ * 定義編隊形狀時畫布上方的一行說明（issue #132，見 `FormationDefineHint`）。是提示：
+ * 不吃指標事件，壓在通知（z-index 11）之下。
+ */
+.jelly-formation-define-hint {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.jelly-formation-define-hint[hidden] {
+  display: none;
+}
+
+/**
+ * 乾淨畫面的「離開」鈕（issue #130，見 `CleanView`）：游標在畫布左上角停一下才浮出，移開就藏。
+ * 疊在所有畫布上的東西之上（含通知），乾淨畫面中它是唯一的介面。
+ */
+.jelly-clean-view-exit {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 12;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font: inherit;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.jelly-clean-view-exit:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.jelly-clean-view-exit[hidden] {
+  display: none;
 }

@@ -33,14 +33,18 @@ export interface CursorLabelInput {
 }
 
 /**
- * 標籤文字（「單點」「大把 · 140」「放 · 120」）；工具沒有模式時回 `null`（不顯示）——
- * 目前有數值可調的都是有模式的工具（大把抓取半徑、Pin 筆刷半徑）。
+ * 標籤文字（「單點」「大把 · 140」「編隊 · 大把 140」「放 · 120」「強度 · 4000」）；工具沒有模式時回 `null`
+ * （不顯示）——目前有數值可調的都是有模式的工具（大把抓取半徑、Pin 筆刷半徑、電風扇參數）。
  */
 export function cursorLabelText(input: CursorLabelInput): string | null {
   if (input.mode === null) return null;
   let name = MODE_LABELS[input.mode];
-  if (input.mode === 'formation' && input.formation !== 'ready') {
-    name += input.formation === 'defining' ? '（設定形狀中）' : '（尚未設定形狀）';
+  if (input.mode === 'formation') {
+    // 編隊的數值只有每點大把的半徑（issue #135）：「編隊 · 大把 140」。還沒設定形狀時
+    // 照舊只提示要先設定——那時畫面上沒有範圍圈，數值沒有對照對象。
+    if (input.formation === 'none') return `${name}（尚未設定形狀）`;
+    if (input.formation === 'defining') name += '（設定形狀中）';
+    return input.value === null ? name : `${name} · ${MODE_LABELS.handful} ${input.value}`;
   }
   return input.value === null ? name : `${name} · ${input.value}`;
 }

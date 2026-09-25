@@ -18,9 +18,25 @@ describe('cursorLabelText（issue #122）', () => {
     expect(text({ mode: 'formation', formation: 'ready' })).toBe('編隊');
   });
 
+  it('編隊＋每點大把（issue #135）：「編隊 · 大把 <半徑>」；還沒設定形狀照舊不帶數值', () => {
+    expect(text({ mode: 'formation', formation: 'ready', value: 140 })).toBe('編隊 · 大把 140');
+    expect(text({ mode: 'formation', formation: 'none', value: 140 })).toBe('編隊（尚未設定形狀）');
+    // 定義中範圍圈已經畫在點下的點上、滾輪也調得動，所以數值照樣顯示。
+    expect(text({ mode: 'formation', formation: 'defining', value: 90 })).toBe(
+      '編隊（設定形狀中） · 大把 90',
+    );
+  });
+
   it('Pin 工具（issue #123）：放／拔加上 Pin 筆刷半徑', () => {
     expect(text({ mode: 'place', value: 120 })).toBe('放 · 120');
     expect(text({ mode: 'remove', value: 120 })).toBe('拔 · 120');
+  });
+
+  it('電風扇（issue #125）：「參數名 · 數值」', () => {
+    expect(text({ mode: 'width', value: 150 })).toBe('寬度 · 150');
+    expect(text({ mode: 'strength', value: 4000 })).toBe('強度 · 4000');
+    expect(text({ mode: 'falloff', value: 2.1 })).toBe('衰減 · 2.1');
+    expect(text({ mode: 'frequency', value: 0.5 })).toBe('頻率 · 0.5');
   });
 
   it('沒有模式的工具 → 不顯示', () => {

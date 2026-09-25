@@ -42,6 +42,12 @@
  * 的位置（`startWorld + offset`），跟 `GestureTracker` 一致。`cancel` 是例外，
  * 不送 `tap`：中斷不是完成一次輕拍。
  *
+ * **編隊抓取的每點大把**（issue #135；CONTEXT.md「編隊抓取」）：`setFormationParams`
+ * 的開關開著時，每個點的 `grab` 帶 `handfulRadius`（大把抓取那條半徑，同一個值）、快速
+ * 按放時每個 `tap` 帶同一個 `radius`——其餘（id、落點過濾、順序、`move`／`release`）
+ * 跟上面完全相同，不新增事件種類。開關與半徑都在按下當下拍進 session。開著時右鍵＋
+ * 滾輪在編隊模式下調的就是這條半徑（`MODE_VALUE_KEYS` 的條件格）。
+ *
  * **Pin 工具**（issue #123 / V4 T2；spec #121「Pin 工具」）：原本的 Pin、撒 Pin、移除 Pin
  * 三個工具合成一個，模式為 放／拔。兩個模式都直接送 `pin`／`unpin`（不新增 `InputEvent`
  * 種類），也都不送 `tap`——快速按放不觸發 Tap。以前 Pin 工具是照一般操作送 `grab`/`tap`
@@ -128,7 +134,7 @@
  * 共用 `emitFanMove`。
  *
  * `cancel`：放置中（`FanPlaceSession`）視為放棄這次放置，只清掉 `fanSessions`
- * 裡的紀錄，不 emit 任何事件（跟 `general` 底下放開一半的 Grab 不同——那邊
+ * 裡的紀錄，不 emit 任何事件（跟單點抓取放開一半的 Grab 不同——那邊
  * `cancel` 仍會 `release`，因為 Grab 已經是「活著」的約束；電風扇放置在 `up`
  * 之前完全沒有送出任何 `InputEvent`，沒有東西需要收回）。拖曳中
  * （`FanMoveSession`）則不同——每次 `move` 都已經即時把風扇挪過去了，`cancel`
@@ -136,6 +142,14 @@
  * `cancel` 不回捲已經發生過的 `moveGrab`）。「移除風扇」按鈕不經過
  * `ToolRouter`——比照「清除所有 Pin」的模式，由 `JellySandbox` 直接對
  * `sim.applyInput({ type: 'clearFan' })`（見該檔 `removeFan`）。
+ *
+ * **電風扇的模式與右鍵**（issue #125 / V4 T4；spec #121「電風扇」）：模式不改左鍵——放置
+ * 與搬移完全不變——而是「按住右鍵＋滾輪要調哪個參數」：寬度／強度／衰減／頻率
+ * （`adjustActiveValue`，一格＝該拉霸的 step，夾在範圍內，寫進的就是 `setFanParams` 那四個
+ * 欄位，所以同時是下一次放置的參數；場上風扇的即時更新照舊歸呼叫端）。右鍵單擊
+ * （`rightClick`）落在場上風扇的矩形內就 emit `clearFan`——跟「移除風扇」按鈕同一個事件、
+ * 經同一個 `emit`（呼叫端接到 `applyInput` + 錄製），所以錄製中照樣錄進 Track。按住右鍵
+ * 期間滾過滾輪不算右鍵單擊（判定在 `CameraInput`），在風扇上調參數不會誤刪。
  */
 
 import { isPointInFanRect, type FanState, type PinInfo, type PointerId, type Point } from '../sim';
@@ -162,11 +176,12 @@ export const TOOL_IDS: readonly ToolId[] = ['grab', 'pin', 'fan', 'jelly'];
 
 /**
  * 有模式的工具與它們的模式，依中鍵單擊輪替的順序排（issue #122；CONTEXT.md「模式」）。
- * 第一個是預設模式。之後的票在這裡加 `fan: [...]`。
+ * 第一個是預設模式。電風扇的模式是「右鍵＋滾輪要調的參數」（issue #125）。
  */
 export const TOOL_MODES = {
   grab: ['single', 'handful', 'formation'],
   pin: ['place', 'remove'],
+  fan: ['width', 'strength', 'falloff', 'frequency'],
 } as const satisfies Partial<Record<ToolId, readonly string[]>>;
 
 /** 有模式的工具。 */
@@ -179,6 +194,8 @@ export type ToolMode = ToolModeOf<ModalToolId>;
 export type GrabMode = ToolModeOf<'grab'>;
 /** Pin 工具的模式：放（單擊放一顆、拖曳撒 Pin）／拔（單擊拔最近一顆、拖曳當橡皮擦）。 */
 export type PinMode = ToolModeOf<'pin'>;
+/** 電風扇的模式（issue #125）：右鍵＋滾輪調的參數——寬度／強度／衰減／頻率。左鍵不受影響。 */
+export type FanMode = ToolModeOf<'fan'>;
 
 export function isModalTool(tool: ToolId): tool is ModalToolId {
   return tool in TOOL_MODES;
@@ -193,7 +210,8 @@ export function modesOf(tool: ToolId): readonly ToolMode[] {
  * 按下當下定下的手勢分支（issue #122）——「工具＋模式」推出來的，`ToolRouter` 內既有的
  * 各分支原樣沿用，只換掉「目前是哪個分支」的來源：抓取工具的三個模式各自對應原本的
  * 一般操作／大把抓取／編隊抓取，Pin 工具的兩個模式是 `pinPlace`／`pinRemove`（issue #123），
- * 其餘工具就是它自己。
+ * 其餘工具就是它自己——電風扇有模式，但模式只決定滾輪調哪個參數，左鍵手勢都是 `'fan'`
+ * （issue #125）。
  */
 type Behavior =
   'single' | 'handful' | 'formation' | 'pinPlace' | 'pinRemove' | Exclude<ToolId, 'grab' | 'pin'>;
@@ -246,18 +264,36 @@ const SPRAY_ATTEMPTS_PER_SLOT = 12;
 const MAX_SPRAY_ATTEMPTS = 1500;
 export const MAX_SPRAY_PINS_PER_STROKE = 200;
 
-/** 半徑拉霸的範圍（issue #114）——面板拉霸與「右鍵＋滾輪調半徑」共用同一份。 */
-export interface RadiusRange {
+/**
+ * 拉霸的範圍（issue #114 起的半徑拉霸；issue #125 加上電風扇四個參數）——面板拉霸與
+ * 「右鍵＋滾輪調目前模式的數值」共用同一份。
+ */
+export interface ValueRange {
   min: number;
   max: number;
   step: number;
 }
 
 /**
+ * 電風扇四個拉霸的範圍（issue #67；issue #125 從 `JellySandbox` 搬進來，右鍵＋滾輪要夾在
+ * 同一個範圍內）。事後檢視把推力模型從連續力場改成陣風——見 `SimCore.applyFan`：
+ * `strength` 從「每秒加速度」變成「單次陣風的瞬間速度衝量」，範圍跟著重新校準。
+ * `frequency` 是平均每秒陣風次數；下限 0.2（約 5 秒一陣，稀疏陣風）、上限 10（幾乎連續的
+ * 密集陣風，配合高 `strength` 就是颶風）。寬度／衰減程度中點對應 `DEFAULT_FAN_WIDTH`／
+ * `DEFAULT_FAN_FALLOFF_EXPONENT`，拉霸沒被動過時中點顯示的值要跟實際生效的一致。衰減程度
+ * 下限 0.2（避免趨近 0 次方讓衰減幾乎消失、矩形內外力道落差過於突兀）、上限 5（明顯集中在
+ * 風扇正前方）。
+ */
+export const FAN_WIDTH_RANGE: ValueRange = { min: 20, max: 280, step: 5 };
+export const FAN_STRENGTH_RANGE: ValueRange = { min: 200, max: 60000, step: 200 };
+export const FAN_FALLOFF_RANGE: ValueRange = { min: 0.2, max: 5, step: 0.1 };
+export const FAN_FREQUENCY_RANGE: ValueRange = { min: 0.2, max: 10, step: 0.1 };
+
+/**
  * Pin 筆刷半徑拉霸的範圍（issue #123；沿用原本撒 Pin／移除 Pin 半徑的範圍），世界座標
  * 單位。上限 400 ≈ 一般匯入果凍的尺度，一下蓋住整隻。
  */
-export const PIN_BRUSH_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 };
+export const PIN_BRUSH_RADIUS_RANGE: ValueRange = { min: 20, max: 400, step: 10 };
 
 /** `setPinBrushParams` 接受的部分更新（issue #123）——兩個欄位皆可選。 */
 export interface PinBrushParams {
@@ -274,19 +310,71 @@ export interface PinBrushParams {
 export const DEFAULT_HANDFUL_RADIUS = 140;
 
 /** 大把抓取半徑拉霸的範圍（issue #113），世界單位——跟撒 Pin 一致（spec #112）。 */
-export const HANDFUL_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 };
+export const HANDFUL_RADIUS_RANGE: ValueRange = { min: 20, max: 400, step: 10 };
 
 /**
  * 「按住右鍵＋滾輪」能調的數值（issue #114 的「工具半徑」由 issue #122 推廣成「目前模式
- * 的數值」）：抓取／大把的大把抓取半徑、Pin 工具兩個模式共用的 Pin 筆刷半徑（issue #123）。
+ * 的數值」）：抓取／大把的大把抓取半徑、Pin 工具兩個模式共用的 Pin 筆刷半徑（issue #123）、
+ * 電風扇四個模式各自的參數（issue #125）。
  */
-export type ModeValueKey = 'handfulRadius' | 'pinBrushRadius';
+export type ModeValueKey =
+  | 'handfulRadius'
+  | 'pinBrushRadius'
+  | 'fanWidth'
+  | 'fanStrength'
+  | 'fanFalloffExponent'
+  | 'fanFrequency';
 
 /** 各數值的拉霸範圍——面板拉霸與「右鍵＋滾輪」共用同一份。 */
-export const MODE_VALUE_RANGES: Readonly<Record<ModeValueKey, RadiusRange>> = {
+export const MODE_VALUE_RANGES: Readonly<Record<ModeValueKey, ValueRange>> = {
   handfulRadius: HANDFUL_RADIUS_RANGE,
   pinBrushRadius: PIN_BRUSH_RADIUS_RANGE,
+  fanWidth: FAN_WIDTH_RANGE,
+  fanStrength: FAN_STRENGTH_RANGE,
+  fanFalloffExponent: FAN_FALLOFF_RANGE,
+  fanFrequency: FAN_FREQUENCY_RANGE,
 };
+
+/**
+ * 模式以外、會決定「右鍵＋滾輪有沒有數值可調」的開關（issue #135）：編隊模式的每點大把。
+ * 讀值見 `ToolRouter.valueConditions`。
+ */
+type ModeValueCondition = 'perPointHandful';
+
+/**
+ * `MODE_VALUE_KEYS` 的一格：直接是數值，或「某個開關開著才有這個數值」（關著＝沒有數值，
+ * 右鍵＋滾輪照舊縮放）。
+ */
+type ModeValueEntry =
+  ModeValueKey | { readonly key: ModeValueKey; readonly when: ModeValueCondition };
+
+/**
+ * 每個「工具＋模式」用右鍵＋滾輪調哪個數值（issue #125 從 if 串接改成表）；沒列到的模式
+ * （單點）沒有數值可調，右鍵＋滾輪照舊縮放。編隊模式只在每點大把開著時調大把抓取半徑
+ * （issue #135：跟大把模式共用同一條）。
+ */
+const MODE_VALUE_KEYS: {
+  readonly [T in ModalToolId]: Readonly<Partial<Record<ToolModeOf<T>, ModeValueEntry>>>;
+} = {
+  grab: {
+    handful: 'handfulRadius',
+    formation: { key: 'handfulRadius', when: 'perPointHandful' },
+  },
+  pin: { place: 'pinBrushRadius', remove: 'pinBrushRadius' },
+  fan: {
+    width: 'fanWidth',
+    strength: 'fanStrength',
+    falloff: 'fanFalloffExponent',
+    frequency: 'fanFrequency',
+  },
+};
+
+/** 一個可用右鍵＋滾輪調的數值：範圍＋讀寫 `ToolRouter` 內那一個欄位。 */
+interface ModeValueSlot {
+  readonly range: ValueRange;
+  get(): number;
+  set(value: number): void;
+}
 
 /** 目前模式的數值（issue #122）：哪一個、現在多少。 */
 export interface ModeValue {
@@ -298,6 +386,15 @@ export interface ModeValue {
 export interface HandfulParams {
   /** 抓取範圍的世界座標半徑（圓心 = 按下處）。 */
   radius: number;
+}
+
+/** `setFormationParams` 接受的部分更新（issue #135）。 */
+export interface FormationParams {
+  /**
+   * 每點大把（CONTEXT.md「編隊抓取」）：編隊的每個點改成一把大把抓取，半徑共用大把抓取
+   * 那條（`handfulRadius`）。預設關閉。
+   */
+  perPointHandful: boolean;
 }
 
 export interface ToolRouterOptions extends GestureTrackerOptions {
@@ -380,6 +477,11 @@ interface FormationSession extends GestureStart {
    */
   lastWorld: Point;
   attached: readonly { offset: Point; id: string }[];
+  /**
+   * 每點大把（issue #135）：按下當下開著就記下當時的大把抓取半徑，每個點的 `grab`
+   * 與可能的 `tap` 都帶它；關著為 `null`（單點編隊）。之後切開關、改半徑都不影響這一抓。
+   */
+  handfulRadius: number | null;
 }
 
 /**
@@ -445,6 +547,7 @@ export class ToolRouter {
   private readonly modes: { [T in ModalToolId]: ToolModeOf<T> } = {
     grab: TOOL_MODES.grab[0],
     pin: TOOL_MODES.pin[0],
+    fan: TOOL_MODES.fan[0],
   };
   /**
    * 每個進行中的指標在**按下當下**定下的手勢分支（issue #122）——`move`／`up`／`cancel`
@@ -484,6 +587,8 @@ export class ToolRouter {
   private readonly pinRemoveSessions = new Map<PointerId, PinRemoveSession>();
   /** 大把抓取半徑（issue #113）——面板拉霸即時寫入，按下當下拍進 session。 */
   private handfulRadius = DEFAULT_HANDFUL_RADIUS;
+  /** 編隊抓取的每點大把開關（issue #135）——面板開關即時寫入，按下當下拍進 session。 */
+  private formationPerPointHandful = false;
   /** 進行中的大把抓取手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly handfulSessions = new Map<PointerId, HandfulSession>();
   /** 進行中的「點一下」手勢（issue #97），鍵為指標 `id`（`up`/`cancel` 後移除）。 */
@@ -536,23 +641,32 @@ export class ToolRouter {
 
   /**
    * 中鍵單擊（issue #122）：目前工具的模式換成清單裡的下一個（最後一個繞回第一個），
-   * 回報新模式讓呼叫端同步參數卡與游標標籤。目前工具沒有模式就回 `null`、什麼都不做。
+   * 回報新模式讓呼叫端同步參數卡與游標標籤。目前工具沒有模式、或模式被鎖住（定義編隊
+   * 形狀途中，見 `writeMode`）就回 `null`、什麼都不做。
    */
   cycleMode(): ToolMode | null {
     const tool = this.activeTool;
     if (!isModalTool(tool)) return null;
     const list: readonly ToolMode[] = TOOL_MODES[tool];
     const next = list[(list.indexOf(this.modes[tool]) + 1) % list.length]!;
-    this.writeMode(tool, next);
-    return next;
+    return this.writeMode(tool, next) ? next : null;
   }
 
   /**
-   * `modes` 的唯一寫入口。呼叫端（`setMode` 的型別參數、`cycleMode` 從該工具自己的清單
-   * 取值）已保證模式屬於這個工具；TS 對「以聯集鍵寫入對應型別」無法收窄，所以在這裡放寬。
+   * `modes` 的唯一寫入口；回報有沒有真的寫進去。呼叫端（`setMode` 的型別參數、`cycleMode`
+   * 從該工具自己的清單取值）已保證模式屬於這個工具；TS 對「以聯集鍵寫入對應型別」無法
+   * 收窄，所以在這裡放寬。
+   *
+   * 定義編隊形狀途中（issue #135 順帶修 #122 的邊角）抓取工具鎖在編隊模式：不然中鍵或
+   * 模式鈕一切走，定義點的預覽跟著消失、左鍵改走抓取，面板按鈕卻還停在「完成設定」。
+   * 要換模式就先按「完成設定」。
    */
-  private writeMode(tool: ModalToolId, mode: ToolMode): void {
+  private writeMode(tool: ModalToolId, mode: ToolMode): boolean {
+    if (tool === 'grab' && this.formationDefinePoints !== null && mode !== 'formation') {
+      return false;
+    }
     (this.modes as Record<ModalToolId, ToolMode>)[tool] = mode;
+    return true;
   }
 
   /** 這一次按下要走的分支：抓取、Pin 工具看模式，其餘工具就是自己。 */
@@ -619,13 +733,19 @@ export class ToolRouter {
    * Jelly 上、已經送出 `grab` 的點）——`down` 時被 `hitTest` 跳過的偏移點沒有
    * 對應的約束，提示不該把它畫成「也被抓住了」。
    */
-  get formationActiveGroups(): ReadonlyArray<{ anchor: Point; points: readonly Point[] }> {
+  get formationActiveGroups(): ReadonlyArray<{
+    anchor: Point;
+    points: readonly Point[];
+    /** 這一抓按下當下的每點大把半徑（issue #135，範圍圈用）；單點編隊為 `null`。 */
+    handfulRadius: number | null;
+  }> {
     return [...this.formationSessions.values()].map((s) => ({
       anchor: s.lastWorld,
       points: s.attached.map(({ offset }) => ({
         x: s.lastWorld.x + offset.x,
         y: s.lastWorld.y + offset.y,
       })),
+      handfulRadius: s.handfulRadius,
     }));
   }
 
@@ -657,37 +777,99 @@ export class ToolRouter {
     if (params.radius !== undefined) this.handfulRadius = params.radius;
   }
 
-  /** 目前模式（或沒有模式的工具）的數值是哪一個（issue #122）；沒有數值回 `null`。 */
+  /** 面板「每個點用大把抓」開關的即時寫入口（issue #135）——只影響**下一次**按下。 */
+  setFormationParams(params: Partial<FormationParams>): void {
+    if (params.perPointHandful !== undefined) {
+      this.formationPerPointHandful = params.perPointHandful;
+    }
+  }
+
+  /** 每點大把開關目前的狀態（issue #135）——範圍圈與游標標籤用。 */
+  get perPointHandful(): boolean {
+    return this.formationPerPointHandful;
+  }
+
+  /** `MODE_VALUE_KEYS` 裡條件格的開關讀值（issue #135）。 */
+  private readonly valueConditions: { readonly [C in ModeValueCondition]: () => boolean } = {
+    perPointHandful: () => this.formationPerPointHandful,
+  };
+
+  /**
+   * 每個數值的範圍與讀寫口（issue #125：取代原本 `activeValueKey`／`adjustActiveValue`／
+   * `valueOf` 三處 if 串接）——加新的可調數值只要在 `ModeValueKey`、`MODE_VALUE_RANGES`、
+   * `MODE_VALUE_KEYS` 與這張表各補一行。寫入的就是面板拉霸（`setXParams`）寫的同一個欄位。
+   */
+  private readonly modeValues: { readonly [K in ModeValueKey]: ModeValueSlot } = {
+    handfulRadius: this.slot(
+      'handfulRadius',
+      () => this.handfulRadius,
+      (v) => (this.handfulRadius = v),
+    ),
+    pinBrushRadius: this.slot(
+      'pinBrushRadius',
+      () => this.pinBrushRadius,
+      (v) => (this.pinBrushRadius = v),
+    ),
+    fanWidth: this.slot(
+      'fanWidth',
+      () => this.fanWidth,
+      (v) => (this.fanWidth = v),
+    ),
+    fanStrength: this.slot(
+      'fanStrength',
+      () => this.fanStrength,
+      (v) => (this.fanStrength = v),
+    ),
+    fanFalloffExponent: this.slot(
+      'fanFalloffExponent',
+      () => this.fanFalloffExponent,
+      (v) => (this.fanFalloffExponent = v),
+    ),
+    fanFrequency: this.slot(
+      'fanFrequency',
+      () => this.fanFrequency,
+      (v) => (this.fanFrequency = v),
+    ),
+  };
+
+  private slot(key: ModeValueKey, get: () => number, set: (value: number) => void): ModeValueSlot {
+    return { range: MODE_VALUE_RANGES[key], get, set };
+  }
+
+  /**
+   * 目前工具＋模式的數值是哪一個（issue #122；issue #125 改查表；issue #135 加上條件格）；
+   * 沒有數值回 `null`。
+   */
   private activeValueKey(): ModeValueKey | null {
-    const behavior = this.currentBehavior();
-    if (behavior === 'handful') return 'handfulRadius';
-    if (behavior === 'pinPlace' || behavior === 'pinRemove') return 'pinBrushRadius';
-    return null;
+    const tool = this.activeTool;
+    if (!isModalTool(tool)) return null;
+    const keys: Partial<Record<ToolMode, ModeValueEntry>> = MODE_VALUE_KEYS[tool];
+    const entry = keys[this.modes[tool]];
+    if (entry === undefined) return null;
+    if (typeof entry === 'string') return entry;
+    return this.valueConditions[entry.when]() ? entry.key : null;
   }
 
   /** 目前模式的數值與它現在的值（游標標籤用）；沒有數值回 `null`。 */
   get activeValue(): ModeValue | null {
     const key = this.activeValueKey();
-    return key === null ? null : { key, value: this.valueOf(key) };
+    return key === null ? null : { key, value: this.modeValues[key].get() };
   }
 
   /**
    * 「右鍵＋滾輪」調整目前模式的數值（issue #114 的調半徑，issue #122 推廣）：`steps` 格
    * （正 = 放大），每格一個拉霸 step，夾在該拉霸範圍內，回報新值讓呼叫端同步面板與
    * 圓圈。沒有數值的模式回 `null`（「不處理」——呼叫端照舊縮放相機）。跟拉霸一樣只影響
-   * **下一次**按下：進行中的大把抓取 session 已經在按下時記下自己的半徑。
+   * **下一次**按下：進行中的大把抓取 session 已經在按下時記下自己的半徑。電風扇的參數
+   * （issue #125）同理只寫進下一次放置用的欄位；場上風扇的即時更新歸呼叫端（同 `setFanParams`）。
    */
   adjustActiveValue(steps: number): ModeValue | null {
     const key = this.activeValueKey();
     if (key === null) return null;
-    const value = stepRadius(this.valueOf(key), steps, MODE_VALUE_RANGES[key]);
-    if (key === 'handfulRadius') this.handfulRadius = value;
-    else this.pinBrushRadius = value;
+    const slot = this.modeValues[key];
+    const value = stepValue(slot.get(), steps, slot.range);
+    slot.set(value);
     return { key, value };
-  }
-
-  private valueOf(key: ModeValueKey): number {
-    return key === 'handfulRadius' ? this.handfulRadius : this.pinBrushRadius;
   }
 
   down(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
@@ -744,18 +926,26 @@ export class ToolRouter {
       // 還沒定義形狀：編隊模式下的左鍵拖曳不做任何事（spec #121）。
       if (!this.formationOffsets || this.formationOffsets.length === 0) return;
       const session = this.nextFormationSession++;
+      // 每點大把（issue #135）：開關與半徑在按下當下定下；每個點的 `grab` 帶同一個
+      // `handfulRadius`（沿用大把抓取的欄位，不新增事件種類），各自只抓落點那塊 Jelly。
+      const handfulRadius = this.formationPerPointHandful ? this.handfulRadius : null;
       const attached: { offset: Point; id: string }[] = [];
       this.formationOffsets.forEach((offset, index) => {
         const point = { x: world.x + offset.x, y: world.y + offset.y };
         if (this.hitTest && !this.hitTest(point)) return; // 落在果凍外——跳過這一點，其餘照常
         const formationId = `formation:${session}:${index}`;
         attached.push({ offset, id: formationId });
-        this.emit({ type: 'grab', id: formationId, x: point.x, y: point.y });
+        this.emit(
+          handfulRadius === null
+            ? { type: 'grab', id: formationId, x: point.x, y: point.y }
+            : { type: 'grab', id: formationId, x: point.x, y: point.y, handfulRadius },
+        );
       });
       if (attached.length > 0) {
         this.formationSessions.set(id, {
           lastWorld: { x: world.x, y: world.y },
           attached,
+          handfulRadius,
           startX: screenX,
           startY: screenY,
           startT: timeMs,
@@ -951,12 +1141,20 @@ export class ToolRouter {
    * 「按下當下定下分支」的問題）：
    *
    * - Jelly：點中某塊（`hitTest`）→ `onJellyContextMenu` 開選單；點空白不開。
-   * - 其他工具目前忽略（#125 的電風扇會在這裡接「點在風扇上＝移除」）。
+   * - 電風扇（issue #125）：落在場上風扇的矩形內（`getFan` + `isPointInFanRect`，跟左鍵
+   *   「拖曳既有風扇」同一個判定）→ emit `clearFan`，跟「移除風扇」按鈕同一個事件；點在
+   *   風扇外、或場上沒有風扇，什麼都不做。
+   * - 其他工具忽略。
    */
   rightClick(world: Point, screenX: number, screenY: number): void {
     if (this.activeTool === 'jelly') {
       if (this.hitTest && !this.hitTest(world)) return;
       this.onJellyContextMenu?.(world, { x: screenX, y: screenY });
+      return;
+    }
+    if (this.activeTool === 'fan') {
+      const fan = this.getFan?.() ?? null;
+      if (fan && isPointInFanRect(fan, world)) this.emit({ type: 'clearFan' });
     }
   }
 
@@ -1114,12 +1312,12 @@ export class ToolRouter {
     const session = this.formationSessions.get(id);
     if (!session) return;
     if (!isTap(session, screenX, screenY, timeMs, this.config)) return;
+    const radius = session.handfulRadius;
     for (const { offset } of session.attached) {
-      this.emit({
-        type: 'tap',
-        x: session.startWorld.x + offset.x,
-        y: session.startWorld.y + offset.y,
-      });
+      const x = session.startWorld.x + offset.x;
+      const y = session.startWorld.y + offset.y;
+      // 每點大把（issue #135）：每個點各打一次範圍 Tap，半徑＝按下當下那把的半徑。
+      this.emit(radius === null ? { type: 'tap', x, y } : { type: 'tap', x, y, radius });
     }
   }
 
@@ -1204,7 +1402,22 @@ function nearestPinWithin(
   return best;
 }
 
-/** 半徑往上／下走 `steps` 格拉霸 step，夾在範圍內（issue #114）。 */
-function stepRadius(radius: number, steps: number, range: RadiusRange): number {
-  return Math.min(range.max, Math.max(range.min, radius + steps * range.step));
+/**
+ * 數值往上／下走 `steps` 格拉霸 step，夾在範圍內（issue #114 的調半徑；issue #125 推廣）。
+ * 結果對齊拉霸的格點（`min + k·step`）並捨到 step 的小數位數：電風扇衰減／頻率的 step 是
+ * 0.1，連續相加會累積浮點誤差（0.2 + 0.1 = 0.30000000000000004），游標標籤會顯示出來、
+ * 也會跟拉霸自己對齊後的值對不上。
+ */
+function stepValue(value: number, steps: number, range: ValueRange): number {
+  const clamped = Math.min(range.max, Math.max(range.min, value + steps * range.step));
+  const snapped = range.min + Math.round((clamped - range.min) / range.step) * range.step;
+  const rounded = Number(snapped.toFixed(decimalsOf(range.step)));
+  return Math.min(range.max, Math.max(range.min, rounded));
+}
+
+/** `step` 的小數位數（`0.1` → 1、`10` → 0）。 */
+function decimalsOf(step: number): number {
+  const text = String(step);
+  const dot = text.indexOf('.');
+  return dot < 0 ? 0 : text.length - dot - 1;
 }

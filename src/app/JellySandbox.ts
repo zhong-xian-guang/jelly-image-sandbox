@@ -141,6 +141,7 @@ import {
   type CameraState,
   type CanvasSize,
   createCameraState,
+  fitTransform,
   screenToWorld,
   updateCamera,
   worldToScreen,
@@ -161,6 +162,10 @@ import {
   DEFAULT_PIN_BRUSH_RADIUS,
   DEFAULT_SPRAY_SPACING,
   DEFAULT_HANDFUL_RADIUS,
+  FAN_FALLOFF_RANGE,
+  FAN_FREQUENCY_RANGE,
+  FAN_STRENGTH_RANGE,
+  FAN_WIDTH_RANGE,
   HANDFUL_RADIUS_RANGE,
   PIN_BRUSH_RADIUS_RANGE,
   PointerInput,
@@ -202,9 +207,11 @@ import {
 } from './clipFile';
 import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { CanvasHover } from './CanvasHover';
+import { CleanView } from './CleanView';
 import { ContextMenu, jellyMenuItems, type JellyMenuItemId } from './ContextMenu';
 import { ControlPanel } from './ControlPanel';
 import { CursorLabel, cursorLabelText, type FormationShapeState } from './CursorLabel';
+import { KeyboardShortcuts } from './KeyboardShortcuts';
 import { canvasToPng, drawDefaultTexture } from './defaultJelly';
 import {
   DEMOS,
@@ -220,8 +227,13 @@ import { DropImportInput } from './DropImportInput';
 import { clampFanIconRadiusPx, FanOverlay } from './FanOverlay';
 import { FileImportInput } from './FileImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
+import { FormationDefineHint } from './FormationDefineHint';
 import { FormationOverlay, type FormationOverlayGroup } from './FormationOverlay';
+import { HandfulRanges, type HandfulRangeCircle } from './HandfulRanges';
+import { HelpOverlay } from './HelpOverlay';
+import { visibleHints, type HintKey, type HintVisibility } from './hintVisibility';
 import { DEFAULT_MESH_DENSITY, halveMeshDensity, MESH_DENSITY_RANGE } from './meshDensity';
+import { browserStorage } from './panelLayout';
 import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
 import {
@@ -269,24 +281,10 @@ const DEFAULT_SOFTNESS = 0.5;
  */
 const GRAVITY_RANGE = { min: 0, max: 10000, step: 100 };
 /**
- * 電風扇四個滑桿的範圍（issue #67；事後檢視把推力模型從連續力場改成陣風——
- * 見 `SimCore.applyFan`：`strength` 從「每秒加速度」變成「單次陣風的瞬間
- * 速度衝量」，範圍跟著重新校準，不再沿用連續模型時代的量級。`frequency`
- * 是新增的第四個滑桿，平均每秒陣風次數；下限 0.2（約 5 秒一陣，稀疏陣風）、
- * 上限 10（幾乎連續的密集陣風，配合高 `strength` 就是颶風）。寬度／衰減程度
- * 中點對應 `ToolRouter` 的 `DEFAULT_FAN_WIDTH`／`DEFAULT_FAN_FALLOFF_EXPONENT`，
- * 同 `TAP_STRENGTH_RANGE` 的理由。衰減程度下限 0.2（避免趨近 0 次方讓衰減
- * 幾乎消失、矩形內外力道落差過於突兀）、上限 5（明顯集中在風扇正前方）。
- */
-const FAN_WIDTH_RANGE = { min: 20, max: 280, step: 5 };
-const FAN_STRENGTH_RANGE = { min: 200, max: 60000, step: 200 };
-const FAN_FALLOFF_RANGE = { min: 0.2, max: 5, step: 0.1 };
-const FAN_FREQUENCY_RANGE = { min: 0.2, max: 10, step: 0.1 };
-/**
  * 撒 Pin 間距滑桿的範圍（issue #69），世界座標單位。下限 12 是「撒得很密」的實用
  * 下限——再小只是讓 Pin 疊在同一批 Particle 上，手感沒有變化、求解器卻要多扛
- * 幾十個硬約束。兩條半徑拉霸（大把抓取半徑、Pin 筆刷半徑）的範圍住在 `ToolRouter`
- * （issue #114：右鍵＋滾輪調半徑要夾在同一個範圍內）。
+ * 幾十個硬約束。右鍵＋滾輪調得到的拉霸（大把抓取半徑、Pin 筆刷半徑、電風扇四個參數）
+ * 的範圍住在 `ToolRouter`（issue #114 / #125：右鍵＋滾輪要夾在同一個範圍內）。
  */
 const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
 /**
@@ -299,23 +297,6 @@ const IMPORT_SIZE_RANGE = { min: 128, max: 1024, step: 16 };
 const DEFAULT_IMPORT_SIZE = 512;
 /** 內建預設果凍在來源圖庫裡的 id（啟動時、「清空全部」後都重新註冊成它）。 */
 const DEFAULT_SOURCE_ID = 'src/1';
-/**
- * 會被「播放時隱藏提示」（issue #71）蓋到的提示層，每層一個 key——即面板上那六顆
- * 顯示開關（issue #113 加上大把抓取範圍圈 `handfulRange`）。Pin 工具的筆刷
- * 圓圈刻意不在此列，理由見 `JellySandbox.applyHintVisibility`。
- */
-type HintKey = 'wireframe' | 'pins' | 'fanRange' | 'fanIcon' | 'formation' | 'handfulRange';
-/** 各提示層的顯示狀態：可能是使用者的意圖（`hintIntent`），也可能是算完壓下之後的實際值（`effectiveHints`）。 */
-type HintVisibility = Record<HintKey, boolean>;
-/** 播放中被壓下時的實際狀態——全域開關沒有逐層覆寫，所以壓下就是全滅。 */
-const ALL_HINTS_HIDDEN: Readonly<HintVisibility> = {
-  wireframe: false,
-  pins: false,
-  fanRange: false,
-  fanIcon: false,
-  formation: false,
-  handfulRange: false,
-};
 
 /**
  * 這幾層提示是 DOM 覆蓋層，每幀要把世界座標投影成螢幕座標才畫得出來——都看不到
@@ -401,11 +382,12 @@ export class JellySandbox {
    */
   private readonly brushCursor: BrushCursor;
   /**
-   * 大把抓取的範圍圈（issue #113）——幾何沿用筆刷圓圈（另一顆 `BrushCursor`、自己的
-   * 顏色），但它是**提示**：有自己的顯示開關、受「播放時隱藏提示」壓下（見
-   * `applyHandfulRangeVisibility`），所以不跟 Pin 工具共用 `brushCursor`。
+   * 大把抓取的範圍圈（issue #113；issue #135 起可多顆：編隊每點大把每個點一顆）——幾何
+   * 沿用筆刷圓圈（`BrushCursor`、自己的顏色），但它是**提示**：有自己的顯示開關、受
+   * 「播放時隱藏提示」壓下（見 `applyHandfulRangeVisibility`），所以不跟 Pin 工具共用
+   * `brushCursor`。每幀畫哪幾顆見 `handfulRangeCircles`。
    */
-  private readonly handfulRange: BrushCursor;
+  private readonly handfulRange: HandfulRanges;
   /**
    * 指標在畫布上的懸停位置（issue #79 / V2 T3-8）——`PointerInput` 只追按下之後
    * 的移動，「按下去之前先讓使用者看到這一下會做什麼」的兩個預覽（筆刷圓圈、
@@ -424,6 +406,17 @@ export class JellySandbox {
    * 作用在點中的那一塊（見 `openJellyMenu`）。切換工具時關掉。
    */
   private readonly jellyMenu: ContextMenu;
+  /** 「?」操作說明浮層（issue #132）——第一次打開網頁自動出現一次，之後按側欄標題列的「?」。 */
+  private readonly helpOverlay: HelpOverlay;
+  /** 定義編隊形狀時畫布上方那行說明（issue #132）——是提示，見 `updateFormationDefineHint`。 */
+  private readonly formationDefineHint: FormationDefineHint;
+  /**
+   * 乾淨畫面（issue #130）：進入時藏起側欄、播放控制條、相機按鈕、匯入提示字，提示與游標回饋
+   * 由各自的出口多看一個 `cleanView.isActive`（見 `applyCleanView`）。不存檔。
+   */
+  private readonly cleanView: CleanView;
+  /** 鍵盤快捷鍵（issue #126）：1–4 切工具、播放中空白鍵暫停／繼續。在 window 上聽，`destroy` 要解掉。 */
+  private readonly keyboardShortcuts: KeyboardShortcuts;
   private readonly demoRunner = new DemoRunner();
   private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
@@ -452,8 +445,8 @@ export class JellySandbox {
   /** 目前邊界的外框幾何（給 `JellyRenderer.setBoundaryFrame` 畫）：`walled` 是 AABB、`floor` 是地板 y、`infinite` 為 `null`。 */
   private boundaryFrame: BoundaryFrame | null = null;
   /**
-   * 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，筆刷／Pin 視覺靠這個判定；
-   * `attachInputHandlers` 的 `applyInput` 也靠它決定要不要過 Pin 工具轉接（issue #115）。
+   * 目前工具（issue #65；issue #122 起是側欄工具列的四個工具 grab／pin／fan／jelly，ADR-0016）
+   * ——`PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠這個判定。
    */
   private activeTool: ToolId = DEFAULT_TOOL;
   /**
@@ -648,7 +641,11 @@ export class JellySandbox {
     this.controlPanel = new ControlPanel({
       initial: {
         activeTool: this.activeTool,
-        toolModes: { grab: this.input.modeOf('grab'), pin: this.input.modeOf('pin') },
+        toolModes: {
+          grab: this.input.modeOf('grab'),
+          pin: this.input.modeOf('pin'),
+          fan: this.input.modeOf('fan'),
+        },
         showCursorLabel: this.showCursorLabel,
         boundary: this.boundaryMode,
         softness: DEFAULT_SOFTNESS,
@@ -669,6 +666,7 @@ export class JellySandbox {
         spraySpacing: this.spraySpacing,
         handfulRadius: this.handfulRadius,
         showHandfulRange: this.hintIntent.handfulRange,
+        formationPerPointHandful: this.input.perPointHandful,
         hideHintsDuringPlayback: this.hideHintsDuringPlayback,
         importSize: this.importSize,
         meshDensity: this.meshDensity,
@@ -705,6 +703,9 @@ export class JellySandbox {
       onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
       onHandfulRadiusChange: (radius) => this.setHandfulRadius(radius),
       onShowHandfulRangeChange: (visible) => this.setHintVisible('handfulRange', visible),
+      // 每點大把（issue #135）：只影響下一次按下；範圍圈與游標標籤每幀自己重算。
+      onFormationPerPointHandfulChange: (enabled) =>
+        this.input.setFormationParams({ perPointHandful: enabled }),
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onImportSizeChange: (size) => this.setImportSize(size),
       onMeshDensityChange: (density) => this.setMeshDensity(density),
@@ -742,6 +743,9 @@ export class JellySandbox {
       onTrackGroupsChange: (trackId, groupIds) => this.setTrackGroups(trackId, groupIds),
     });
     root.appendChild(this.controlPanel.element);
+    // 畫布上的播放控制條（底部中央）與相機按鈕（右下角）——issue #129；只吃自己範圍內的點擊。
+    root.appendChild(this.controlPanel.playbackBar);
+    root.appendChild(this.controlPanel.cameraControls);
 
     this.pinMarkers = new PinMarkers();
     root.appendChild(this.pinMarkers.element);
@@ -751,8 +755,7 @@ export class JellySandbox {
     root.appendChild(this.formationOverlay.element);
     this.brushCursor = new BrushCursor();
     root.appendChild(this.brushCursor.element);
-    this.handfulRange = new BrushCursor();
-    this.handfulRange.setVariant('handful');
+    this.handfulRange = new HandfulRanges();
     root.appendChild(this.handfulRange.element);
     this.canvasHover = new CanvasHover(root, {
       isCanvas: (target) => target === this.renderer.canvas,
@@ -761,6 +764,32 @@ export class JellySandbox {
     root.appendChild(this.cursorLabel.element);
     this.jellyMenu = new ContextMenu({ dismissBlockTarget: this.renderer.canvas });
     root.appendChild(this.jellyMenu.element);
+    this.formationDefineHint = new FormationDefineHint();
+    root.appendChild(this.formationDefineHint.element);
+    // 操作說明（issue #132）：「?」鈕放在側欄標題列「收起側欄」左邊；第一次打開網頁自動出現。
+    this.helpOverlay = new HelpOverlay({ storage: browserStorage() });
+    root.appendChild(this.helpOverlay.element);
+    this.controlPanel.titleBarActions.prepend(this.helpOverlay.createOpenButton());
+    this.helpOverlay.showIfFirstVisit();
+    // 乾淨畫面（issue #130）：進入鈕放在標題列「?」左邊；離開鈕浮在畫布左上角。
+    this.cleanView = new CleanView({
+      root,
+      hide: [
+        this.controlPanel.element,
+        this.controlPanel.playbackBar,
+        this.controlPanel.cameraControls,
+        this.importHint,
+      ],
+      onChange: () => this.applyCleanView(),
+      isEscapeClaimed: () => this.jellyMenu.isOpen,
+    });
+    root.appendChild(this.cleanView.element);
+    this.controlPanel.titleBarActions.prepend(this.cleanView.createEnterButton());
+    this.keyboardShortcuts = new KeyboardShortcuts({
+      selectTool: (tool) => this.setActiveTool(tool),
+      isPlaying: () => this.demoRunner.isRunning,
+      togglePause: () => this.togglePause(),
+    });
     this.applyToolVisuals();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
@@ -811,6 +840,10 @@ export class JellySandbox {
     this.handfulRange.destroy();
     this.cursorLabel.destroy();
     this.jellyMenu.destroy(); // 開著時在 window 上掛了監聽
+    this.helpOverlay.destroy(); // 開著時在 window 上掛了 Esc 監聽
+    this.cleanView.destroy(); // 乾淨畫面中在 document／root 上掛了監聽
+    this.formationDefineHint.destroy();
+    this.keyboardShortcuts.destroy(); // 在 window 上掛了鍵盤監聽
     this.input.destroy();
     this.cameraInput.destroy();
     this.renderer.destroy();
@@ -824,7 +857,7 @@ export class JellySandbox {
   /**
    * 「框住果凍」按鈕（issue #14）——一次性緩動 fit 當前 bbox。純一次性動作，
    * 不碰「鎖定跟隨」狀態（`updateCamera` 的 `frame` 指令不改 `followEnabled`），
-   * 按這顆鈕不會讓控制面板的「鎖定跟隨」勾選框跟實際狀態對不上。
+   * 按這顆鈕不會讓畫布右下角的「鎖定跟隨」切換鈕跟實際狀態對不上。
    */
   frameJelly(): void {
     this.emitCamera({ type: 'frame' });
@@ -1186,7 +1219,7 @@ export class JellySandbox {
   /**
    * 集中處理鎖定狀態變化，`frame()` 每幀同步一次時才不會對沒變的按鈕重複寫
    * `disabled`。`locked` 等同「Demo／Track 正在播放」——同步驅動 issue #34 的
-   * 播放狀態列（暫停鈕＋秒數讀出只在播放中出現），並在播放結束時把暫停旗標
+   * 播放控制條（issue #129：暫停鈕只在播放中可按、秒數讀數開始／結束時歸零），並在播放結束時把暫停旗標
    * 強制歸零，下一次播放不會殘留上一輪的定格狀態。
    *
    * 同時是「播放時隱藏提示」（issue #71）的唯一觸發點：開始播放時壓下所有提示、
@@ -1205,7 +1238,7 @@ export class JellySandbox {
   /**
    * 「⏸ 暫停／▶ 繼續」切換鈕（issue #34）——只在播放中有作用（沒在播放時
    * `demoRunner.isRunning` 為 false，直接忽略，對應「暫停鈕無作用」的驗收條件；
-   * 面板那邊此時整列也是隱藏的）。
+   * 播放控制條上的暫停鈕此時也是灰的）。
    */
   private togglePause(): void {
     if (!this.demoRunner.isRunning) return;
@@ -1227,8 +1260,8 @@ export class JellySandbox {
    *    網格後，還沒播完的排程繼續把事件砸進去（看起來像「重設沒生效」，或讓舊
    *    網格算的座標砸進新網格）。
    * 2. `setPlaybackLocked(false)` 解鎖被播放鎖住的所有控制項（Demo 鈕、開始錄製、
-   *    ▶ 播放、錄製目標選擇器、Track 清單編輯、群組區），並把暫停旗標歸零、收起
-   *    播放狀態列（見 `setPlaybackLocked`）。
+   *    ▶ 播放、錄製目標選擇器、Track 清單編輯、群組區），並把暫停旗標歸零、播放
+   *    控制條回到閒置（見 `setPlaybackLocked`）。
    * 3. 仍在進行中的錄製一併中斷並**丟棄**（不進清單）——「中斷」不是「存檔」。
    *
    * 差別只在呼叫端各自接的下一步：`resetSim` 呼 `world.reset()` 但**保留** Track／
@@ -1360,7 +1393,8 @@ export class JellySandbox {
     this.pinMarkers.setRemovable(this.isPinMode('remove'));
     const brush = this.brushFor();
     if (brush) this.brushCursor.setVariant(brush.variant);
-    this.brushCursor.setActive(brush !== null);
+    // 乾淨畫面（issue #130）連游標回饋都藏，工具與模式不動。
+    this.brushCursor.setActive(brush !== null && !this.cleanView.isActive);
     this.applyHandfulRangeVisibility();
   }
 
@@ -1404,13 +1438,16 @@ export class JellySandbox {
   }
 
   /**
-   * 「目前工具」選擇器變更（issue #65 / V2 T3-1）——轉發給 `PointerInput.setActiveTool`；
-   * `activeTool` 另外存一份給重新匯入圖片後換綁新 canvas 時重套（見 `attachInputHandlers`
-   * 呼叫處）。切工具會改變游標／標記／圓圈的視覺回饋，所以要跟著重算。
+   * 目前工具變更（issue #65 / V2 T3-1）——側欄工具列（`onToolChange`，issue #122 起，ADR-0016）
+   * 與數字鍵 1–4（issue #126）都走這裡。轉發給 `PointerInput.setActiveTool`（只影響下一次按下）；
+   * `activeTool` 另外存一份，因為 `PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠它
+   * 判定。工具列高亮與參數卡也在這裡同步（從工具列按下時面板自己已經切過，重設一次無妨）。切工具
+   * 會改變游標／標記／圓圈的視覺回饋，所以要跟著重算。
    */
   private setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
     this.input.setActiveTool(tool);
+    this.controlPanel.setActiveTool(tool);
     this.jellyMenu.close(); // Jelly 右鍵選單在切換工具時關閉（issue #124）
     this.applyToolVisuals();
   }
@@ -1422,7 +1459,9 @@ export class JellySandbox {
    */
   private setToolMode(tool: ModalToolId, mode: ToolMode): void {
     this.input.setMode(tool, mode);
-    this.controlPanel.setToolMode(tool, mode);
+    // 定義編隊形狀途中抓取工具鎖在編隊（issue #135，見 `ToolRouter.writeMode`）：模式鈕
+    // 按了也切不走，面板高亮照實際的模式回填。
+    this.controlPanel.setToolMode(tool, this.input.modeOf(tool));
     this.applyToolVisuals();
   }
 
@@ -1458,10 +1497,42 @@ export class JellySandbox {
     this.input.beginFormationDefine();
   }
 
+  /**
+   * 定義編隊形狀時畫布上方那行說明（issue #132；spec #127「操作說明」）。它是提示：「播放時
+   * 隱藏提示」壓下時、乾淨畫面中（issue #130）一起藏。只在編隊模式下顯示——比照
+   * 定義中的形狀標記（`formationOverlayGroups`），切去別的工具時點畫布不會加點，說明也不該在。
+   */
+  private updateFormationDefineHint(): void {
+    this.formationDefineHint.setVisible(
+      this.input.isDefiningFormation &&
+        this.isGrabMode('formation') &&
+        !this.hintsSuppressed &&
+        !this.cleanView.isActive,
+    );
+  }
+
+  /**
+   * 進出乾淨畫面後（issue #130）：介面元素 `CleanView` 自己藏好了，這裡把「疊在各自開關上」的
+   * 東西重算一次——提示（`effectiveHints`）、編隊定義說明、筆刷圓圈、游標標籤。使用者的開關意圖
+   * 一個都不動，所以離開時各自回到進入前的樣子。進入時順手關掉開著的右鍵選單。
+   */
+  private applyCleanView(): void {
+    if (this.cleanView.isActive) this.jellyMenu.close();
+    this.applyHintVisibility();
+    this.updateFormationDefineHint();
+    this.applyToolVisuals();
+    this.applyCursorLabelEnabled();
+  }
+
   /** 「顯示游標標籤」開關（issue #122）。 */
   private setShowCursorLabel(visible: boolean): void {
     this.showCursorLabel = visible;
-    this.cursorLabel.setEnabled(visible);
+    this.applyCursorLabelEnabled();
+  }
+
+  /** 游標標籤實際開不開＝使用者的開關 且 不在乾淨畫面（issue #130）；開關本身不動。 */
+  private applyCursorLabelEnabled(): void {
+    this.cursorLabel.setEnabled(this.showCursorLabel && !this.cleanView.isActive);
   }
 
   /**
@@ -1484,11 +1555,12 @@ export class JellySandbox {
   }
 
   /**
-   * 大把抓取範圍圈（issue #113）顯示與否＝抓取工具的大把模式 且 這層提示實際上可見
-   * （使用者開著、沒被播放壓下）。「切工具」「切模式」與「提示可見性變了」都呼叫這裡。
+   * 大把抓取範圍圈（issue #113）整層顯示與否＝這層提示實際上可見（使用者開著、沒被播放
+   * 壓下）。「切工具」「切模式」與「提示可見性變了」都呼叫這裡；目前模式該畫哪幾顆
+   * （大把模式一顆、編隊每點大把每個點一顆，issue #135）由 `handfulRangeCircles` 每幀決定。
    */
   private applyHandfulRangeVisibility(): void {
-    this.handfulRange.setActive(this.isGrabMode('handful') && this.effectiveHints().handfulRange);
+    this.handfulRange.setVisible(this.effectiveHints().handfulRange);
   }
 
   /**
@@ -1548,8 +1620,9 @@ export class JellySandbox {
   /**
    * 按住右鍵＋滾輪（issue #114，`CameraInput` 呼叫；issue #122 從「調工具半徑」推廣成
    * 「調目前模式的數值」）：目前模式有數值就由 `ToolRouter` 增減並夾在範圍內，新值走跟
-   * 拉霸同一條路（`setXRadius`：沙盒狀態＝圓圈大小 + `ToolRouter`），再灌回面板拉霸。
-   * 回傳 `false`（沒有數值，例如單點、編隊模式）時相機照舊縮放。
+   * 拉霸同一條路（`setXRadius`：沙盒狀態＝圓圈大小 + `ToolRouter`；電風扇四個參數走
+   * `setFanX`，issue #125：同時即時套用到場上的風扇、錄製中照樣錄進 Track），再灌回面板拉霸。
+   * 回傳 `false`（沒有數值，例如單點、沒開每點大把的編隊模式）時相機照舊縮放。
    */
   private adjustModeValue(steps: number): boolean {
     const adjusted = this.input.adjustActiveValue(steps);
@@ -1558,6 +1631,10 @@ export class JellySandbox {
     const setValue: Record<ModeValueKey, (v: number) => void> = {
       pinBrushRadius: (v) => this.setPinBrushRadius(v),
       handfulRadius: (v) => this.setHandfulRadius(v),
+      fanWidth: (v) => this.setFanWidth(v),
+      fanStrength: (v) => this.setFanStrength(v),
+      fanFalloffExponent: (v) => this.setFanFalloffExponent(v),
+      fanFrequency: (v) => this.setFanFrequency(v),
     };
     setValue[key](value);
     this.controlPanel.setModeValue(key, value);
@@ -1648,8 +1725,9 @@ export class JellySandbox {
   /**
    * 所有「沙盒自己發的模擬事件」的單一出口（issue #95 收攏）：送進 `world.applyInput`，
    * 同時 `trackRecorder.record`（no-op 除非正在錄製）——ADR-0005「所有影響模擬的輸入
-   * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件另有
-   * `attachInputHandlers` 裡的派送點（先過 Pin 工具轉接），做的是同樣兩件事。
+   * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件（`PointerInput`
+   * 的 `applyInput`，見 `attachInputHandlers`）也直接走這裡——issue #123 起 Pin 工具由
+   * `ToolRouter` 直送，不再另經 Pin 工具轉接。
    */
   private dispatchInput(event: InputEvent): void {
     this.world.applyInput(event);
@@ -1689,19 +1767,23 @@ export class JellySandbox {
 
   /**
    * 每層提示「現在實際上該不該顯示」（issue #71）——沒被壓下時就是使用者的意圖
-   * 原樣；被壓下時全體隱藏（這個開關是全域的，沒有逐層的覆寫，見 issue #64
-   * Out of Scope）。`applyHintVisibility`（推給各層）與 `frame()`（決定要不要花
-   * 力氣算每幀的螢幕座標投影）共用這一份，兩邊才不會各判斷一次而分岔。
+   * 原樣；被播放（`hintsSuppressed`）或乾淨畫面（issue #130）壓下時全體隱藏（這個開關是
+   * 全域的，沒有逐層的覆寫，見 issue #64 Out of Scope；規則見 `visibleHints`）。
+   * `applyHintVisibility`（推給各層）與 `frame()`（決定要不要花力氣算每幀的螢幕座標投影）
+   * 共用這一份，兩邊才不會各判斷一次而分岔。
    */
   private effectiveHints(): Readonly<HintVisibility> {
-    return this.hintsSuppressed ? ALL_HINTS_HIDDEN : this.hintIntent;
+    return visibleHints(this.hintIntent, {
+      playback: this.hintsSuppressed,
+      cleanView: this.cleanView.isActive,
+    });
   }
 
   /**
    * 把 `effectiveHints()` 推到各個提示層（issue #71）——所有「提示的顯示狀態可能
    * 變了」的路徑都收斂到這一個出口：`setHintVisible`（五顆開關）、
    * `setHideHintsDuringPlayback`、播放開始／結束（`setPlaybackLocked`）、重新
-   * 匯入圖片換新 Renderer（`replaceJelly`）。日後多一層提示，要動的是
+   * 匯入圖片換新 Renderer（`replaceJelly`）、進出乾淨畫面（`applyCleanView`）。日後多一層提示，要動的是
    * `HintKey`／`hintIntent` 的初始值、這裡一行、以及（若它需要每幀投影）
    * `needsHintProjection`——不必回頭找散在各處的旗標。
    *
@@ -2259,7 +2341,7 @@ export class JellySandbox {
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
       adjustModeValue: (steps) => this.adjustModeValue(steps),
       onMiddleClick: () => this.cycleMode(), // 中鍵單擊輪替模式（issue #122）
-      // 右鍵單擊交給目前工具（issue #124）：Jelly 開選單，其他工具目前忽略。
+      // 右鍵單擊交給目前工具（issue #124 / #125）：Jelly 開選單、電風扇點在風扇上＝移除。
       onRightClick: (world, sx, sy) => input.rightClick(world, sx, sy),
     });
     return { input, cameraInput };
@@ -2323,6 +2405,8 @@ export class JellySandbox {
     this.updateBrushCursor();
     // 游標標籤（issue #122）同理：游標回饋，跟著指標、不跟著暫停定格。
     this.updateCursorLabel();
+    // 編隊形狀定義中的說明（issue #132）：暫停中也可能正在定義，一樣排在暫停守衛之前。
+    this.updateFormationDefineHint();
     // 「生成 Jelly」的禁止游標跟著指標位置與邊界每幀重算（issue #97），理由同上：
     // 游標不該落後指標，所以一樣排在暫停守衛之前。
     this.applyCanvasCursor();
@@ -2382,10 +2466,15 @@ export class JellySandbox {
         clampedElapsed,
       );
     }
-    // 「鎖定跟隨」勾選框同步到相機實際狀態（issue #36）——相機軌播放的 `setState`
-    // 硬切、錄進去的 `setFollow`，或 `playAll` 重設鏡頭都會在使用者沒點勾選框時
+    // 「鎖定跟隨」切換鈕同步到相機實際狀態（issue #36；issue #129 搬到畫布右下角）——相機軌
+    // 播放的 `setState` 硬切、錄進去的 `setFollow`，或 `playAll` 重設鏡頭都會在使用者沒按鈕時
     // 改動 `followEnabled`，不同步就會脫鉤。`setFollowLocked` 值沒變不寫 DOM。
     this.controlPanel.setFollowLocked(!this.cameraState.followEnabled);
+    // 縮放倍率讀數（issue #129）：相對「框住果凍」／自動跟隨的 zoom-to-fit 錨點——
+    // 框好時是 ×1.0，手動拉近兩倍是 ×2.0。
+    this.controlPanel.setZoomFactor(
+      this.cameraState.transform.scale / fitTransform(this.lastBbox, this.canvasSize()).scale,
+    );
 
     // 算繪端跟 World 的塊集合同步（新增／移除／順序），再逐塊上傳位置（issue #95）。
     this.syncRenderer();
@@ -2449,11 +2538,48 @@ export class JellySandbox {
     if (brush) {
       this.brushCursor.setRadiusPx(brush.radius * this.cameraState.transform.scale);
     }
-    // 大把抓取範圍圈（issue #113）：同一套幾何；拖曳中 `canvasHover` 照樣更新，圈跟著游標。
-    if (this.isGrabMode('handful')) {
-      this.handfulRange.setPosition(this.canvasHover.point);
-      this.handfulRange.setRadiusPx(this.handfulRadius * this.cameraState.transform.scale);
+    this.handfulRange.update(this.handfulRangeCircles());
+  }
+
+  /**
+   * 這一幀的大把抓取範圍圈（issue #113；issue #135 加上編隊的每點大把）：
+   *
+   * - **大把模式**：一顆，在游標處；拖曳中 `canvasHover` 照樣更新，圈跟著游標。
+   * - **編隊拖曳中**：每個這一抓真的抓到的點各一顆，半徑是按下當下的那個
+   *   （`formationActiveGroups[].handfulRadius`；單點編隊的那一抓不畫）。按下之後才切走
+   *   模式或關掉開關，這一抓仍照畫到放開——跟 `formationOverlayGroups` 同一條規則。
+   * - **編隊＋每點大把、沒有進行中的一抓**：定義形狀中畫在已經點下的每個點上；否則畫在
+   *   游標＋各偏移的位置（跟形狀預覽同一組點）。
+   *
+   * 半徑是世界座標，每幀換算成目前縮放下的螢幕像素。
+   */
+  private handfulRangeCircles(): HandfulRangeCircle[] {
+    const scale = this.cameraState.transform.scale;
+    const canvasSize = this.canvasSize();
+    const circleAt = (p: Point, radius: number): HandfulRangeCircle => ({
+      ...worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y),
+      radiusPx: radius * scale,
+    });
+    const hover = this.canvasHover.point;
+    const active = this.input.formationActiveGroups;
+    const circles: HandfulRangeCircle[] = [];
+    for (const group of active) {
+      const radius = group.handfulRadius;
+      if (radius !== null) for (const p of group.points) circles.push(circleAt(p, radius));
     }
+    if (this.isGrabMode('handful')) {
+      if (hover) circles.push({ x: hover.x, y: hover.y, radiusPx: this.handfulRadius * scale });
+    } else if (this.isGrabMode('formation') && this.input.perPointHandful && active.length === 0) {
+      const points = this.input.isDefiningFormation
+        ? this.input.formationDefinePreview
+        : hover
+          ? this.input.formationPreviewAt(
+              screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y),
+            )
+          : [];
+      for (const p of points) circles.push(circleAt(p, this.handfulRadius));
+    }
+    return circles;
   }
 
   /**

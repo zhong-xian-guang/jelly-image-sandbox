@@ -37,6 +37,24 @@
  * 錄好的那條。`setPlaybackControlsEnabled(false)` 也會一併鎖住這兩顆鈕：Track
  * 重播跟 Demo 播放共用同一個 `DemoRunner`，播放中不能再錄一次或重疊播放。
  *
+ * **畫布上的控制**（issue #129 / V4 U2；spec #127「播放控制條」「相機按鈕」）：錄製、播放、
+ * 暫停／繼續、停止／重設與時間讀數是畫布底部中央的 `playbackBar`；「鎖定跟隨」「框住果凍」
+ * 與縮放倍率讀數是畫布右下角的 `cameraControls`（DOM 見 `./CanvasControls`）。兩者由面板
+ * 建出、但不在側欄裡，`JellySandbox` 把它們掛到畫布容器上；可用狀態照舊在
+ * `updateTrackControlsState` 一處算，對外的 `setRecordingActive`／`setPlaybackActive`／
+ * `setPaused`／`setPlaybackTime`／`setFollowLocked` 名稱不變。
+ *
+ * **分區與收起**（issue #128 / V4 U1；spec #127「側欄」）：最上方是側欄標題列（「收起側欄」
+ * 鈕；之後的乾淨畫面、「?」也放這裡，見 `titleBarActions`），底下工具列＋參數卡常駐，再往下
+ * 是七個可收合的分區（`PANEL_SECTION_IDS`：匯入、片段、物理、檢視、Demo、錄製、開發者），
+ * 點標題展開／收起。預設只有物理展開；各區展開狀態與側欄收起狀態存在 `localStorage`
+ * （`./panelLayout`，讀不到就用預設）。收起側欄時整塊縮成畫面左緣的小把手，點把手再展開。
+ * 分區只是換位置：每顆控制的鎖定規則（播放中、錄製中變灰）跟分區前一樣。
+ *
+ * **防呆與拉霸**（issue #131 / V4 U4；spec #127）：「清空全部」「全部重建」要再按一次確認
+ * （3 秒內；被鎖住時取消待確認）。每條拉霸都是「拉霸＋數值」元件：旁邊顯示數值、雙擊回到
+ * 預設值；`setSoftness` 等外部灌值同步數值、不回呼。兩者都在 `./panelControls`。
+ *
  * 「Substep」是 issue #16 追加的唯讀 debug 讀出，`JellySandbox` 每幀呼叫
  * `setPerfStatus` 同步目前的 `PerfMonitor.substeps` / `degraded`——手動測試「節流
  * CPU 降級」時（見該 issue 驗收條件）用眼睛確認 4→2→4 有沒有真的發生，不用開
@@ -54,8 +72,42 @@ import {
   type ToolModeOf,
 } from '../input';
 import type { BoundaryMode } from '../sim';
+import { TOOL_HELP_LINES } from './helpText';
+import {
+  browserStorage,
+  loadPanelLayout,
+  PANEL_SECTION_IDS,
+  savePanelLayout,
+  type KeyValueStorage,
+  type PanelLayout,
+  type PanelSectionId,
+} from './panelLayout';
+import { CameraControls, PlaybackBar } from './CanvasControls';
+import {
+  confirmOnSecondClick,
+  createRangeSlider,
+  setRangeSliderValue,
+  type ConfirmButton,
+  type RangeSlider,
+} from './panelControls';
 import { MODE_LABELS, TOOL_LABELS } from './toolLabels';
 import type { RecordTarget } from './track';
+
+export type { PanelSectionId } from './panelLayout';
+
+/** 各分區標題（issue #128）。 */
+const SECTION_TITLES: Record<PanelSectionId, string> = {
+  import: '匯入',
+  clip: '片段',
+  physics: '物理',
+  view: '檢視',
+  demo: 'Demo',
+  record: '錄製',
+  dev: '開發者',
+};
+
+/** 分區 body 的 DOM id 流水號——`aria-controls` 要指到唯一的 id，同頁可能有多個面板（測試）。 */
+let nextSectionDomId = 0;
 
 /** 一顆 Demo 按鈕要顯示的最小資訊——`ControlPanel` 特意不 import `./demos`，維持跟 `SimCore`/`JellySandbox` 無關的薄接線層，這裡自己開一個形狀就好。 */
 export interface DemoMenuItem {
@@ -169,6 +221,8 @@ export interface ControlPanelInitial {
   handfulRadius: number;
   /** 大把抓取範圍圈（提示）顯示開關的初始值（issue #113）。 */
   showHandfulRange: boolean;
+  /** 編隊抓取「每個點用大把抓」開關的初始值（issue #135）——預設關閉。 */
+  formationPerPointHandful: boolean;
   /** 「播放時隱藏提示」全域開關的初始值（issue #71）——見 `onHideHintsDuringPlaybackChange`。 */
   hideHintsDuringPlayback: boolean;
   /** 「匯入尺寸」拉霸的初始值（issue #88 / V3 T1-1），世界單位——見 `onImportSizeChange`。 */
@@ -205,6 +259,11 @@ export interface ControlPanelOptions {
   meshDensityRange: RangeSpec;
   /** 「Demo」按鈕列表（issue #15），依序顯示；點下呼叫 `onRunDemo(id)`。 */
   demos: readonly DemoMenuItem[];
+  /**
+   * 存側欄版面（各分區展開、側欄收起）的地方（issue #128）。省略＝瀏覽器的
+   * `localStorage`（拿不到就不存）；`null`＝不存。測試塞記憶體版本，避免跨測試殘留。
+   */
+  storage?: KeyValueStorage | null;
   /**
    * 「匯入圖片」按鈕被按（issue #56 / V2 T2-3）——開瀏覽器原生檔案選擇器，選到的圖
    * 走跟拖放匯入完全相同的後續路徑。（角落常駐提示字點擊也開同一個選擇器，但那條
@@ -285,6 +344,11 @@ export interface ControlPanelOptions {
   onHandfulRadiusChange: (radius: number) => void;
   /** 「顯示大把抓取範圍」開關（issue #113）——範圍圈是提示層，同 `onShowFormationHintChange`，純視覺。 */
   onShowHandfulRangeChange: (visible: boolean) => void;
+  /**
+   * 「每個點用大把抓」開關（issue #135）——編隊的每個點改成一把大把抓取，影響下一次按下；
+   * 半徑共用「大把抓取半徑」那條拉霸。
+   */
+  onFormationPerPointHandfulChange: (enabled: boolean) => void;
   /**
    * 「播放時隱藏提示」全域開關（issue #71 / V2 T3-7）——開啟後只要有任何 Track／
    * Demo 在播放，所有視覺提示（顯示網格／顯示 Pin／風扇範圍／風扇圖示／編隊抓取
@@ -379,10 +443,38 @@ export interface ControlPanelOptions {
 
 export class ControlPanel {
   readonly element: HTMLElement;
+  /**
+   * 側欄標題列右側放控制鈕的容器（issue #128）——目前只有「收起側欄」；乾淨畫面（#130）
+   * 與「?」操作說明（#132）的按鈕往這裡 `prepend`／`append`。
+   */
+  readonly titleBarActions: HTMLElement;
+  /** 標題列＋可捲動的內容；收起側欄時整塊 `hidden`（issue #128）。 */
+  private readonly main: HTMLElement;
+  /** 收起側欄後畫面左緣的小把手，點了展開（issue #128）。 */
+  private readonly handle: HTMLButtonElement;
+  /** 各分區的標題鈕與內容（issue #128）——`setSectionExpanded` 切 `hidden`／`aria-expanded`。 */
+  private readonly sections = new Map<
+    PanelSectionId,
+    { header: HTMLButtonElement; body: HTMLElement }
+  >();
+  /** 目前的側欄版面（issue #128）——每次變動整份寫回 `storage`。 */
+  private readonly layout: PanelLayout;
+  private readonly storage: KeyValueStorage | null;
   /** 播放中鎖住，避免疊加播放兩個 Demo（issue #15）——見 `setPlaybackControlsEnabled`。 */
   private readonly demoButtons: HTMLButtonElement[] = [];
-  private readonly recordButton: HTMLButtonElement;
-  private readonly playAllButton: HTMLButtonElement;
+  /**
+   * 畫布底部中央的播放控制條（issue #129）——[● 錄製] [▶ 播放] [⏸ 暫停／繼續] [■ 停止／重設]
+   * ＋時間讀數。不在側欄裡：`JellySandbox` 把它掛到畫布容器上；可用狀態仍由這裡的
+   * `updateTrackControlsState` 統一算（見 `./CanvasControls`）。
+   */
+  readonly playbackBar: HTMLElement;
+  /**
+   * 畫布右下角的相機按鈕（issue #129）——「鎖定跟隨」切換鈕、「框住果凍」、縮放倍率讀數。
+   * 同上，由 `JellySandbox` 掛到畫布容器上。
+   */
+  readonly cameraControls: HTMLElement;
+  private readonly bar: PlaybackBar;
+  private readonly camera: CameraControls;
   private readonly recordTargetSelect: HTMLSelectElement;
   /**
    * 「片段初始 Pin：N 個 ｜ 設為目前 Pin ｜ 清除」列（issue #39 / ADR-0007 追記）
@@ -396,24 +488,14 @@ export class ControlPanel {
   private readonly rebuildAllButton: HTMLButtonElement;
   /** 「清空全部」鈕（issue #95）——同上鎖法。 */
   private readonly clearAllButton: HTMLButtonElement;
+  /** 上面兩顆的「再按一次確認」（issue #131）——被鎖住時 `cancel()` 取消待確認。 */
+  private readonly rebuildAllConfirm: ConfirmButton;
+  private readonly clearAllConfirm: ConfirmButton;
   /** 工具列按鈕與各工具的參數卡（issue #122）——`setActiveTool` 切高亮與顯示。 */
   private readonly toolButtons = new Map<ToolId, HTMLButtonElement>();
   private readonly toolCards = new Map<ToolId, HTMLElement>();
   /** 各有模式工具的模式鈕（issue #122）——`setToolMode` 切高亮。 */
   private readonly modeButtons = new Map<ModalToolId, Map<ToolMode, HTMLButtonElement>>();
-  /**
-   * 「鎖定跟隨」勾選框（issue #36 追加把手）——`setFollowLocked` 讓 `JellySandbox`
-   * 每幀把它同步到相機實際的 `followEnabled`，這樣相機軌播放（`setState` 硬切、
-   * 錄進去的 `setFollow`）或 `playAll` 重設鏡頭改動了跟隨狀態時，勾選框不會跟
-   * 實際狀態脫鉤。
-   */
-  private readonly followLockCheckbox: HTMLInputElement;
-  /** 「⏸ 暫停／▶ 繼續」鈕 + 「目前 X.XX 秒」讀出（issue #34）——同一列，只在播放中顯示。 */
-  private readonly playbackStatusRow: HTMLElement;
-  private readonly pauseButton: HTMLButtonElement;
-  private readonly playbackTimeEl: HTMLElement;
-  /** `setPlaybackTime` 比對用；避免秒數字串沒變時每幀重寫 DOM（同 `lastPerfText`）。 */
-  private lastPlaybackText: string | null = null;
   /**
    * Track 清單容器（issue #33；issue #43 改成**依群組分區**）——每個群組一段
    * `.jelly-group-section`：群組標頭列（開關／名稱／獨奏／刪除）+ 該群組的成員
@@ -462,13 +544,11 @@ export class ControlPanel {
    */
   private readonly softnessInput: HTMLInputElement;
   private readonly tapStrengthInput: HTMLInputElement;
-  /** 「重力」拉霸與旁邊的數值（issue #91）——`setGravity` 兩個都要更新。 */
+  /** 「重力」拉霸（issue #91）——`setGravity` 連同旁邊的數值一起更新。 */
   private readonly gravityInput: HTMLInputElement;
-  private readonly gravityOutput: HTMLOutputElement;
   private readonly boundarySelect: HTMLSelectElement;
-  /** 「網格密度」拉霸與旁邊的數值——效能退路 `setMeshDensity` 兩個都要更新（issue #89）。 */
+  /** 「網格密度」拉霸——效能退路 `setMeshDensity` 連同旁邊的數值一起更新（issue #89）。 */
   private readonly meshDensityInput: HTMLInputElement;
-  private readonly meshDensityOutput: HTMLOutputElement;
   /** 「右鍵＋滾輪」調得到的數值拉霸（issue #114；issue #122 推廣）——經 `setModeValue` 灌回。 */
   private readonly valueInputs: Record<ModeValueKey, HTMLInputElement>;
 
@@ -484,14 +564,25 @@ export class ControlPanel {
     this.onGroupSolo = opts.onGroupSolo;
     this.onDeleteGroup = opts.onDeleteGroup;
     this.onTrackGroupsChange = opts.onTrackGroupsChange;
-
-    const panel = document.createElement('div');
-    panel.className = 'jelly-control-panel';
+    this.storage = opts.storage === undefined ? browserStorage() : opts.storage;
+    this.layout = loadPanelLayout(this.storage);
 
     this.perfStatus = this.perfStatusRow();
 
-    const followLock = this.followLockRow(opts.initial.followLocked, opts.onFollowLockChange);
-    this.followLockCheckbox = followLock.checkbox;
+    // 畫布上的播放控制條與相機按鈕（issue #129）——不進任何分區。
+    this.bar = new PlaybackBar({
+      onToggleRecording: opts.onToggleRecording,
+      onPlayAll: opts.onPlayAll,
+      onTogglePause: opts.onTogglePause,
+      onReset: opts.onReset,
+    });
+    this.playbackBar = this.bar.element;
+    this.camera = new CameraControls({
+      followLocked: opts.initial.followLocked,
+      onFollowLockChange: opts.onFollowLockChange,
+      onFrameJelly: opts.onFrameJelly,
+    });
+    this.cameraControls = this.camera.element;
 
     const pinRows = this.pinRows(opts.initial.showPins, opts.onClearPins, opts.onShowPinsChange);
 
@@ -515,28 +606,26 @@ export class ControlPanel {
       opts.onTapStrengthChange,
     );
     this.tapStrengthInput = tapStrength.input;
-    const gravity = this.rangeRowWithValue(
+    const gravity = createRangeSlider(
       '重力',
       opts.gravityRange,
       opts.initial.gravity,
       opts.onGravityChange,
     );
     this.gravityInput = gravity.input;
-    this.gravityOutput = gravity.output;
-    const importSize = this.rangeRowWithValue(
+    const importSize = createRangeSlider(
       '匯入尺寸',
       opts.importSizeRange,
       opts.initial.importSize,
       opts.onImportSizeChange,
     );
-    const meshDensity = this.rangeRowWithValue(
+    const meshDensity = createRangeSlider(
       '網格密度',
       opts.meshDensityRange,
       opts.initial.meshDensity,
       opts.onMeshDensityChange,
     );
     this.meshDensityInput = meshDensity.input;
-    this.meshDensityOutput = meshDensity.output;
 
     const fanWidth = this.rangeRow(
       '風扇寬度',
@@ -574,14 +663,17 @@ export class ControlPanel {
     // 電風扇專屬參數（issue #67 事後檢視拆成兩顆顯示開關；「顯示風扇提示」→
     // 「顯示風扇範圍」／「顯示風扇圖示」，見 `ControlPanelInitial.showFanRange`
     // ／`showFanIcon` 的說明）。這整包只在目前工具是電風扇時才需要看到
-    // （見下方 `toolbarSection`），先組起來、`hidden` 依目前工具切換。
+    // （見下方 `toolbarSection`），先組起來、`hidden` 依目前工具切換。issue #125：最上方
+    // 加模式鈕（右鍵＋滾輪要調哪個參數），順序照 spec #121「側欄」——模式鈕、四條拉霸、
+    // 兩個顯示開關、移除風扇。
     const fanParams = this.toolParams('電風扇', [
-      this.checkboxRow('顯示風扇範圍', opts.initial.showFanRange, opts.onShowFanRangeChange),
-      this.checkboxRow('顯示風扇圖示', opts.initial.showFanIcon, opts.onShowFanIconChange),
+      this.modeRow('fan', opts.initial.toolModes.fan, opts.onModeChange),
       fanWidth.row,
       fanStrength.row,
       fanFalloff.row,
       fanFrequency.row,
+      this.checkboxRow('顯示風扇範圍', opts.initial.showFanRange, opts.onShowFanRangeChange),
+      this.checkboxRow('顯示風扇圖示', opts.initial.showFanIcon, opts.onShowFanIconChange),
       this.buttonRow('移除風扇', opts.onRemoveFan),
     ]);
 
@@ -610,7 +702,8 @@ export class ControlPanel {
     ]);
 
     // 抓取工具的參數卡（issue #122：一般操作／大把抓取／編隊抓取合成抓取工具）——模式鈕、
-    // 大把抓取半徑（issue #113）、兩顆提示開關、編隊形狀的設定按鈕（issue #68）。
+    // 大把抓取半徑（issue #113）、兩顆提示開關、每點大把開關（issue #135）、編隊形狀的
+    // 設定按鈕（issue #68）。
     const handfulRadiusRow = this.rangeRow(
       '大把抓取半徑',
       opts.handfulRadiusRange.min,
@@ -632,20 +725,28 @@ export class ControlPanel {
         opts.initial.showFormationHint,
         opts.onShowFormationHintChange,
       ),
+      // 編隊的每點大把（issue #135）：半徑共用上面那條「大把抓取半徑」。
+      this.checkboxRow(
+        '每個點用大把抓',
+        opts.initial.formationPerPointHandful,
+        opts.onFormationPerPointHandfulChange,
+      ),
       this.formationDefineRow(opts.onFormationDefineStart, opts.onFormationDefineEnd),
     ]);
 
     this.valueInputs = {
       pinBrushRadius: pinBrushRadiusRow.input,
       handfulRadius: handfulRadiusRow.input,
+      fanWidth: fanWidth.input,
+      fanStrength: fanStrength.input,
+      fanFalloffExponent: fanFalloff.input,
+      fanFrequency: fanFrequency.input,
     };
 
     // Jelly 工具的參數卡（issue #124：生成、移除、重建 Jelly 合成 Jelly 工具）——沒有模式也
-    // 沒有參數，只放一行操作說明：移除與重建藏在畫布上的右鍵選單，不寫出來沒人會發現。
-    const jellyHelp = document.createElement('div');
-    jellyHelp.className = 'jelly-control-row jelly-tool-help';
-    jellyHelp.textContent = '左鍵生成；右鍵點果凍：重建／移除';
-    const jellyParams = this.toolParams('Jelly', [jellyHelp]);
+    // 沒有參數，只有每張卡底下共用的那行操作說明（issue #132，見 `toolbarSection`）：移除與
+    // 重建藏在畫布上的右鍵選單，不寫出來沒人會發現。
+    const jellyParams = this.toolParams('Jelly', []);
 
     const toolbarSection = this.toolbarSection(
       opts.initial.activeTool,
@@ -653,57 +754,28 @@ export class ControlPanel {
       opts.onToolChange,
     );
 
-    // 「全部重建」鈕（issue #90）放在「匯入」區塊最後：拉完拉霸按一下就看到效果。
-    const rebuildAll = this.rebuildAllRow(opts.onRebuildAll);
+    // 「全部重建」鈕（issue #90）放在「匯入」區最後：拉完拉霸按一下就看到效果。
+    const rebuildAll = this.rebuildAllRow();
     this.rebuildAllButton = rebuildAll.button;
-    // 「清空全部」（issue #95）緊接在匯入／存取片段三顆鈕之後：它是「新片段」的入口，
+    // 「清空全部」「全部重建」都要再按一次確認（issue #131；spec #127「防呆」）：一次誤觸
+    // 就會丟掉整個片段／讓 Pin 掉光。
+    this.rebuildAllConfirm = confirmOnSecondClick(rebuildAll.button, opts.onRebuildAll);
+    // 「清空全部」（issue #95）跟儲存／載入片段排成一列（issue #128）：它是「新片段」的入口，
     // 跟「載入片段」同一組語意（整份片段換掉），放一起最直覺。
-    const clearAll = this.buttonRowEl('清空全部', opts.onClearAll);
-    clearAll.button.title = '清掉桌上所有果凍、Track、群組與片段初始 Pin，從空桌面重新開始';
-    this.clearAllButton = clearAll.button;
-
-    panel.append(
-      // 工具列＋參數卡在側欄最上方（issue #122；spec #121「側欄」）。
-      toolbarSection,
-      this.perfStatus,
-      this.buttonRow('匯入圖片…', opts.onImportImage),
-      this.buttonRow('儲存片段', opts.onSaveClip),
-      this.buttonRow('載入片段…', opts.onLoadClip),
-      clearAll.row,
-      boundary.row,
-      this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
-      // 游標標籤（issue #122）是游標回饋、不是提示，開關跟顯示類開關放一起。
-      this.checkboxRow('顯示游標標籤', opts.initial.showCursorLabel, opts.onShowCursorLabelChange),
-      // 全域一列（issue #71）：蓋掉的是所有提示，所以刻意放在工具專屬區塊外面、
-      // 緊接在「顯示網格」這類視覺開關旁邊，切工具不會讓它消失。
-      this.checkboxRow(
-        '播放時隱藏提示',
-        opts.initial.hideHintsDuringPlayback,
-        opts.onHideHintsDuringPlaybackChange,
-      ),
-      softness.row,
-      tapStrength.row,
-      gravity.row,
-      // 「匯入」區塊（issue #88）：管「下一次」匯入的全域參數，跟軟硬度這類全域
-      // 物理參數放一起、用小標題隔開；場上的果凍不受影響。
-      this.importHeading(),
-      importSize.row,
-      meshDensity.row,
-      rebuildAll.row,
-      ...pinRows,
-      followLock.row,
-      this.buttonRow('框住果凍', opts.onFrameJelly),
-      this.demoHeading(),
-      ...opts.demos.map((demo) => this.demoButtonRow(demo.label, () => opts.onRunDemo(demo.id))),
-      this.trackHeading(),
+    const clearAllButton = this.button('清空全部');
+    clearAllButton.title = '清掉桌上所有果凍、Track、群組與片段初始 Pin，從空桌面重新開始';
+    this.clearAllButton = clearAllButton;
+    this.clearAllConfirm = confirmOnSecondClick(clearAllButton, opts.onClearAll);
+    const clipRow = document.createElement('div');
+    clipRow.className = 'jelly-control-row jelly-clip-row';
+    clipRow.append(
+      this.button('儲存片段', opts.onSaveClip),
+      this.button('載入片段…', opts.onLoadClip),
+      clearAllButton,
     );
 
     const target = this.recordTargetRow(opts.initial.recordTarget, opts.onRecordTargetChange);
     this.recordTargetSelect = target.select;
-    const track = this.trackRow(opts.onToggleRecording, opts.onPlayAll);
-    this.recordButton = track.recordButton;
-    this.playAllButton = track.playAllButton;
-
     const setupPins = this.setupPinsRow(opts.onSnapshotSetupPins, opts.onClearSetupPins);
     this.setupPinsCountEl = setupPins.countEl;
     this.setupPinsSnapshotButton = setupPins.snapshotButton;
@@ -715,23 +787,166 @@ export class ControlPanel {
     const addGroup = this.addGroupRow(() => this.onAddGroup());
     this.addGroupButton = addGroup.button;
 
-    const playback = this.playbackStatusRowEl(opts.onTogglePause);
-    this.playbackStatusRow = playback.row;
-    this.pauseButton = playback.pauseButton;
-    this.playbackTimeEl = playback.timeEl;
+    // 各分區內容（issue #128；spec #127「側欄」的表格）。
+    const sectionRows: Record<PanelSectionId, HTMLElement[]> = {
+      import: [
+        this.buttonRow('匯入圖片…', opts.onImportImage),
+        // 「匯入尺寸」「網格密度」（issue #88、#89）只管「下一次」匯入，場上的果凍不受影響。
+        importSize.row,
+        meshDensity.row,
+        rebuildAll.row,
+      ],
+      clip: [clipRow],
+      physics: [boundary.row, softness.row, tapStrength.row, gravity.row],
+      view: [
+        ...pinRows,
+        // 全域一列（issue #71）：蓋掉的是所有提示，所以放在工具卡外面，切工具不會讓它消失。
+        this.checkboxRow(
+          '播放時隱藏提示',
+          opts.initial.hideHintsDuringPlayback,
+          opts.onHideHintsDuringPlaybackChange,
+        ),
+        // 游標標籤（issue #122）是游標回饋、不是提示，開關跟顯示類開關放一起。
+        this.checkboxRow(
+          '顯示游標標籤',
+          opts.initial.showCursorLabel,
+          opts.onShowCursorLabelChange,
+        ),
+      ],
+      demo: opts.demos.map((demo) => this.demoButtonRow(demo.label, () => opts.onRunDemo(demo.id))),
+      // 錄製、播放、暫停、停止／重設在畫布上的播放控制條（issue #129），這裡只留設定與清單。
+      record: [target.row, setupPins.row, this.groupedTracksEl, addGroup.row],
+      dev: [
+        this.perfStatus,
+        this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
+      ],
+    };
 
-    panel.append(
-      target.row,
-      track.row,
-      setupPins.row,
-      this.playbackStatusRow,
-      this.groupedTracksEl,
-      addGroup.row,
-      this.buttonRow('停止／重設', opts.onReset),
+    const scroll = document.createElement('div');
+    scroll.className = 'jelly-panel-scroll';
+    // 工具列＋參數卡常駐在分區之上（issue #122；spec #121「側欄」），不收合。
+    scroll.append(
+      toolbarSection,
+      ...PANEL_SECTION_IDS.map((id) => this.sectionEl(id, sectionRows[id])),
     );
 
+    const titleBar = this.titleBarEl();
+    this.titleBarActions = titleBar.actions;
+
+    this.main = document.createElement('div');
+    this.main.className = 'jelly-panel-main';
+    this.main.append(titleBar.bar, scroll);
+
+    this.handle = this.button('»', () => this.setSidebarCollapsed(false));
+    this.handle.className = 'jelly-sidebar-handle';
+    this.handle.title = '展開側欄';
+    this.handle.setAttribute('aria-label', '展開側欄');
+
+    const panel = document.createElement('div');
+    panel.className = 'jelly-control-panel';
+    panel.append(this.main, this.handle);
     this.element = panel;
+
+    this.applySidebarCollapsed();
     this.updateTrackControlsState();
+  }
+
+  /** 某分區的內容容器（issue #128）——之後的票要往某區加控制時從這裡拿。 */
+  sectionBody(id: PanelSectionId): HTMLElement {
+    return this.sections.get(id)!.body;
+  }
+
+  isSectionExpanded(id: PanelSectionId): boolean {
+    return this.layout.expanded[id];
+  }
+
+  /** 展開／收起某分區並記住（issue #128）——點標題走這裡，程式也可以直接呼叫。 */
+  setSectionExpanded(id: PanelSectionId, expanded: boolean): void {
+    this.layout.expanded[id] = expanded;
+    this.applySectionExpanded(id);
+    savePanelLayout(this.storage, this.layout);
+  }
+
+  isSidebarCollapsed(): boolean {
+    return this.layout.sidebarCollapsed;
+  }
+
+  /**
+   * 收起／展開整個側欄並記住（issue #128）——收起時標題列與內容整塊藏起來、只剩左緣的
+   * 小把手。只動顯示：控制項的狀態與鎖定都不變，畫布操作也不受影響。
+   */
+  setSidebarCollapsed(collapsed: boolean): void {
+    this.layout.sidebarCollapsed = collapsed;
+    this.applySidebarCollapsed();
+    savePanelLayout(this.storage, this.layout);
+  }
+
+  private applySidebarCollapsed(): void {
+    const collapsed = this.layout.sidebarCollapsed;
+    this.element.classList.toggle('is-collapsed', collapsed);
+    this.main.hidden = collapsed;
+    this.handle.hidden = !collapsed;
+  }
+
+  private applySectionExpanded(id: PanelSectionId): void {
+    const { header, body } = this.sections.get(id)!;
+    const expanded = this.layout.expanded[id];
+    header.setAttribute('aria-expanded', String(expanded));
+    body.hidden = !expanded;
+  }
+
+  /**
+   * 一個可收合分區（issue #128）：整列可點的標題鈕（▸／▾＋標題）＋內容。不用 `<details>`：
+   * 展開狀態要由面板自己掌握（讀存檔、程式化展開、寫回），用按鈕＋`hidden` 最直接。
+   */
+  private sectionEl(id: PanelSectionId, rows: readonly HTMLElement[]): HTMLElement {
+    const section = document.createElement('section');
+    section.className = 'jelly-panel-section';
+    section.dataset.section = id;
+
+    const body = document.createElement('div');
+    body.className = 'jelly-panel-section-body';
+    body.id = `jelly-panel-section-${id}-${nextSectionDomId++}`;
+    body.append(...rows);
+
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'jelly-panel-section-header';
+    header.setAttribute('aria-controls', body.id);
+    const chevron = document.createElement('span');
+    chevron.className = 'jelly-panel-section-chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+    const title = document.createElement('span');
+    title.className = 'jelly-panel-section-title';
+    title.textContent = SECTION_TITLES[id];
+    header.append(chevron, title);
+    header.addEventListener('click', () => this.setSectionExpanded(id, !this.layout.expanded[id]));
+
+    section.append(header, body);
+    this.sections.set(id, { header, body });
+    this.applySectionExpanded(id);
+    return section;
+  }
+
+  /** 側欄標題列（issue #128）：名稱＋右側控制鈕（目前是「收起側欄」）。 */
+  private titleBarEl(): { bar: HTMLElement; actions: HTMLElement } {
+    const bar = document.createElement('div');
+    bar.className = 'jelly-panel-titlebar';
+
+    const title = document.createElement('span');
+    title.className = 'jelly-panel-title';
+    title.textContent = '果凍圖片沙盒';
+
+    const actions = document.createElement('div');
+    actions.className = 'jelly-panel-titlebar-actions';
+    const collapse = this.button('«', () => this.setSidebarCollapsed(true));
+    collapse.className = 'jelly-sidebar-collapse';
+    collapse.title = '收起側欄';
+    collapse.setAttribute('aria-label', '收起側欄');
+    actions.append(collapse);
+
+    bar.append(title, actions);
+    return { bar, actions };
   }
 
   /**
@@ -755,8 +970,7 @@ export class ControlPanel {
    */
   setRecordingActive(active: boolean): void {
     this.recording = active;
-    this.recordButton.classList.toggle('jelly-recording-active', active);
-    this.recordButton.textContent = active ? '■ 停止錄製' : '● 開始錄製 Track';
+    this.bar.setRecording(active);
     this.updateTrackControlsState();
   }
 
@@ -846,7 +1060,7 @@ export class ControlPanel {
   private updateTrackControlsState(): void {
     const busy = this.playbackLocked || this.recording;
     // 錄製中「開始錄製」要保持可按（它此時是「停止錄製」）；只有播放中才鎖它。
-    this.recordButton.disabled = this.playbackLocked;
+    this.bar.setEnabled('record', !this.playbackLocked);
     this.recordTargetSelect.disabled = busy;
     // 片段初始 Pin 的兩顆鈕比照 Track 清單編輯：錄製中／播放中鎖住（issue #39）。
     this.setupPinsSnapshotButton.disabled = busy;
@@ -855,10 +1069,15 @@ export class ControlPanel {
     this.rebuildAllButton.disabled = busy;
     // 「清空全部」（issue #95）同理：它會清掉正在錄／正在播的片段本身。
     this.clearAllButton.disabled = busy;
+    // 被鎖住時一併取消待確認（issue #131），解鎖後要重新按兩下。
+    if (busy) {
+      this.rebuildAllConfirm.cancel();
+      this.clearAllConfirm.cancel();
+    }
     // 工具列按鈕永遠可按（issue #124）：Jelly 工具的播放中／錄製中限制改在畫布上的右鍵
     // 選單各項變灰（`ContextMenu`），生成則由 `JellySandbox` 用禁止游標＋提示擋。
     // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
-    this.playAllButton.disabled = busy || this.trackCount === 0 || this.playableTrackCount === 0;
+    this.bar.setEnabled('play', !busy && this.trackCount > 0 && this.playableTrackCount > 0);
     this.addGroupButton.disabled = busy;
     // 分區清單裡的群組標頭控制項 + Track 卡片欄位 + `群組 ▾` 一起鎖住（issue #43）。
     for (const el of this.groupedTracksEl.querySelectorAll('input, button, select')) {
@@ -868,17 +1087,11 @@ export class ControlPanel {
 
   /**
    * 播放中／未播放的切換（issue #34）——`JellySandbox` 在 Demo／Track 播放開始
-   * 與結束時各呼叫一次。播放中「⏸ 暫停／▶ 繼續」鈕與「目前 X.XX 秒」讀出才
-   * 出現；結束時整列藏起來（「沒有在播放時暫停鈕隱藏」的驗收條件），並把讀出
-   * 歸零、暫停鈕文字重設回「⏸ 暫停」。
+   * 與結束時各呼叫一次。issue #129 起控制條常駐：播放中「⏸ 暫停／▶ 繼續」鈕才可按，
+   * 開始與結束時都把時間讀數歸零、暫停鈕文字重設回「⏸ 暫停」。
    */
   setPlaybackActive(active: boolean): void {
-    this.playbackStatusRow.hidden = !active;
-    if (active) {
-      this.setPaused(false);
-      this.lastPlaybackText = null;
-      this.setPlaybackTime(0);
-    }
+    this.bar.setPlaying(active);
   }
 
   /**
@@ -887,10 +1100,7 @@ export class ControlPanel {
    * 秒數字串真的變了才寫 DOM（同 `setPerfStatus`）。
    */
   setPlaybackTime(seconds: number): void {
-    const text = `目前 ${formatSeconds(seconds)} 秒`;
-    if (text === this.lastPlaybackText) return;
-    this.lastPlaybackText = text;
-    this.playbackTimeEl.textContent = text;
+    this.bar.setTime(seconds);
   }
 
   /**
@@ -898,18 +1108,25 @@ export class ControlPanel {
    * 時呼叫；暫停中按鈕變成「▶ 繼續」並加上 `.jelly-paused-active` 提示色。
    */
   setPaused(paused: boolean): void {
-    this.pauseButton.textContent = paused ? '▶ 繼續' : '⏸ 暫停';
-    this.pauseButton.classList.toggle('jelly-paused-active', paused);
+    this.bar.setPaused(paused);
   }
 
   /**
-   * `JellySandbox` 每幀同步一次「鎖定跟隨」勾選框到相機實際的鎖定狀態（issue #36）
-   * ——相機軌播放（`setState` 硬切、錄進去的 `setFollow`）或 `playAll` 重設鏡頭會
-   * 在使用者沒點勾選框的情況下改動 `followEnabled`，同步後勾選框不會脫鉤。值沒變
-   * 就不寫 DOM。
+   * `JellySandbox` 每幀同步一次畫布右下角的「鎖定跟隨」切換鈕到相機實際的鎖定狀態
+   * （issue #36；issue #129 從側欄勾選框搬成切換鈕）——相機軌播放（`setState` 硬切、錄進去
+   * 的 `setFollow`）或 `playAll` 重設鏡頭會在使用者沒按鈕的情況下改動 `followEnabled`，
+   * 同步後不會脫鉤。值沒變就不寫 DOM、不回呼。
    */
   setFollowLocked(locked: boolean): void {
-    if (this.followLockCheckbox.checked !== locked) this.followLockCheckbox.checked = locked;
+    this.camera.setFollowLocked(locked);
+  }
+
+  /**
+   * `JellySandbox` 每幀同步一次畫布右下角的縮放倍率讀數（issue #129）——相對 zoom-to-fit
+   * （「框住果凍」／自動跟隨的錨點）的倍率，例如 1.5 顯示成「×1.5」。文字沒變不寫 DOM。
+   */
+  setZoomFactor(factor: number): void {
+    this.camera.setZoomFactor(factor);
   }
 
   /**
@@ -918,14 +1135,12 @@ export class ControlPanel {
    * 事件、不會呼叫 `onSoftnessChange` 造成迴圈）。
    */
   setSoftness(value: number): void {
-    const text = String(value);
-    if (this.softnessInput.value !== text) this.softnessInput.value = text;
+    setRangeSliderValue(this.softnessInput, value);
   }
 
   /** 載入片段後把輕拍力道滑桿位置灌回面板（issue #58）。同 `setSoftness` 的理由。 */
   setTapStrength(value: number): void {
-    const text = String(value);
-    if (this.tapStrengthInput.value !== text) this.tapStrengthInput.value = text;
+    setRangeSliderValue(this.tapStrengthInput, value);
   }
 
   /**
@@ -933,7 +1148,7 @@ export class ControlPanel {
    * ——只動 DOM、不觸發 `input` 事件、不呼叫 `onGravityChange`。
    */
   setGravity(value: number): void {
-    syncRangeRow(this.gravityInput, this.gravityOutput, value);
+    setRangeSliderValue(this.gravityInput, value);
   }
 
   /** 載入片段後把邊界模式下拉灌回面板（issue #58）。同 `setSoftness` 的理由。 */
@@ -947,7 +1162,7 @@ export class ControlPanel {
    * `onMeshDensityChange`（沙盒端自己已經改了狀態，再回呼會繞一圈）。
    */
   setMeshDensity(value: number): void {
-    syncRangeRow(this.meshDensityInput, this.meshDensityOutput, value);
+    setRangeSliderValue(this.meshDensityInput, value);
   }
 
   /**
@@ -955,9 +1170,7 @@ export class ControlPanel {
    * 同 `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、不回呼 `onXChange`。
    */
   setModeValue(key: ModeValueKey, value: number): void {
-    const input = this.valueInputs[key];
-    const text = String(value);
-    if (input.value !== text) input.value = text;
+    setRangeSliderValue(this.valueInputs[key], value);
   }
 
   /**
@@ -998,6 +1211,8 @@ export class ControlPanel {
 
   destroy(): void {
     this.element.remove();
+    this.playbackBar.remove();
+    this.cameraControls.remove();
   }
 
   /**
@@ -1044,6 +1259,11 @@ export class ControlPanel {
     card.className = 'jelly-tool-card';
     for (const tool of TOOL_IDS) {
       const params = toolParams[tool];
+      // 每張卡最底下一行固定的滑鼠操作說明（issue #132；文字集中在 `./helpText`）。
+      const help = document.createElement('div');
+      help.className = 'jelly-control-row jelly-tool-help';
+      help.textContent = TOOL_HELP_LINES[tool];
+      params.appendChild(help);
       this.toolCards.set(tool, params);
       card.appendChild(params);
     }
@@ -1168,6 +1388,10 @@ export class ControlPanel {
     return { row, select };
   }
 
+  /**
+   * 一條拉霸列——一律是「拉霸＋數值」元件（issue #131；issue #88 起的帶數值拉霸推廣到
+   * 全部）：旁邊顯示數值、雙擊回到 `value`（建立時的值＝預設值），見 `./panelControls`。
+   */
   private rangeRow(
     labelText: string,
     min: number,
@@ -1175,66 +1399,17 @@ export class ControlPanel {
     step: number,
     value: number,
     onChange: (n: number) => void,
-  ): { row: HTMLElement; input: HTMLInputElement } {
-    const row = document.createElement('label');
-    row.className = 'jelly-control-row';
-
-    const input = document.createElement('input');
-    input.type = 'range';
-    input.min = String(min);
-    input.max = String(max);
-    input.step = String(step);
-    input.value = String(value);
-    input.addEventListener('input', () => onChange(Number(input.value)));
-
-    row.append(labelText, input);
-    return { row, input };
-  }
-
-  /**
-   * 帶數值顯示的滑桿列（issue #88）——`rangeRow` 旁再掛一個 `<output>`，拖動時同步
-   * 顯示目前值。匯入尺寸、重力這種「拉到多少就是多少世界單位」的絕對量，使用者需要
-   * 看到數字才知道自己設了多少；軟硬度那種 0–1 的相對量就不需要。
-   */
-  private rangeRowWithValue(
-    labelText: string,
-    range: RangeSpec,
-    value: number,
-    onChange: (n: number) => void,
-  ): { row: HTMLElement; input: HTMLInputElement; output: HTMLOutputElement } {
-    const { row, input } = this.rangeRow(
-      labelText,
-      range.min,
-      range.max,
-      range.step,
-      value,
-      onChange,
-    );
-    const output = document.createElement('output');
-    output.className = 'jelly-range-value';
-    output.textContent = String(value);
-    input.addEventListener('input', () => {
-      output.textContent = input.value;
-    });
-    row.appendChild(output);
-    return { row, input, output };
-  }
-
-  /** 「匯入」區塊小標題（issue #88）——底下是管「下一次」匯入的全域拉霸。 */
-  private importHeading(): HTMLElement {
-    const heading = document.createElement('div');
-    heading.className = 'jelly-control-heading';
-    heading.textContent = '匯入';
-    return heading;
+  ): RangeSlider {
+    return createRangeSlider(labelText, { min, max, step }, value, onChange);
   }
 
   /**
    * 「全部重建」按鈕列（issue #90；issue #95 起對每一塊，issue #98 改用這個名字）
    * ——回傳按鈕本身讓建構子記進 `rebuildAllButton`，`updateTrackControlsState` 才管得到
-   * 它的 `disabled`。
+   * 它的 `disabled`。點擊由建構子接成「再按一次確認」（issue #131）。
    */
-  private rebuildAllRow(onRebuildAll: () => void): { row: HTMLElement; button: HTMLButtonElement } {
-    const result = this.buttonRowEl('全部重建', onRebuildAll);
+  private rebuildAllRow(): { row: HTMLElement; button: HTMLButtonElement } {
+    const result = this.buttonRowEl('全部重建');
     result.button.title =
       '用各塊的來源圖＋目前的匯入尺寸／網格密度，重新生成桌上每一塊果凍（位置不變、Pin 掉光；Track 保留）';
     return result;
@@ -1284,48 +1459,12 @@ export class ControlPanel {
     return row;
   }
 
-  /**
-   * 「鎖定跟隨」列（issue #36）——跟 `checkboxRow` 同構，但回傳勾選框本身，讓
-   * `setFollowLocked` 能把它同步到相機實際狀態（相機軌播放會改 `followEnabled`）。
-   */
-  private followLockRow(
-    locked: boolean,
-    onChange: (locked: boolean) => void,
-  ): { row: HTMLElement; checkbox: HTMLInputElement } {
-    const row = document.createElement('label');
-    row.className = 'jelly-control-row';
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = locked;
-    checkbox.addEventListener('change', () => onChange(checkbox.checked));
-
-    row.append(checkbox, '鎖定跟隨');
-    return { row, checkbox };
-  }
-
   /** 唯讀 debug 讀出列，文字由 `setPerfStatus` 填入（建構時先放預設值）。 */
   private perfStatusRow(): HTMLElement {
     const row = document.createElement('div');
     row.className = 'jelly-control-row jelly-perf-status';
     row.textContent = 'Substep：4';
     return row;
-  }
-
-  /** Demo 按鈕列前的小標題，跟其他控制項分開一眼看出這區是「自動演出」。 */
-  private demoHeading(): HTMLElement {
-    const heading = document.createElement('div');
-    heading.className = 'jelly-control-heading';
-    heading.textContent = 'Demo';
-    return heading;
-  }
-
-  /** Track 錄製列前的小標題（issue #29），跟 Demo 分開一眼看出這區是「使用者自己錄的」。 */
-  private trackHeading(): HTMLElement {
-    const heading = document.createElement('div');
-    heading.className = 'jelly-control-heading';
-    heading.textContent = 'Track';
-    return heading;
   }
 
   /** 「＋ 新增群組」列（issue #43）——新群組預設開啟，見 `JellySandbox.addGroup`。 */
@@ -1427,33 +1566,6 @@ export class ControlPanel {
   }
 
   /**
-   * 「開始錄製／停止錄製」切換鈕 + 「▶ 播放全部」按鈕（issue #29 / issue #33）。
-   * 回傳個別按鈕讓建構子能直接賦值給 `readonly` 欄位（明確賦值檢查要求賦值發生
-   * 在建構子本體）。可用狀態一律交給 `updateTrackControlsState` 算，這裡不預設。
-   */
-  private trackRow(
-    onToggleRecording: () => void,
-    onPlayAll: () => void,
-  ): { row: HTMLElement; recordButton: HTMLButtonElement; playAllButton: HTMLButtonElement } {
-    const row = document.createElement('div');
-    row.className = 'jelly-control-row';
-
-    const recordButton = document.createElement('button');
-    recordButton.type = 'button';
-    recordButton.textContent = '● 開始錄製 Track';
-    recordButton.addEventListener('click', onToggleRecording);
-
-    const playAllButton = document.createElement('button');
-    playAllButton.type = 'button';
-    // issue #43：改播「開啟中群組成員聯集」，不一定是「全部」，鈕名收斂成「▶ 播放」。
-    playAllButton.textContent = '▶ 播放';
-    playAllButton.addEventListener('click', onPlayAll);
-
-    row.append(recordButton, playAllButton);
-    return { row, recordButton, playAllButton };
-  }
-
-  /**
    * 「片段初始 Pin：N 個 ｜ 設為目前 Pin ｜ 清除」列（issue #39 / ADR-0007 追記）。
    * 「設為目前 Pin」把畫面上所有 Pin 拍成片段初始快照（`播放全部` 於 step 0 還原）；
    * 「清除」清空快照。可用狀態一律交給 `updateTrackControlsState`（錄製中／播放中鎖住）。
@@ -1489,33 +1601,6 @@ export class ControlPanel {
 
     row.append(countEl, snapshotButton, clearButton);
     return { row, countEl, snapshotButton, clearButton };
-  }
-
-  /**
-   * 「⏸ 暫停／▶ 繼續」鈕 + 「目前 X.XX 秒」讀出（issue #34）——同一列，建構時
-   * 先 `hidden`，由 `setPlaybackActive` 在播放開始／結束時顯示／隱藏。回傳個別
-   * 節點讓建構子直接賦值給 `readonly` 欄位。
-   */
-  private playbackStatusRowEl(onTogglePause: () => void): {
-    row: HTMLElement;
-    pauseButton: HTMLButtonElement;
-    timeEl: HTMLElement;
-  } {
-    const row = document.createElement('div');
-    row.className = 'jelly-control-row jelly-playback-status';
-    row.hidden = true;
-
-    const pauseButton = document.createElement('button');
-    pauseButton.type = 'button';
-    pauseButton.textContent = '⏸ 暫停';
-    pauseButton.addEventListener('click', onTogglePause);
-
-    const timeEl = document.createElement('span');
-    timeEl.className = 'jelly-playback-time';
-    timeEl.textContent = '目前 0.00 秒';
-
-    row.append(pauseButton, timeEl);
-    return { row, pauseButton, timeEl };
   }
 
   /**
@@ -1672,18 +1757,25 @@ export class ControlPanel {
    */
   private buttonRowEl(
     labelText: string,
-    onClick: () => void,
+    onClick?: () => void,
   ): { row: HTMLElement; button: HTMLButtonElement } {
     const row = document.createElement('div');
     row.className = 'jelly-control-row';
+    const button = this.button(labelText, onClick);
+    row.appendChild(button);
+    return { row, button };
+  }
 
+  /**
+   * 一顆 `type="button"` 的按鈕（不包列）——片段區三顆橫排、標題列控制鈕共用。省略
+   * `onClick` 時由呼叫端自己接（例如「再按一次確認」，issue #131）。
+   */
+  private button(labelText: string, onClick?: () => void): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = labelText;
-    button.addEventListener('click', onClick);
-
-    row.appendChild(button);
-    return { row, button };
+    if (onClick) button.addEventListener('click', onClick);
+    return button;
   }
 
   /** 同 `buttonRow`，另外把按鈕記進 `demoButtons`，讓 `setDemoButtonsEnabled` 管得到。 */
@@ -1702,15 +1794,4 @@ function formatSeconds(seconds: number): string {
 /** 「片段初始 Pin：N 個」讀出文字（issue #39）——初始渲染與 `setSetupPinCount` 共用，前綴字串只留一份。 */
 function setupPinCountText(count: number): string {
   return `片段初始 Pin：${count} 個`;
-}
-
-/**
- * 把值灌回一條帶數值顯示的拉霸（`rangeRowWithValue`）：拉霸位置與旁邊的 `<output>`
- * 一起更新、只在文字真的變了才寫 DOM、不觸發 `input` 事件（所以不會回呼 `onXChange`）。
- * `setMeshDensity`（issue #89）與 `setGravity`（issue #91）共用。
- */
-function syncRangeRow(input: HTMLInputElement, output: HTMLOutputElement, value: number): void {
-  const text = String(value);
-  if (input.value !== text) input.value = text;
-  if (output.textContent !== text) output.textContent = text;
 }
