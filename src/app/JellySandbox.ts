@@ -161,6 +161,10 @@ import {
   DEFAULT_PIN_BRUSH_RADIUS,
   DEFAULT_SPRAY_SPACING,
   DEFAULT_HANDFUL_RADIUS,
+  FAN_FALLOFF_RANGE,
+  FAN_FREQUENCY_RANGE,
+  FAN_STRENGTH_RANGE,
+  FAN_WIDTH_RANGE,
   HANDFUL_RADIUS_RANGE,
   PIN_BRUSH_RADIUS_RANGE,
   PointerInput,
@@ -270,24 +274,10 @@ const DEFAULT_SOFTNESS = 0.5;
  */
 const GRAVITY_RANGE = { min: 0, max: 10000, step: 100 };
 /**
- * 電風扇四個滑桿的範圍（issue #67；事後檢視把推力模型從連續力場改成陣風——
- * 見 `SimCore.applyFan`：`strength` 從「每秒加速度」變成「單次陣風的瞬間
- * 速度衝量」，範圍跟著重新校準，不再沿用連續模型時代的量級。`frequency`
- * 是新增的第四個滑桿，平均每秒陣風次數；下限 0.2（約 5 秒一陣，稀疏陣風）、
- * 上限 10（幾乎連續的密集陣風，配合高 `strength` 就是颶風）。寬度／衰減程度
- * 中點對應 `ToolRouter` 的 `DEFAULT_FAN_WIDTH`／`DEFAULT_FAN_FALLOFF_EXPONENT`，
- * 同 `TAP_STRENGTH_RANGE` 的理由。衰減程度下限 0.2（避免趨近 0 次方讓衰減
- * 幾乎消失、矩形內外力道落差過於突兀）、上限 5（明顯集中在風扇正前方）。
- */
-const FAN_WIDTH_RANGE = { min: 20, max: 280, step: 5 };
-const FAN_STRENGTH_RANGE = { min: 200, max: 60000, step: 200 };
-const FAN_FALLOFF_RANGE = { min: 0.2, max: 5, step: 0.1 };
-const FAN_FREQUENCY_RANGE = { min: 0.2, max: 10, step: 0.1 };
-/**
  * 撒 Pin 間距滑桿的範圍（issue #69），世界座標單位。下限 12 是「撒得很密」的實用
  * 下限——再小只是讓 Pin 疊在同一批 Particle 上，手感沒有變化、求解器卻要多扛
- * 幾十個硬約束。兩條半徑拉霸（大把抓取半徑、Pin 筆刷半徑）的範圍住在 `ToolRouter`
- * （issue #114：右鍵＋滾輪調半徑要夾在同一個範圍內）。
+ * 幾十個硬約束。右鍵＋滾輪調得到的拉霸（大把抓取半徑、Pin 筆刷半徑、電風扇四個參數）
+ * 的範圍住在 `ToolRouter`（issue #114 / #125：右鍵＋滾輪要夾在同一個範圍內）。
  */
 const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
 /**
@@ -455,7 +445,8 @@ export class JellySandbox {
   /** 目前邊界的外框幾何（給 `JellyRenderer.setBoundaryFrame` 畫）：`walled` 是 AABB、`floor` 是地板 y、`infinite` 為 `null`。 */
   private boundaryFrame: BoundaryFrame | null = null;
   /**
-   * 「目前工具」（issue #65 / V2 T3-1；ADR-0011）——`PointerInput` 沒有 getter，筆刷／Pin 視覺靠這個判定。
+   * 目前工具（issue #65；issue #122 起是側欄工具列的四個工具 grab／pin／fan／jelly，ADR-0016）
+   * ——`PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠這個判定。
    */
   private activeTool: ToolId = DEFAULT_TOOL;
   /**
@@ -650,7 +641,11 @@ export class JellySandbox {
     this.controlPanel = new ControlPanel({
       initial: {
         activeTool: this.activeTool,
-        toolModes: { grab: this.input.modeOf('grab'), pin: this.input.modeOf('pin') },
+        toolModes: {
+          grab: this.input.modeOf('grab'),
+          pin: this.input.modeOf('pin'),
+          fan: this.input.modeOf('fan'),
+        },
         showCursorLabel: this.showCursorLabel,
         boundary: this.boundaryMode,
         softness: DEFAULT_SOFTNESS,
@@ -1412,10 +1407,10 @@ export class JellySandbox {
   }
 
   /**
-   * 目前工具變更（issue #65 / V2 T3-1）——側欄工具列（`onToolChange`，issue #122）與數字鍵
-   * 1–4（issue #126）都走這裡。轉發給 `PointerInput.setActiveTool`（只影響下一次按下）；
-   * `activeTool` 另外存一份，因為 `PointerInput` 沒有 getter，筆刷／Pin 標記等視覺回饋靠它判定。
-   * 工具列高亮與參數卡也在這裡同步（從工具列按下時面板自己已經切過，重設一次無妨）。切工具
+   * 目前工具變更（issue #65 / V2 T3-1）——側欄工具列（`onToolChange`，issue #122 起，ADR-0016）
+   * 與數字鍵 1–4（issue #126）都走這裡。轉發給 `PointerInput.setActiveTool`（只影響下一次按下）；
+   * `activeTool` 另外存一份，因為 `PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠它
+   * 判定。工具列高亮與參數卡也在這裡同步（從工具列按下時面板自己已經切過，重設一次無妨）。切工具
    * 會改變游標／標記／圓圈的視覺回饋，所以要跟著重算。
    */
   private setActiveTool(tool: ToolId): void {
@@ -1559,7 +1554,8 @@ export class JellySandbox {
   /**
    * 按住右鍵＋滾輪（issue #114，`CameraInput` 呼叫；issue #122 從「調工具半徑」推廣成
    * 「調目前模式的數值」）：目前模式有數值就由 `ToolRouter` 增減並夾在範圍內，新值走跟
-   * 拉霸同一條路（`setXRadius`：沙盒狀態＝圓圈大小 + `ToolRouter`），再灌回面板拉霸。
+   * 拉霸同一條路（`setXRadius`：沙盒狀態＝圓圈大小 + `ToolRouter`；電風扇四個參數走
+   * `setFanX`，issue #125：同時即時套用到場上的風扇、錄製中照樣錄進 Track），再灌回面板拉霸。
    * 回傳 `false`（沒有數值，例如單點、編隊模式）時相機照舊縮放。
    */
   private adjustModeValue(steps: number): boolean {
@@ -1569,6 +1565,10 @@ export class JellySandbox {
     const setValue: Record<ModeValueKey, (v: number) => void> = {
       pinBrushRadius: (v) => this.setPinBrushRadius(v),
       handfulRadius: (v) => this.setHandfulRadius(v),
+      fanWidth: (v) => this.setFanWidth(v),
+      fanStrength: (v) => this.setFanStrength(v),
+      fanFalloffExponent: (v) => this.setFanFalloffExponent(v),
+      fanFrequency: (v) => this.setFanFrequency(v),
     };
     setValue[key](value);
     this.controlPanel.setModeValue(key, value);
@@ -1660,7 +1660,8 @@ export class JellySandbox {
    * 所有「沙盒自己發的模擬事件」的單一出口（issue #95 收攏）：送進 `world.applyInput`，
    * 同時 `trackRecorder.record`（no-op 除非正在錄製）——ADR-0005「所有影響模擬的輸入
    * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件（`PointerInput`
-   * 的 `applyInput`，見 `attachInputHandlers`）也直接走這裡。
+   * 的 `applyInput`，見 `attachInputHandlers`）也直接走這裡——issue #123 起 Pin 工具由
+   * `ToolRouter` 直送，不再另經 Pin 工具轉接。
    */
   private dispatchInput(event: InputEvent): void {
     this.world.applyInput(event);
@@ -2270,7 +2271,7 @@ export class JellySandbox {
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
       adjustModeValue: (steps) => this.adjustModeValue(steps),
       onMiddleClick: () => this.cycleMode(), // 中鍵單擊輪替模式（issue #122）
-      // 右鍵單擊交給目前工具（issue #124）：Jelly 開選單，其他工具目前忽略。
+      // 右鍵單擊交給目前工具（issue #124 / #125）：Jelly 開選單、電風扇點在風扇上＝移除。
       onRightClick: (world, sx, sy) => input.rightClick(world, sx, sy),
     });
     return { input, cameraInput };

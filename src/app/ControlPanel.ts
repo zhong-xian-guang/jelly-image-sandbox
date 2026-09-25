@@ -627,14 +627,17 @@ export class ControlPanel {
     // 電風扇專屬參數（issue #67 事後檢視拆成兩顆顯示開關；「顯示風扇提示」→
     // 「顯示風扇範圍」／「顯示風扇圖示」，見 `ControlPanelInitial.showFanRange`
     // ／`showFanIcon` 的說明）。這整包只在目前工具是電風扇時才需要看到
-    // （見下方 `toolbarSection`），先組起來、`hidden` 依目前工具切換。
+    // （見下方 `toolbarSection`），先組起來、`hidden` 依目前工具切換。issue #125：最上方
+    // 加模式鈕（右鍵＋滾輪要調哪個參數），順序照 spec #121「側欄」——模式鈕、四條拉霸、
+    // 兩個顯示開關、移除風扇。
     const fanParams = this.toolParams('電風扇', [
-      this.checkboxRow('顯示風扇範圍', opts.initial.showFanRange, opts.onShowFanRangeChange),
-      this.checkboxRow('顯示風扇圖示', opts.initial.showFanIcon, opts.onShowFanIconChange),
+      this.modeRow('fan', opts.initial.toolModes.fan, opts.onModeChange),
       fanWidth.row,
       fanStrength.row,
       fanFalloff.row,
       fanFrequency.row,
+      this.checkboxRow('顯示風扇範圍', opts.initial.showFanRange, opts.onShowFanRangeChange),
+      this.checkboxRow('顯示風扇圖示', opts.initial.showFanIcon, opts.onShowFanIconChange),
       this.buttonRow('移除風扇', opts.onRemoveFan),
     ]);
 
@@ -691,6 +694,10 @@ export class ControlPanel {
     this.valueInputs = {
       pinBrushRadius: pinBrushRadiusRow.input,
       handfulRadius: handfulRadiusRow.input,
+      fanWidth: fanWidth.input,
+      fanStrength: fanStrength.input,
+      fanFalloffExponent: fanFalloff.input,
+      fanFrequency: fanFrequency.input,
     };
 
     // Jelly 工具的參數卡（issue #124：生成、移除、重建 Jelly 合成 Jelly 工具）——沒有模式也
