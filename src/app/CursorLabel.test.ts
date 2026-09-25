@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { CursorLabel, cursorLabelText, type CursorLabelInput } from './CursorLabel';
 
 function text(input: Partial<CursorLabelInput>): string | null {
-  return cursorLabelText({ tool: 'grab', mode: null, value: null, formation: 'none', ...input });
+  return cursorLabelText({ mode: null, value: null, formation: 'none', ...input });
 }
 
 describe('cursorLabelText（issue #122）', () => {
@@ -18,15 +18,13 @@ describe('cursorLabelText（issue #122）', () => {
     expect(text({ mode: 'formation', formation: 'ready' })).toBe('編隊');
   });
 
-  it('沒有模式但有數值的舊工具（撒 Pin／移除 Pin）→ 工具名稱加數值', () => {
-    expect(text({ tool: 'spray', value: 120 })).toBe('撒 Pin · 120');
-    expect(text({ tool: 'erase', value: 100 })).toBe('移除 Pin · 100');
+  it('Pin 工具（issue #123）：放／拔加上 Pin 筆刷半徑', () => {
+    expect(text({ mode: 'place', value: 120 })).toBe('放 · 120');
+    expect(text({ mode: 'remove', value: 120 })).toBe('拔 · 120');
   });
 
-  it('沒有模式也沒有數值 → 不顯示', () => {
-    for (const tool of ['pin', 'fan', 'spawn', 'removeJelly', 'rebuildJelly'] as const) {
-      expect(text({ tool })).toBeNull();
-    }
+  it('沒有模式的工具 → 不顯示', () => {
+    expect(text({ mode: null })).toBeNull();
   });
 });
 

@@ -1,6 +1,6 @@
 /**
  * `CursorLabel`（issue #122 / V4 T1；spec #121「游標標籤」）——跟著指標的小標籤，顯示
- * 目前模式，有數值時加上數值（「單點」「大把 · 140」「編隊（尚未設定形狀）」）。模式是
+ * 目前模式，有數值時加上數值（「單點」「大把 · 140」「編隊（尚未設定形狀）」「放 · 120」）。模式是
  * 看不見的狀態，中鍵單擊切換之後要馬上看得出切到哪（ADR-0016）。
  *
  * 它**不是**提示（CONTEXT.md「提示」）：跟筆刷圓圈同一類的游標回饋，不受「播放時隱藏
@@ -11,9 +11,9 @@
  * 文字由純函式 `cursorLabelText` 算，DOM 類別只管顯示——文字規則可以不開瀏覽器就測。
  */
 
-import type { ToolId, ToolMode } from '../input';
+import type { ToolMode } from '../input';
 import type { HoverPoint } from './CanvasHover';
-import { MODE_LABELS, TOOL_LABELS } from './toolLabels';
+import { MODE_LABELS } from './toolLabels';
 
 const VISIBLE_CLASS = 'is-visible';
 
@@ -24,30 +24,23 @@ const OFFSET_PX = 16;
 export type FormationShapeState = 'none' | 'defining' | 'ready';
 
 export interface CursorLabelInput {
-  tool: ToolId;
   /** 目前工具的模式；沒有模式為 `null`。 */
   mode: ToolMode | null;
-  /** 目前模式（或沒有模式的工具）用右鍵＋滾輪調的數值；沒有為 `null`。 */
+  /** 目前模式用右鍵＋滾輪調的數值；沒有為 `null`。 */
   value: number | null;
   /** 編隊形狀的狀態——只有編隊模式會用到。 */
   formation: FormationShapeState;
 }
 
 /**
- * 標籤文字；工具沒有模式也沒有數值時回 `null`（不顯示）。還沒合併的舊工具（撒 Pin、
- * 移除 Pin）沒有模式但有半徑，用工具名稱代替模式名稱。
+ * 標籤文字（「單點」「大把 · 140」「放 · 120」）；工具沒有模式時回 `null`（不顯示）——
+ * 目前有數值可調的都是有模式的工具（大把抓取半徑、Pin 筆刷半徑）。
  */
 export function cursorLabelText(input: CursorLabelInput): string | null {
-  let name: string;
-  if (input.mode !== null) {
-    name = MODE_LABELS[input.mode];
-    if (input.mode === 'formation' && input.formation !== 'ready') {
-      name += input.formation === 'defining' ? '（設定形狀中）' : '（尚未設定形狀）';
-    }
-  } else if (input.value !== null) {
-    name = TOOL_LABELS[input.tool].text;
-  } else {
-    return null;
+  if (input.mode === null) return null;
+  let name = MODE_LABELS[input.mode];
+  if (input.mode === 'formation' && input.formation !== 'ready') {
+    name += input.formation === 'defining' ? '（設定形狀中）' : '（尚未設定形狀）';
   }
   return input.value === null ? name : `${name} · ${input.value}`;
 }

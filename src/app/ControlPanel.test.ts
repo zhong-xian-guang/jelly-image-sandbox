@@ -23,7 +23,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
   return {
     initial: {
       activeTool: 'grab',
-      toolModes: { grab: 'single' },
+      toolModes: { grab: 'single', pin: 'place' },
       showCursorLabel: true,
       boundary: 'infinite',
       softness: 0.5,
@@ -40,9 +40,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       fanFalloffExponent: 2,
       fanFrequency: 2,
       showFormationHint: true,
-      sprayRadius: 140,
+      pinBrushRadius: 120,
       spraySpacing: 36,
-      eraseRadius: 100,
       handfulRadius: 140,
       showHandfulRange: true,
       hideHintsDuringPlayback: false,
@@ -57,9 +56,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     fanStrengthRange: { min: 500, max: 12000, step: 100 },
     fanFalloffRange: { min: 0.2, max: 5, step: 0.1 },
     fanFrequencyRange: { min: 0.2, max: 10, step: 0.1 },
-    sprayRadiusRange: { min: 20, max: 400, step: 10 },
+    pinBrushRadiusRange: { min: 20, max: 400, step: 10 },
     spraySpacingRange: { min: 12, max: 120, step: 2 },
-    eraseRadiusRange: { min: 20, max: 400, step: 10 },
     handfulRadiusRange: { min: 20, max: 400, step: 10 },
     demos: [],
     onImportImage: vi.fn(),
@@ -78,9 +76,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onFormationDefineStart: vi.fn(),
     onFormationDefineEnd: vi.fn(),
     onShowFormationHintChange: vi.fn(),
-    onSprayRadiusChange: vi.fn(),
+    onPinBrushRadiusChange: vi.fn(),
     onSpraySpacingChange: vi.fn(),
-    onEraseRadiusChange: vi.fn(),
     onHandfulRadiusChange: vi.fn(),
     onShowHandfulRangeChange: vi.fn(),
     onHideHintsDuringPlaybackChange: vi.fn(),
@@ -609,7 +606,7 @@ function highlightedTools(panel: ControlPanel): string[] {
   );
 }
 
-/** 抓取工具參數卡上某個模式鈕（issue #122）。 */
+/** 參數卡上某個模式鈕（issue #122）——各工具的模式名稱互不重複，用模式就找得到。 */
 function modeButton(panel: ControlPanel, mode: string): HTMLButtonElement {
   const button = panel.element.querySelector(
     `.jelly-mode-row button[data-mode="${mode}"]`,
@@ -618,10 +615,10 @@ function modeButton(panel: ControlPanel, mode: string): HTMLButtonElement {
   return button!;
 }
 
-function highlightedModes(panel: ControlPanel): string[] {
-  return [...panel.element.querySelectorAll('.jelly-mode-row button.is-active')].map(
-    (b) => (b as HTMLButtonElement).dataset.mode!,
-  );
+function highlightedModes(panel: ControlPanel, tool = 'grab'): string[] {
+  return [
+    ...panel.element.querySelectorAll(`.jelly-mode-row[data-tool="${tool}"] button.is-active`),
+  ].map((b) => (b as HTMLButtonElement).dataset.mode!);
 }
 
 /** 參數卡裡目前沒有 `hidden` 的那幾組（issue #122：最多一組）。 */
@@ -652,8 +649,6 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
     expect(buttons.map((b) => b.dataset.tool)).toEqual([
       'grab',
       'pin',
-      'spray',
-      'erase',
       'fan',
       'spawn',
       'removeJelly',
@@ -662,8 +657,6 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
     expect(buttons.map((b) => b.querySelector('.jelly-tool-button-text')!.textContent)).toEqual([
       '抓取',
       'Pin',
-      '撒 Pin',
-      '移除 Pin',
       '電風扇',
       '生成 Jelly',
       '移除 Jelly',
@@ -685,7 +678,7 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
     expect(highlightedTools(panel)).toEqual(['fan']);
     expect(toolButton(panel, 'grab').getAttribute('aria-pressed')).toBe('false');
 
-    for (const tool of ['pin', 'spray', 'erase', 'spawn', 'removeJelly', 'rebuildJelly']) {
+    for (const tool of ['pin', 'spawn', 'removeJelly', 'rebuildJelly']) {
       clickTool(panel, tool);
       expect(opts.onToolChange).toHaveBeenLastCalledWith(tool);
       expect(highlightedTools(panel)).toEqual([tool]);
@@ -705,9 +698,9 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
   it('setActiveTool 只動高亮與參數卡，不回呼', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
-    panel.setActiveTool('spray');
-    expect(highlightedTools(panel)).toEqual(['spray']);
-    expect(visibleCards(panel)[0]!.textContent).toContain('撒 Pin 範圍半徑');
+    panel.setActiveTool('pin');
+    expect(highlightedTools(panel)).toEqual(['pin']);
+    expect(visibleCards(panel)[0]!.textContent).toContain('Pin 筆刷半徑');
     expect(opts.onToolChange).not.toHaveBeenCalled();
   });
 
@@ -746,11 +739,9 @@ describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () =
     expect(cardTitles(panel)).toEqual(['抓取']);
     clickTool(panel, 'fan');
     expect(cardTitles(panel)).toEqual(['電風扇']);
-    clickTool(panel, 'spray');
-    expect(cardTitles(panel)).toEqual(['撒 Pin']);
-    clickTool(panel, 'erase');
-    expect(cardTitles(panel)).toEqual(['移除 Pin']);
-    for (const tool of ['pin', 'spawn', 'removeJelly', 'rebuildJelly']) {
+    clickTool(panel, 'pin');
+    expect(cardTitles(panel)).toEqual(['Pin']);
+    for (const tool of ['spawn', 'removeJelly', 'rebuildJelly']) {
       clickTool(panel, tool);
       expect(cardTitles(panel)).toEqual([]);
     }
@@ -791,10 +782,12 @@ describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () =
 describe('ControlPanel — 抓取工具的模式鈕（issue #122）', () => {
   it('三顆模式鈕：單點／大把／編隊，initial.toolModes 決定一開始的高亮', () => {
     const panel = new ControlPanel(
-      makeOptions({ initial: { ...makeOptions().initial, toolModes: { grab: 'handful' } } }),
+      makeOptions({
+        initial: { ...makeOptions().initial, toolModes: { grab: 'handful', pin: 'place' } },
+      }),
     );
     const buttons = [
-      ...panel.element.querySelectorAll('.jelly-mode-row button'),
+      ...panel.element.querySelectorAll('.jelly-mode-row[data-tool="grab"] button'),
     ] as HTMLButtonElement[];
     expect(buttons.map((b) => [b.dataset.mode, b.textContent])).toEqual([
       ['single', '單點'],
@@ -1051,97 +1044,89 @@ describe('ControlPanel — 編隊抓取控制項（issue #68；issue #122 併進
   });
 });
 
-describe('ControlPanel — 撒 Pin 控制項（issue #69 / V2 T3-5）', () => {
-  function sprayParams(panel: ControlPanel): HTMLElement {
-    return [...panel.element.querySelectorAll('.jelly-tool-params')].find((el) =>
-      el.textContent?.includes('撒 Pin 範圍半徑'),
+describe('ControlPanel — Pin 工具（issue #123 / V4 T2）', () => {
+  function pinCard(panel: ControlPanel): HTMLElement {
+    return [...panel.element.querySelectorAll('.jelly-tool-params')].find(
+      (el) => el.querySelector('.jelly-tool-params-title')!.textContent === 'Pin',
     ) as HTMLElement;
   }
 
-  it('切到「撒 Pin」→ onToolChange 收到 "spray"，專屬參數區塊顯示', () => {
-    const opts = makeOptions();
-    const panel = new ControlPanel(opts);
-
-    expect(sprayParams(panel).hidden).toBe(true);
-    clickTool(panel, 'spray');
-
-    expect(opts.onToolChange).toHaveBeenCalledWith('spray');
-    expect(sprayParams(panel).hidden).toBe(false);
-  });
-
-  it('初始工具就是「撒 Pin」→ 專屬參數區塊一開始就顯示', () => {
-    const panel = new ControlPanel(
-      makeOptions({ initial: { ...makeOptions().initial, activeTool: 'spray' } }),
+  it('工具列上不再有撒 Pin、移除 Pin', () => {
+    const panel = new ControlPanel(makeOptions());
+    const tools = [...panel.element.querySelectorAll('.jelly-toolbar button')].map(
+      (b) => (b as HTMLButtonElement).dataset.tool,
     );
-    expect(sprayParams(panel).hidden).toBe(false);
+    expect(tools).not.toContain('spray');
+    expect(tools).not.toContain('erase');
+    const text = panel.element.querySelector('.jelly-toolbar')!.textContent!;
+    expect(text).not.toContain('撒 Pin');
+    expect(text).not.toContain('移除 Pin');
   });
 
-  it('「撒 Pin 範圍半徑」滑桿初始值來自 initial.sprayRadius，拖動觸發 onSprayRadiusChange', () => {
+  it('切到 Pin → 參數卡：模式鈕（最上方）、Pin 筆刷半徑、撒 Pin 間距；沒有舊的兩條半徑', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
-    const input = findRangeInputByLabel(panel, '撒 Pin 範圍半徑');
+    expect(pinCard(panel).hidden).toBe(true);
+    clickTool(panel, 'pin');
+    expect(opts.onToolChange).toHaveBeenCalledWith('pin');
+    const card = pinCard(panel);
+    expect(card.hidden).toBe(false);
+    expect(card.children[1]!.classList.contains('jelly-mode-row')).toBe(true);
+    const text = card.textContent!;
+    expect(text).toContain('Pin 筆刷半徑');
+    expect(text).toContain('撒 Pin 間距');
+    expect(panel.element.textContent).not.toContain('撒 Pin 範圍半徑');
+    expect(panel.element.textContent).not.toContain('移除 Pin 範圍半徑');
+  });
 
-    expect(Number(input.value)).toBe(opts.initial.sprayRadius);
+  it('模式鈕：放／拔，initial.toolModes.pin 決定高亮；點了回呼 onModeChange("pin", 模式)', () => {
+    const opts = makeOptions({
+      initial: { ...makeOptions().initial, toolModes: { grab: 'single', pin: 'remove' } },
+    });
+    const panel = new ControlPanel(opts);
+    const buttons = [
+      ...panel.element.querySelectorAll('.jelly-mode-row[data-tool="pin"] button'),
+    ] as HTMLButtonElement[];
+    expect(buttons.map((b) => [b.dataset.mode, b.textContent])).toEqual([
+      ['place', '放'],
+      ['remove', '拔'],
+    ]);
+    expect(highlightedModes(panel, 'pin')).toEqual(['remove']);
+    modeButton(panel, 'place').click();
+    expect(opts.onModeChange).toHaveBeenCalledWith('pin', 'place');
+    expect(highlightedModes(panel, 'pin')).toEqual(['place']);
+    // 抓取工具的模式鈕不受影響。
+    expect(highlightedModes(panel, 'grab')).toEqual(['single']);
+  });
+
+  it('setToolMode("pin", …)（中鍵輪替灌回來）→ 高亮同步、不回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    panel.setToolMode('pin', 'remove');
+    expect(highlightedModes(panel, 'pin')).toEqual(['remove']);
+    expect(opts.onModeChange).not.toHaveBeenCalled();
+  });
+
+  it('「Pin 筆刷半徑」拉霸：20–400、step 10，初始值來自 initial.pinBrushRadius，拖動觸發回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const input = findRangeInputByLabel(panel, 'Pin 筆刷半徑');
+    expect([input.min, input.max, input.step]).toEqual(['20', '400', '10']);
+    expect(Number(input.value)).toBe(120);
     input.value = '300';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onSprayRadiusChange).toHaveBeenCalledWith(300);
+    expect(opts.onPinBrushRadiusChange).toHaveBeenCalledWith(300);
   });
 
-  it('「撒 Pin 間距」滑桿初始值來自 initial.spraySpacing，拖動觸發 onSpraySpacingChange', () => {
+  it('「撒 Pin 間距」拉霸初始值來自 initial.spraySpacing，拖動觸發 onSpraySpacingChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '撒 Pin 間距');
-
     expect(Number(input.value)).toBe(opts.initial.spraySpacing);
     input.value = '20';
     input.dispatchEvent(new Event('input'));
     expect(opts.onSpraySpacingChange).toHaveBeenCalledWith(20);
-  });
-});
-
-describe('ControlPanel — 移除 Pin 控制項（issue #70 / V2 T3-6）', () => {
-  function eraseParams(panel: ControlPanel): HTMLElement {
-    return [...panel.element.querySelectorAll('.jelly-tool-params')].find((el) =>
-      el.textContent?.includes('移除 Pin 範圍半徑'),
-    ) as HTMLElement;
-  }
-
-  it('切到「移除 Pin」→ onToolChange 收到 "erase"，專屬參數區塊顯示', () => {
-    const opts = makeOptions();
-    const panel = new ControlPanel(opts);
-
-    expect(eraseParams(panel).hidden).toBe(true);
-    clickTool(panel, 'erase');
-
-    expect(opts.onToolChange).toHaveBeenCalledWith('erase');
-    expect(eraseParams(panel).hidden).toBe(false);
-  });
-
-  it('「移除 Pin 範圍半徑」滑桿初始值來自 initial.eraseRadius，拖動觸發 onEraseRadiusChange', () => {
-    const opts = makeOptions();
-    const panel = new ControlPanel(opts);
-    const input = findRangeInputByLabel(panel, '移除 Pin 範圍半徑');
-
-    expect(Number(input.value)).toBe(opts.initial.eraseRadius);
-    input.value = '250';
-    input.dispatchEvent(new Event('input'));
-    expect(opts.onEraseRadiusChange).toHaveBeenCalledWith(250);
-  });
-
-  // 驗收條件「跟撒 Pin 的半徑參數各自獨立」在面板這一端的意思：兩條各自獨立的
-  // 滑桿、各自獨立的回呼，動其中一條不會連帶觸發另一條。
-  it('跟撒 Pin 的半徑是兩條各自獨立的滑桿，動一條不動到另一條', () => {
-    const opts = makeOptions();
-    const panel = new ControlPanel(opts);
-    const eraseInput = findRangeInputByLabel(panel, '移除 Pin 範圍半徑');
-    const sprayInput = findRangeInputByLabel(panel, '撒 Pin 範圍半徑');
-    expect(eraseInput).not.toBe(sprayInput);
-
-    eraseInput.value = '200';
-    eraseInput.dispatchEvent(new Event('input'));
-    expect(opts.onEraseRadiusChange).toHaveBeenCalledWith(200);
-    expect(opts.onSprayRadiusChange).not.toHaveBeenCalled();
-    expect(Number(sprayInput.value)).toBe(opts.initial.sprayRadius);
+    expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
   });
 });
 
@@ -1422,7 +1407,7 @@ describe('ControlPanel — 大把抓取控制項（issue #113；issue #122 併�
     input.value = '260';
     input.dispatchEvent(new Event('input'));
     expect(opts.onHandfulRadiusChange).toHaveBeenCalledWith(260);
-    expect(opts.onSprayRadiusChange).not.toHaveBeenCalled();
+    expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
   });
 
   it('「顯示大把抓取範圍」checkbox 初始值來自 initial.showHandfulRange，切換觸發回呼', () => {
@@ -1444,20 +1429,16 @@ describe('ControlPanel — 右鍵＋滾輪調數值的拉霸同步（issue #114�
   it('setModeValue 只動對應數值的拉霸，不觸發 onChange 回呼', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
-    const spray = findRangeInputByLabel(panel, '撒 Pin 範圍半徑');
-    const erase = findRangeInputByLabel(panel, '移除 Pin 範圍半徑');
+    const pinBrush = findRangeInputByLabel(panel, 'Pin 筆刷半徑');
     const handful = findRangeInputByLabel(panel, '大把抓取半徑');
-    const before = [spray.value, erase.value, handful.value];
+    const before = handful.value;
 
-    panel.setModeValue('sprayRadius', 230);
-    expect([spray.value, erase.value, handful.value]).toEqual(['230', before[1], before[2]]);
-    panel.setModeValue('eraseRadius', 50);
-    expect(erase.value).toBe('50');
+    panel.setModeValue('pinBrushRadius', 230);
+    expect([pinBrush.value, handful.value]).toEqual(['230', before]);
     panel.setModeValue('handfulRadius', 310);
-    expect(handful.value).toBe('310');
+    expect([pinBrush.value, handful.value]).toEqual(['230', '310']);
 
-    expect(opts.onSprayRadiusChange).not.toHaveBeenCalled();
-    expect(opts.onEraseRadiusChange).not.toHaveBeenCalled();
+    expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
     expect(opts.onHandfulRadiusChange).not.toHaveBeenCalled();
   });
 });

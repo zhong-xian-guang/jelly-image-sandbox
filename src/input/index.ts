@@ -9,12 +9,10 @@ export {
   DEFAULT_FAN_STRENGTH,
   DEFAULT_FAN_FALLOFF_EXPONENT,
   DEFAULT_FAN_FREQUENCY,
-  DEFAULT_SPRAY_RADIUS,
+  DEFAULT_PIN_BRUSH_RADIUS,
   DEFAULT_SPRAY_SPACING,
-  DEFAULT_ERASE_RADIUS,
   DEFAULT_HANDFUL_RADIUS,
-  SPRAY_RADIUS_RANGE,
-  ERASE_RADIUS_RANGE,
+  PIN_BRUSH_RADIUS_RANGE,
   HANDFUL_RADIUS_RANGE,
   CLICK_TOOL_IDS,
   TOOL_IDS,
@@ -28,16 +26,15 @@ export type {
   ClickToolId,
   ToolRouterOptions,
   FanParams,
-  SprayParams,
-  EraseParams,
+  PinBrushParams,
   HandfulParams,
   ModalToolId,
   ToolMode,
   ToolModeOf,
   GrabMode,
+  PinMode,
   ModeValueKey,
   ModeValue,
 } from './ToolRouter';
 export { PointerInput } from './PointerInput';
 export type { PointerInputOptions } from './PointerInput';
-export { routeForPinTool } from './pinToolRouting';

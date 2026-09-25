@@ -4,18 +4,18 @@
  * 薄的 DOM 接線層（對照 `PointerInput`/`CameraInput`/`DropImportInput`）：建控制
  * 項、聽使用者操作、透過回呼往外送——不知道 `SimCore`/`JellySandbox` 的存在，
  * 邏輯（Softness 曲線、Walled 邊界範圍、Pin 工具轉接）都在各自的純函式模組
- * （`../sim/softness`、`./boundaryGeometry`、`../input/pinToolRouting`），接線在
+ * （`../sim/softness`、`./boundaryGeometry`、`../input/ToolRouter`），接線在
  * `JellySandbox`。
  *
  * **工具列**（issue #122 / V4 T1；ADR-0016，取代原本「▸ 沙盒工具」收合區塊裡的下拉）：
  * 側欄最上方每個工具一顆按鈕（圖示＋文字），目前工具高亮；正下方是目前工具的參數卡，
- * 有模式的工具（抓取）參數卡最上方是模式切換鈕。面板自己記一份高亮狀態只為了畫——
+ * 有模式的工具（抓取、Pin）參數卡最上方是模式切換鈕。面板自己記一份高亮狀態只為了畫——
  * 真正的狀態在 `ToolRouter`，中鍵單擊輪替後由 `JellySandbox` 呼叫 `setToolMode` 灌回來
  * （跟 `setSoftness` 同一個「只動 DOM、不回呼」的慣例）。
  *
- * 放 Pin 是工具列上的「Pin」工具（issue #115；ADR-0015，取代原本的
- * 「Pin 模式」勾選框）。選著它時 `JellySandbox` 會把畫布游標換成十字、把
- * `PinMarkers` 標記切成「可點掉」的視覺（紅色脈動）。
+ * 「Pin」工具（issue #115；issue #123 合併撒 Pin、移除 Pin，模式為放／拔）的參數卡是
+ * 模式鈕、Pin 筆刷半徑、撒 Pin 間距。選著它時 `JellySandbox` 會把畫布游標換成十字，
+ * 拔模式下再把 `PinMarkers` 標記切成「可點掉」的視覺（紅色脈動）。
  *
  * 「顯示 Pin」關掉時，所見即所得：畫面上看不到 Pin 標記，「清除所有 Pin」按鈕就
  * 跟著鎖住（`disabled`）——不能對看不見的東西下手。
@@ -167,11 +167,10 @@ export interface ControlPanelInitial {
   fanFrequency: number;
   /** 編隊抓取形狀標記顯示開關的初始值（issue #68）。 */
   showFormationHint: boolean;
-  /** 撒 Pin 兩個滑桿的初始值（issue #69）——見 `../input` 的 `DEFAULT_SPRAY_*`。 */
-  sprayRadius: number;
+  /** Pin 筆刷半徑拉霸的初始值（issue #123）——見 `../input` 的 `DEFAULT_PIN_BRUSH_RADIUS`。 */
+  pinBrushRadius: number;
+  /** 撒 Pin 間距拉霸的初始值（issue #69）——見 `../input` 的 `DEFAULT_SPRAY_SPACING`。 */
   spraySpacing: number;
-  /** 移除 Pin 半徑滑桿的初始值（issue #70）——見 `../input` 的 `DEFAULT_ERASE_RADIUS`。 */
-  eraseRadius: number;
   /** 大把抓取半徑拉霸的初始值（issue #113）——見 `../input` 的 `DEFAULT_HANDFUL_RADIUS`。 */
   handfulRadius: number;
   /** 大把抓取範圍圈（提示）顯示開關的初始值（issue #113）。 */
@@ -201,11 +200,9 @@ export interface ControlPanelOptions {
   fanStrengthRange: RangeSpec;
   fanFalloffRange: RangeSpec;
   fanFrequencyRange: RangeSpec;
-  /** 撒 Pin「範圍半徑」／「最小間距」兩個滑桿各自的範圍（issue #69）。 */
-  sprayRadiusRange: RangeSpec;
+  /** 「Pin 筆刷半徑」（issue #123）／「撒 Pin 間距」（issue #69）兩條拉霸各自的範圍。 */
+  pinBrushRadiusRange: RangeSpec;
   spraySpacingRange: RangeSpec;
-  /** 移除 Pin「範圍半徑」滑桿的範圍（issue #70）。 */
-  eraseRadiusRange: RangeSpec;
   /** 「大把抓取半徑」拉霸的範圍（issue #113）。 */
   handfulRadiusRange: RangeSpec;
   /** 「匯入尺寸」拉霸的範圍（issue #88）。 */
@@ -281,17 +278,12 @@ export interface ControlPanelOptions {
   /** 「顯示編隊抓取提示」開關（issue #68）——同 `onShowFanRangeChange` 的理由，純視覺。 */
   onShowFormationHintChange: (visible: boolean) => void;
   /**
-   * 撒 Pin「範圍半徑」／「最小間距」滑桿變更（issue #69）——比照四個電風扇滑桿，
-   * `ControlPanel` 只負責把新數值原封不動送出去，影響下一次撒點（已經撒出去的
-   * Pin 是既成事實，不會回頭重排）。
+   * 「Pin 筆刷半徑」（issue #123；撒 Pin 與橡皮擦共用）／「撒 Pin 間距」（issue #69）拉霸
+   * 變更——比照四個電風扇滑桿，`ControlPanel` 只負責把新數值原封不動送出去，影響之後的
+   * 撒／擦與畫布上的筆刷圓圈（已經撒出去的 Pin 是既成事實，不會回頭重排）。
    */
-  onSprayRadiusChange: (radius: number) => void;
+  onPinBrushRadiusChange: (radius: number) => void;
   onSpraySpacingChange: (spacing: number) => void;
-  /**
-   * 移除 Pin「範圍半徑」滑桿變更（issue #70）——跟撒 Pin 的半徑是兩個各自獨立的
-   * 值（見 `ToolRouter.setEraseParams`），這裡也就是兩個各自獨立的回呼。
-   */
-  onEraseRadiusChange: (radius: number) => void;
   /**
    * 「大把抓取半徑」拉霸變更（issue #113 / V3 T4-1）——影響下一次按下（已抓住的那一把
    * 不變）與畫布上的範圍圈，兩件事都交給 `JellySandbox`。
@@ -609,19 +601,20 @@ export class ControlPanel {
       this.buttonRow('移除風扇', opts.onRemoveFan),
     ]);
 
-    // 撒 Pin 專屬參數（issue #69）：範圍半徑 + 最小間距兩個滑桿，比照 `fanParams`
-    // 的收合模式。半徑同時決定畫布上那圈筆刷游標的大小（見 `BrushCursor`），
-    // 所以「調半徑」這件事在畫面上是所見即所得，不需要另外的預覽開關。
-    const sprayRadiusRow = this.rangeRow(
-      '撒 Pin 範圍半徑',
-      opts.sprayRadiusRange.min,
-      opts.sprayRadiusRange.max,
-      opts.sprayRadiusRange.step,
-      opts.initial.sprayRadius,
-      opts.onSprayRadiusChange,
+    // Pin 工具的參數卡（issue #123：Pin、撒 Pin、移除 Pin 合成 Pin 工具）——模式鈕、Pin 筆刷
+    // 半徑（撒 Pin 與橡皮擦共用，同時是畫布上那圈筆刷游標的大小，見 `BrushCursor`，所以
+    // 調半徑是所見即所得）、撒 Pin 間距。
+    const pinBrushRadiusRow = this.rangeRow(
+      'Pin 筆刷半徑',
+      opts.pinBrushRadiusRange.min,
+      opts.pinBrushRadiusRange.max,
+      opts.pinBrushRadiusRange.step,
+      opts.initial.pinBrushRadius,
+      opts.onPinBrushRadiusChange,
     );
-    const sprayParams = this.toolParams('撒 Pin', [
-      sprayRadiusRow.row,
+    const pinParams = this.toolParams('Pin', [
+      this.modeRow('pin', opts.initial.toolModes.pin, opts.onModeChange),
+      pinBrushRadiusRow.row,
       this.rangeRow(
         '撒 Pin 間距（越小越密）',
         opts.spraySpacingRange.min,
@@ -631,18 +624,6 @@ export class ControlPanel {
         opts.onSpraySpacingChange,
       ).row,
     ]);
-
-    // 移除 Pin 專屬參數（issue #70）：只有橡皮擦半徑一個滑桿。跟撒 Pin 的半徑
-    // 各自獨立，所以是兩個區塊裡的兩條滑桿，而不是共用一條。
-    const eraseRadiusRow = this.rangeRow(
-      '移除 Pin 範圍半徑',
-      opts.eraseRadiusRange.min,
-      opts.eraseRadiusRange.max,
-      opts.eraseRadiusRange.step,
-      opts.initial.eraseRadius,
-      opts.onEraseRadiusChange,
-    );
-    const eraseParams = this.toolParams('移除 Pin', [eraseRadiusRow.row]);
 
     // 抓取工具的參數卡（issue #122：一般操作／大把抓取／編隊抓取合成抓取工具）——模式鈕、
     // 大把抓取半徑（issue #113）、兩顆提示開關、編隊形狀的設定按鈕（issue #68）。
@@ -671,14 +652,13 @@ export class ControlPanel {
     ]);
 
     this.valueInputs = {
-      sprayRadius: sprayRadiusRow.input,
-      eraseRadius: eraseRadiusRow.input,
+      pinBrushRadius: pinBrushRadiusRow.input,
       handfulRadius: handfulRadiusRow.input,
     };
 
     const toolbarSection = this.toolbarSection(
       opts.initial.activeTool,
-      { grab: grabParams, fan: fanParams, spray: sprayParams, erase: eraseParams },
+      { grab: grabParams, pin: pinParams, fan: fanParams },
       opts.onToolChange,
     );
 
@@ -1035,7 +1015,7 @@ export class ControlPanel {
    * 工具列＋參數卡（issue #122 / V4 T1；ADR-0016，取代 issue #65 的「目前工具」下拉與
    * issue #67 的「▸ 沙盒工具」收合區塊）。每個工具一顆按鈕（圖示＋文字，照 `TOOL_IDS`
    * 的順序），目前工具高亮（`.is-active` + `aria-pressed`）；按鈕下方是參數卡，只顯示
-   * 目前工具那一組（`toolParams`），沒有參數的工具（Pin、三個 Jelly 工具）就沒有卡。
+   * 目前工具那一組（`toolParams`），沒有參數的工具（三個 Jelly 工具）就沒有卡。
    */
   private toolbarSection(
     initialTool: ToolId,
@@ -1107,6 +1087,7 @@ export class ControlPanel {
     row.className = 'jelly-control-row jelly-mode-row';
     row.setAttribute('role', 'group');
     row.setAttribute('aria-label', '模式');
+    row.dataset.tool = tool;
     const buttons = new Map<ToolMode, HTMLButtonElement>();
     for (const mode of modesOf(tool)) {
       const button = document.createElement('button');
