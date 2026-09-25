@@ -116,6 +116,10 @@ v1 Sim mesh 與 Texture mesh 為同一張。若貼圖出現明顯折面感，升
   （`resumeDelaySeconds`）後緩動回歸。「背景」＝ `pointerdown` 時 `sim.pick()` 沒命中。
 - **鎖定跟隨**開關：`setFollow { enabled: false }`——自動跟隨關，相機定住，手動仍可動。
 - **框住果凍**按鈕：`frame`——忽略暫停與鎖定，一次性緩動到當前 bbox + 邊距，到位後恢復跟隨。
+- **避開介面**（issue #138）：zoom-to-fit 的「畫布」是扣掉被介面蓋住的邊之後的矩形
+  （`CanvasSize.fitInsets`：底部的播放控制條、相機按鈕、匯入提示，以及展開的側欄），果凍
+  塞進並置中在那個矩形裡。由 app 層每幀量好傳進來（`src/app/fitInsets.ts`），相機本身不碰
+  DOM；乾淨畫面、側欄收起時對應的邊不扣。只影響取景，不進求解器、不進片段檔。
 - 所有繪製與 picking 都經過 `state.transform`。相機狀態不進求解器；相機指令是與
   `applyInput` 平行的另一條輸入流（`CameraCommand`），不共用求解器的窄介面。
 

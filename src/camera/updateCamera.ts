@@ -55,8 +55,9 @@ const FRAME_DONE_SCALE_EPS = 1e-3;
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
 
 /**
- * 把 `bbox` 置中、縮放到含邊距塞進 `canvasSize` 的變換。bbox 邊長 clamp 到 ≥ 1（退化
- * 尺寸不會除以零），scale clamp 到 `[config.minScale, config.maxScale]`。
+ * 把 `bbox` 置中、縮放到含邊距塞進 `canvasSize` 的變換。畫布有被介面蓋住的邊
+ * （`canvasSize.fitInsets`，issue #138）時，改成塞進、置中在扣掉那些邊之後的矩形。
+ * bbox 邊長 clamp 到 ≥ 1（退化尺寸不會除以零），scale clamp 到 `[config.minScale, config.maxScale]`。
  */
 export function fitTransform(
   bbox: CameraTarget['bbox'],
@@ -64,12 +65,21 @@ export function fitTransform(
   config: CameraFollowConfig = DEFAULT_CAMERA_FOLLOW_CONFIG,
 ): CameraTransform {
   const { fitMarginPx, minScale, maxScale } = config;
+  const { top = 0, right = 0, bottom = 0, left = 0 } = canvasSize.fitInsets ?? {};
   const bw = Math.max(bbox.maxX - bbox.minX, 1);
   const bh = Math.max(bbox.maxY - bbox.minY, 1);
-  const usableW = Math.max(canvasSize.width - fitMarginPx, 1);
-  const usableH = Math.max(canvasSize.height - fitMarginPx, 1);
+  const usableW = Math.max(canvasSize.width - left - right - fitMarginPx, 1);
+  const usableH = Math.max(canvasSize.height - top - bottom - fitMarginPx, 1);
   const scale = clamp(Math.min(usableW / bw, usableH / bh), minScale, maxScale);
-  return { x: (bbox.minX + bbox.maxX) / 2, y: (bbox.minY + bbox.maxY) / 2, scale };
+  // 可用矩形的中心離畫布中心多遠（螢幕 px）——bbox 中心要落在那裡，而相機 {x, y} 對準的是
+  // 畫布中心，所以反推回世界座標的偏移。
+  const offX = (left - right) / 2;
+  const offY = (top - bottom) / 2;
+  return {
+    x: (bbox.minX + bbox.maxX) / 2 - offX / scale,
+    y: (bbox.minY + bbox.maxY) / 2 - offY / scale,
+    scale,
+  };
 }
 
 /** 已 fit 到 `target`、自動跟隨開、未暫停、未框住的起始狀態。 */

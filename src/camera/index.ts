@@ -14,6 +14,7 @@ export type { CameraInputOptions } from './CameraInput';
 export type {
   CameraTransform,
   CanvasSize,
+  ScreenInsets,
   CameraTarget,
   CameraFollowConfig,
   CameraState,

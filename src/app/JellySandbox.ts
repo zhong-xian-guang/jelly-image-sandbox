@@ -140,6 +140,7 @@ import {
   type CameraCommand,
   type CameraState,
   type CanvasSize,
+  type ScreenInsets,
   createCameraState,
   fitTransform,
   screenToWorld,
@@ -208,6 +209,7 @@ import {
 import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { CanvasHover } from './CanvasHover';
 import { CleanView } from './CleanView';
+import { coveredInsets, visibleRect } from './fitInsets';
 import { ContextMenu, jellyMenuItems, type JellyMenuItemId } from './ContextMenu';
 import { ControlPanel } from './ControlPanel';
 import { CursorLabel, cursorLabelText, type FormationShapeState } from './CursorLabel';
@@ -430,6 +432,11 @@ export class JellySandbox {
   private noticeTimer = 0;
 
   private cameraState: CameraState;
+  /**
+   * 畫布邊上被介面蓋住多少（issue #138）——相機 zoom-to-fit 要避開的部分，經 `canvasSize()`
+   * 帶給相機。每幀開頭（還沒寫任何 DOM 前）重量一次，見 `refreshFitInsets`。
+   */
+  private fitInsets: ScreenInsets | undefined;
   /** `CameraInput` 逐事件塞入，主迴圈每幀取出餵 `updateCamera` 後清空。 */
   private cameraCommands: CameraCommand[] = [];
   /** 拖放匯入進行中——擋掉重疊的第二次匯入（連續拖放兩張圖不會互相打架）。 */
@@ -791,6 +798,12 @@ export class JellySandbox {
       togglePause: () => this.togglePause(),
     });
     this.applyToolVisuals();
+
+    // 起始鏡位避開底部控制條、匯入提示與側欄（issue #138）：上面建相機時介面還沒掛上，
+    // 量好之後重新 fit 一次，開頁第一格就是避開後的取景（不是從整張畫布的 fit 緩動過去）。
+    this.refreshFitInsets();
+    this.cameraState = createCameraState({ bbox: this.lastBbox }, this.canvasSize());
+    this.renderer.setCamera(this.cameraState.transform);
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
     // 看到「群組」這個概念、按「＋ 新增群組」（issue #43）。
@@ -2399,6 +2412,9 @@ export class JellySandbox {
     const elapsed = elapsedMs / 1000;
     this.lastFrameMs = nowMs;
 
+    // 先量介面蓋住畫布多少（issue #138）——排在這一幀寫任何 DOM 之前，不會逼瀏覽器同步重排。
+    this.refreshFitInsets();
+
     // 筆刷圓圈是**游標**不是提示（issue #69／#79）：它代替滑鼠指標本身，永遠
     // 不該落後指標，所以排在暫停守衛之前——暫停中果凍定格，但滑鼠還是會動。
     // 提示層（含編隊形狀預覽）則跟著暫停一起定格，見下方那一區。
@@ -2625,7 +2641,29 @@ export class JellySandbox {
   };
 
   private canvasSize(): CanvasSize {
-    return { width: this.root.clientWidth, height: this.root.clientHeight };
+    return {
+      width: this.root.clientWidth,
+      height: this.root.clientHeight,
+      fitInsets: this.fitInsets,
+    };
+  }
+
+  /**
+   * 量畫布邊上被介面蓋住多少（issue #138）：底部的播放控制條、相機按鈕、匯入提示，以及
+   * 展開的側欄。乾淨畫面藏起來的、收起的側欄都不算（量出來是 `null`），fit 回到整張畫布。
+   */
+  private refreshFitInsets(): void {
+    const sidebar = this.controlPanel.isSidebarCollapsed()
+      ? null
+      : visibleRect(this.controlPanel.element);
+    this.fitInsets = coveredInsets(this.root.getBoundingClientRect(), {
+      bottom: [
+        visibleRect(this.controlPanel.playbackBar),
+        visibleRect(this.controlPanel.cameraControls),
+        visibleRect(this.importHint),
+      ],
+      left: [sidebar],
+    });
   }
 }
 

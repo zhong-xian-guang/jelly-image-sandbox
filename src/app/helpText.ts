@@ -9,9 +9,13 @@
 import { modesOf, type ModalToolId, type ToolId } from '../input';
 import { MODE_LABELS, TOOL_LABELS } from './toolLabels';
 
-/** 每張工具卡最底下那一行固定的滑鼠操作說明（spec #127：「左鍵：…｜中鍵點：…｜右鍵＋滾輪：…」）。 */
+/**
+ * 每張工具卡最底下那一行固定的滑鼠操作說明（spec #127：「左鍵：…｜中鍵點：…｜右鍵＋滾輪：…」）。
+ * 抓取的右鍵＋滾輪要看模式（issue #138，對照 `ToolRouter` 的 `MODE_VALUE_KEYS`）：大把、以及
+ * 編隊開了「每個點用大把抓」時調大把半徑；單點、編隊沒開時縮放。
+ */
 export const TOOL_HELP_LINES: Readonly<Record<ToolId, string>> = {
-  grab: '左鍵：拖曳抓、快速點拍｜中鍵點：切模式｜右鍵＋滾輪：大把半徑',
+  grab: '左鍵：拖曳抓、快速點拍｜中鍵點：切模式｜右鍵＋滾輪：大把／編隊開每點大把＝調半徑，否則縮放',
   pin: '左鍵：點一下放／拔、拖曳撒／擦｜中鍵點：切放／拔｜右鍵＋滾輪：筆刷半徑',
   fan: '左鍵：拖曳放置／搬移｜右鍵點風扇：移除｜中鍵點：切參數｜右鍵＋滾輪：調參數',
   jelly: '左鍵：生成｜右鍵點果凍：重建／移除',
@@ -71,7 +75,8 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
       { keys: '中鍵點', action: `切換模式：${modeCycle('grab')}` },
       {
         keys: '右鍵＋滾輪',
-        action: '大把（及編隊開啟每點大把時）：調抓取半徑；其他模式＝縮放',
+        action:
+          '大把：調抓取半徑；編隊：開了「每個點用大把抓」時調抓取半徑，沒開時縮放；單點：縮放',
       },
     ],
   },

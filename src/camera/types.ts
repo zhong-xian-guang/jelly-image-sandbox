@@ -21,10 +21,25 @@ export interface CameraTransform {
   scale: number;
 }
 
+/** 畫布四邊各被蓋住多寬（CSS 像素，≥ 0）。 */
+export interface ScreenInsets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
 /** 畫布尺寸（CSS 像素），zoom-to-fit 與正／逆投影用。 */
 export interface CanvasSize {
   width: number;
   height: number;
+  /**
+   * 畫布邊上被介面蓋住的部分（issue #138：底部的播放控制條與匯入提示、展開的側欄）。
+   * 只有 zoom-to-fit（`fitTransform`：自動跟隨、「框住果凍」、起始鏡位）會避開它，把果凍
+   * 塞進剩下的矩形並置中在那裡；正／逆投影、手動縮放照舊以整張畫布為準。省略＝四邊都沒蓋住。
+   * 由 app 層量好傳進來——相機不碰 DOM。
+   */
+  fitInsets?: ScreenInsets;
 }
 
 /**
