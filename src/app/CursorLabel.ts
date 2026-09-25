@@ -33,8 +33,8 @@ export interface CursorLabelInput {
 }
 
 /**
- * 標籤文字（「單點」「大把 · 140」「放 · 120」）；工具沒有模式時回 `null`（不顯示）——
- * 目前有數值可調的都是有模式的工具（大把抓取半徑、Pin 筆刷半徑）。
+ * 標籤文字（「單點」「大把 · 140」「放 · 120」「強度 · 4000」）；工具沒有模式時回 `null`
+ * （不顯示）——目前有數值可調的都是有模式的工具（大把抓取半徑、Pin 筆刷半徑、電風扇參數）。
  */
 export function cursorLabelText(input: CursorLabelInput): string | null {
   if (input.mode === null) return null;

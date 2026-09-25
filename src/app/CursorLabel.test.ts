@@ -23,6 +23,13 @@ describe('cursorLabelText（issue #122）', () => {
     expect(text({ mode: 'remove', value: 120 })).toBe('拔 · 120');
   });
 
+  it('電風扇（issue #125）：「參數名 · 數值」', () => {
+    expect(text({ mode: 'width', value: 150 })).toBe('寬度 · 150');
+    expect(text({ mode: 'strength', value: 4000 })).toBe('強度 · 4000');
+    expect(text({ mode: 'falloff', value: 2.1 })).toBe('衰減 · 2.1');
+    expect(text({ mode: 'frequency', value: 0.5 })).toBe('頻率 · 0.5');
+  });
+
   it('沒有模式的工具 → 不顯示', () => {
     expect(text({ mode: null })).toBeNull();
   });
