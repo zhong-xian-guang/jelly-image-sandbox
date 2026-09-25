@@ -225,9 +225,12 @@ import { DropImportInput } from './DropImportInput';
 import { clampFanIconRadiusPx, FanOverlay } from './FanOverlay';
 import { FileImportInput } from './FileImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
+import { FormationDefineHint } from './FormationDefineHint';
 import { FormationOverlay, type FormationOverlayGroup } from './FormationOverlay';
 import { HandfulRanges, type HandfulRangeCircle } from './HandfulRanges';
+import { HelpOverlay } from './HelpOverlay';
 import { DEFAULT_MESH_DENSITY, halveMeshDensity, MESH_DENSITY_RANGE } from './meshDensity';
+import { browserStorage } from './panelLayout';
 import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
 import {
@@ -417,6 +420,10 @@ export class JellySandbox {
    * 作用在點中的那一塊（見 `openJellyMenu`）。切換工具時關掉。
    */
   private readonly jellyMenu: ContextMenu;
+  /** 「?」操作說明浮層（issue #132）——第一次打開網頁自動出現一次，之後按側欄標題列的「?」。 */
+  private readonly helpOverlay: HelpOverlay;
+  /** 定義編隊形狀時畫布上方那行說明（issue #132）——是提示，見 `updateFormationDefineHint`。 */
+  private readonly formationDefineHint: FormationDefineHint;
   /** 鍵盤快捷鍵（issue #126）：1–4 切工具、播放中空白鍵暫停／繼續。在 window 上聽，`destroy` 要解掉。 */
   private readonly keyboardShortcuts: KeyboardShortcuts;
   private readonly demoRunner = new DemoRunner();
@@ -763,6 +770,13 @@ export class JellySandbox {
     root.appendChild(this.cursorLabel.element);
     this.jellyMenu = new ContextMenu({ dismissBlockTarget: this.renderer.canvas });
     root.appendChild(this.jellyMenu.element);
+    this.formationDefineHint = new FormationDefineHint();
+    root.appendChild(this.formationDefineHint.element);
+    // 操作說明（issue #132）：「?」鈕放在側欄標題列「收起側欄」左邊；第一次打開網頁自動出現。
+    this.helpOverlay = new HelpOverlay({ storage: browserStorage() });
+    root.appendChild(this.helpOverlay.element);
+    this.controlPanel.titleBarActions.prepend(this.helpOverlay.createOpenButton());
+    this.helpOverlay.showIfFirstVisit();
     this.keyboardShortcuts = new KeyboardShortcuts({
       selectTool: (tool) => this.setActiveTool(tool),
       isPlaying: () => this.demoRunner.isRunning,
@@ -818,6 +832,8 @@ export class JellySandbox {
     this.handfulRange.destroy();
     this.cursorLabel.destroy();
     this.jellyMenu.destroy(); // 開著時在 window 上掛了監聽
+    this.helpOverlay.destroy(); // 開著時在 window 上掛了 Esc 監聽
+    this.formationDefineHint.destroy();
     this.keyboardShortcuts.destroy(); // 在 window 上掛了鍵盤監聽
     this.input.destroy();
     this.cameraInput.destroy();
@@ -1469,6 +1485,17 @@ export class JellySandbox {
   private beginFormationDefine(): void {
     if (!this.isGrabMode('formation')) this.setToolMode('grab', 'formation');
     this.input.beginFormationDefine();
+  }
+
+  /**
+   * 定義編隊形狀時畫布上方那行說明（issue #132；spec #127「操作說明」）。它是提示：「播放時
+   * 隱藏提示」壓下時一起藏（乾淨畫面也要藏，#130 在這裡加條件）。只在編隊模式下顯示——比照
+   * 定義中的形狀標記（`formationOverlayGroups`），切去別的工具時點畫布不會加點，說明也不該在。
+   */
+  private updateFormationDefineHint(): void {
+    this.formationDefineHint.setVisible(
+      this.input.isDefiningFormation && this.isGrabMode('formation') && !this.hintsSuppressed,
+    );
   }
 
   /** 「顯示游標標籤」開關（issue #122）。 */
@@ -2343,6 +2370,8 @@ export class JellySandbox {
     this.updateBrushCursor();
     // 游標標籤（issue #122）同理：游標回饋，跟著指標、不跟著暫停定格。
     this.updateCursorLabel();
+    // 編隊形狀定義中的說明（issue #132）：暫停中也可能正在定義，一樣排在暫停守衛之前。
+    this.updateFormationDefineHint();
     // 「生成 Jelly」的禁止游標跟著指標位置與邊界每幀重算（issue #97），理由同上：
     // 游標不該落後指標，所以一樣排在暫停守衛之前。
     this.applyCanvasCursor();

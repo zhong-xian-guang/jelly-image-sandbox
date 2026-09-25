@@ -65,6 +65,7 @@ import {
   type ToolModeOf,
 } from '../input';
 import type { BoundaryMode } from '../sim';
+import { TOOL_HELP_LINES } from './helpText';
 import {
   browserStorage,
   loadPanelLayout,
@@ -725,11 +726,9 @@ export class ControlPanel {
     };
 
     // Jelly 工具的參數卡（issue #124：生成、移除、重建 Jelly 合成 Jelly 工具）——沒有模式也
-    // 沒有參數，只放一行操作說明：移除與重建藏在畫布上的右鍵選單，不寫出來沒人會發現。
-    const jellyHelp = document.createElement('div');
-    jellyHelp.className = 'jelly-control-row jelly-tool-help';
-    jellyHelp.textContent = '左鍵生成；右鍵點果凍：重建／移除';
-    const jellyParams = this.toolParams('Jelly', [jellyHelp]);
+    // 沒有參數，只有每張卡底下共用的那行操作說明（issue #132，見 `toolbarSection`）：移除與
+    // 重建藏在畫布上的右鍵選單，不寫出來沒人會發現。
+    const jellyParams = this.toolParams('Jelly', []);
 
     const toolbarSection = this.toolbarSection(
       opts.initial.activeTool,
@@ -1263,6 +1262,11 @@ export class ControlPanel {
     card.className = 'jelly-tool-card';
     for (const tool of TOOL_IDS) {
       const params = toolParams[tool];
+      // 每張卡最底下一行固定的滑鼠操作說明（issue #132；文字集中在 `./helpText`）。
+      const help = document.createElement('div');
+      help.className = 'jelly-control-row jelly-tool-help';
+      help.textContent = TOOL_HELP_LINES[tool];
+      params.appendChild(help);
       this.toolCards.set(tool, params);
       card.appendChild(params);
     }

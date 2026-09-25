@@ -1014,8 +1014,132 @@ body {
   white-space: nowrap;
 }
 
-/** Jelly 工具參數卡的一行操作說明（issue #124）。 */
+/**
+ * 工具卡最底下那一行滑鼠操作說明（issue #124 起只有 Jelly；issue #132 四張卡都有）。
+ * 跟上面的控制項隔一條細線，看得出它是說明、不是可按的東西。
+ */
 .jelly-tool-help {
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.75);
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/**
+ * 「?」操作說明浮層（issue #132，見 `HelpOverlay`）——整片半透明背景蓋住畫面（點背景＝點外面
+ * ＝關掉，那一下不會落到畫布上），中間一張可捲動的卡片。蓋在控制面板、右鍵選單、通知之上。
+ * `display: flex` 會蓋掉 `[hidden]`，這裡補回來。
+ */
+.jelly-help-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.jelly-help-backdrop[hidden] {
+  display: none;
+}
+
+.jelly-help-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  background: rgba(24, 24, 24, 0.97);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.jelly-help-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px 8px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.jelly-help-header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 1rem;
+}
+
+.jelly-help-close {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.jelly-help-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.jelly-help-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  padding: 12px 18px 16px;
+  overflow-y: auto;
+}
+
+.jelly-help-group h3 {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+}
+
+.jelly-help-group dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 10px;
+  margin: 0;
+}
+
+.jelly-help-group dt {
+  color: rgba(140, 210, 255, 0.95);
+  white-space: nowrap;
+}
+
+.jelly-help-group dd {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.45;
+}
+
+/**
+ * 定義編隊形狀時畫布上方的一行說明（issue #132，見 `FormationDefineHint`）。是提示：
+ * 不吃指標事件，壓在通知（z-index 11）之下。
+ */
+.jelly-formation-define-hint {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.jelly-formation-define-hint[hidden] {
+  display: none;
 }
