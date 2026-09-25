@@ -53,13 +53,12 @@
  *
  * **控制面板**：`ControlPanel`（同樣是薄的 DOM 接線層）建 UI、回呼往外送；實際
  * 換算邏輯都在純函式模組——Softness 曲線見 `../sim/softness`，Walled 邊界範圍見
- * `./boundaryGeometry`，Pin 工具的輸入轉接見 `../input/pinToolRouting`（目前工具是
- * Pin 時，`PointerInput` 原本會發的 `grab` 改由它轉成 `pin`，直接放 Pin 而非可拖曳
- * 的 Grab；點在既有 Pin 附近則轉成 `unpin`，即「點掉特定 Pin」）。
+ * `./boundaryGeometry`；Pin 工具的放／拔（issue #123）由 `ToolRouter` 直接送 `pin`／
+ * `unpin`，這裡原樣轉進 `World`。
  *
  * **Pin 的視覺提示**：`PinMarkers`（DOM 覆蓋層）每幀把 `world.listPins()` 的世界
- * 座標投影成螢幕座標畫成小圓點；選著 Pin 工具時標記變紅脈動（提示可以點掉）、
- * 畫布游標也換成十字——兩層一起讓「現在是不是在放 Pin」不用低頭看面板就
+ * 座標投影成螢幕座標畫成小圓點；選著 Pin 工具的拔模式時標記變紅脈動（提示可以點掉）、
+ * Pin 工具下畫布游標也換成十字——兩層一起讓「現在是不是在放 Pin」不用低頭看面板就
  * 知道（見 `applyPinToolVisuals`）。「顯示 Pin」關掉時整層藏起來、`frame()` 也跳過投影
  * 計算（見 `setPinsVisible`）；`ControlPanel` 那邊會同時鎖住清除所有 Pin，所見即所得。
  *
@@ -152,6 +151,7 @@ import {
   type FanParams,
   type GrabMode,
   type ModalToolId,
+  type PinMode,
   type ModeValueKey,
   type ToolId,
   type ToolMode,
@@ -159,15 +159,12 @@ import {
   DEFAULT_FAN_FREQUENCY,
   DEFAULT_FAN_STRENGTH,
   DEFAULT_FAN_WIDTH,
-  DEFAULT_SPRAY_RADIUS,
+  DEFAULT_PIN_BRUSH_RADIUS,
   DEFAULT_SPRAY_SPACING,
-  DEFAULT_ERASE_RADIUS,
   DEFAULT_HANDFUL_RADIUS,
-  ERASE_RADIUS_RANGE,
   HANDFUL_RADIUS_RANGE,
-  SPRAY_RADIUS_RANGE,
+  PIN_BRUSH_RADIUS_RANGE,
   PointerInput,
-  routeForPinTool,
 } from '../input';
 import {
   buildSimMesh,
@@ -288,8 +285,8 @@ const FAN_FREQUENCY_RANGE = { min: 0.2, max: 10, step: 0.1 };
 /**
  * 撒 Pin 間距滑桿的範圍（issue #69），世界座標單位。下限 12 是「撒得很密」的實用
  * 下限——再小只是讓 Pin 疊在同一批 Particle 上，手感沒有變化、求解器卻要多扛
- * 幾十個硬約束。三條半徑拉霸的範圍住在 `ToolRouter`（issue #114：右鍵＋滾輪調
- * 半徑要夾在同一個範圍內）。
+ * 幾十個硬約束。兩條半徑拉霸（大把抓取半徑、Pin 筆刷半徑）的範圍住在 `ToolRouter`
+ * （issue #114：右鍵＋滾輪調半徑要夾在同一個範圍內）。
  */
 const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
 /**
@@ -303,14 +300,8 @@ const DEFAULT_IMPORT_SIZE = 512;
 /** 內建預設果凍在來源圖庫裡的 id（啟動時、「清空全部」後都重新註冊成它）。 */
 const DEFAULT_SOURCE_ID = 'src/1';
 /**
- * Pin 工具下「點掉既有 Pin」的判定半徑，螢幕像素——跟 `.jelly-pin-marker` 的
- * CSS 直徑（16px）同數量級，換算回世界座標時要除以目前相機縮放（見
- * `pinToolContext`），這樣判定範圍不會隨縮放忽大忽小。
- */
-const PIN_REMOVE_RADIUS_PX = 16;
-/**
  * 會被「播放時隱藏提示」（issue #71）蓋到的提示層，每層一個 key——即面板上那六顆
- * 顯示開關（issue #113 加上大把抓取範圍圈 `handfulRange`）。撒 Pin／移除 Pin 的筆刷
+ * 顯示開關（issue #113 加上大把抓取範圍圈 `handfulRange`）。Pin 工具的筆刷
  * 圓圈刻意不在此列，理由見 `JellySandbox.applyHintVisibility`。
  */
 type HintKey = 'wireframe' | 'pins' | 'fanRange' | 'fanIcon' | 'formation' | 'handfulRange';
@@ -404,14 +395,15 @@ export class JellySandbox {
   /** 編隊抓取形狀標記提示（issue #68）——同 `fanOverlay` 的模式。 */
   private readonly formationOverlay: FormationOverlay;
   /**
-   * 撒 Pin 的筆刷圓圈游標（issue #69）——同樣是純 DOM overlay；這裡負責「目前
-   * 工具是不是撒 Pin」「半徑換算成幾個螢幕像素」與每幀餵它 `canvasHover` 的位置。
+   * Pin 工具的筆刷圓圈游標（issue #69；issue #123 起放／拔兩種模式都顯示）——同樣是純
+   * DOM overlay；這裡負責「目前是不是 Pin 工具、哪個模式（顏色）」「半徑換算成幾個螢幕
+   * 像素」與每幀餵它 `canvasHover` 的位置。
    */
   private readonly brushCursor: BrushCursor;
   /**
    * 大把抓取的範圍圈（issue #113）——幾何沿用筆刷圓圈（另一顆 `BrushCursor`、自己的
    * 顏色），但它是**提示**：有自己的顯示開關、受「播放時隱藏提示」壓下（見
-   * `applyHandfulRangeVisibility`），所以不跟撒 Pin／移除 Pin 共用 `brushCursor`。
+   * `applyHandfulRangeVisibility`），所以不跟 Pin 工具共用 `brushCursor`。
    */
   private readonly handfulRange: BrushCursor;
   /**
@@ -496,15 +488,13 @@ export class JellySandbox {
   private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
   private fanFrequency = DEFAULT_FAN_FREQUENCY;
   /**
-   * 撒 Pin「範圍半徑」／「最小間距」滑桿目前值（issue #69）——`PointerInput`
+   * 「Pin 筆刷半徑」（issue #123）／「撒 Pin 間距」（issue #69）拉霸目前值——`PointerInput`
    * 沒有 getter，這裡另存一份供：(a) 面板初始值、(b) `frame()` 每幀把半徑換算
    * 成螢幕像素餵給筆刷圓圈游標（`BrushCursor`）。
    */
-  private sprayRadius = DEFAULT_SPRAY_RADIUS;
+  private pinBrushRadius = DEFAULT_PIN_BRUSH_RADIUS;
   private spraySpacing = DEFAULT_SPRAY_SPACING;
-  /** 「移除 Pin 範圍半徑」滑桿目前值（issue #70）——用途同 `sprayRadius`。 */
-  private eraseRadius = DEFAULT_ERASE_RADIUS;
-  /** 「大把抓取半徑」拉霸目前值（issue #113）——用途同 `sprayRadius`（範圍圈的大小）。 */
+  /** 「大把抓取半徑」拉霸目前值（issue #113）——用途同 `pinBrushRadius`（範圍圈的大小）。 */
   private handfulRadius = DEFAULT_HANDFUL_RADIUS;
   /**
    * 「播放時隱藏提示」全域開關（issue #71 / V2 T3-7）——開著時，播放中把所有提示
@@ -653,7 +643,7 @@ export class JellySandbox {
     this.controlPanel = new ControlPanel({
       initial: {
         activeTool: this.activeTool,
-        toolModes: { grab: this.input.modeOf('grab') },
+        toolModes: { grab: this.input.modeOf('grab'), pin: this.input.modeOf('pin') },
         showCursorLabel: this.showCursorLabel,
         boundary: this.boundaryMode,
         softness: DEFAULT_SOFTNESS,
@@ -670,9 +660,8 @@ export class JellySandbox {
         fanFalloffExponent: this.fanFalloffExponent,
         fanFrequency: this.fanFrequency,
         showFormationHint: this.hintIntent.formation,
-        sprayRadius: this.sprayRadius,
+        pinBrushRadius: this.pinBrushRadius,
         spraySpacing: this.spraySpacing,
-        eraseRadius: this.eraseRadius,
         handfulRadius: this.handfulRadius,
         showHandfulRange: this.hintIntent.handfulRange,
         hideHintsDuringPlayback: this.hideHintsDuringPlayback,
@@ -687,9 +676,8 @@ export class JellySandbox {
       fanStrengthRange: FAN_STRENGTH_RANGE,
       fanFalloffRange: FAN_FALLOFF_RANGE,
       fanFrequencyRange: FAN_FREQUENCY_RANGE,
-      sprayRadiusRange: SPRAY_RADIUS_RANGE,
+      pinBrushRadiusRange: PIN_BRUSH_RADIUS_RANGE,
       spraySpacingRange: SPRAY_SPACING_RANGE,
-      eraseRadiusRange: ERASE_RADIUS_RANGE,
       handfulRadiusRange: HANDFUL_RADIUS_RANGE,
       demos: DEMOS.map((demo) => ({ id: demo.id, label: demo.label })),
       onImportImage: () => this.fileImportInput.open(),
@@ -708,9 +696,8 @@ export class JellySandbox {
       onFormationDefineStart: () => this.beginFormationDefine(),
       onFormationDefineEnd: () => this.input.endFormationDefine(),
       onShowFormationHintChange: (visible) => this.setHintVisible('formation', visible),
-      onSprayRadiusChange: (radius) => this.setSprayRadius(radius),
+      onPinBrushRadiusChange: (radius) => this.setPinBrushRadius(radius),
       onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
-      onEraseRadiusChange: (radius) => this.setEraseRadius(radius),
       onHandfulRadiusChange: (radius) => this.setHandfulRadius(radius),
       onShowHandfulRangeChange: (visible) => this.setHintVisible('handfulRange', visible),
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
@@ -767,7 +754,7 @@ export class JellySandbox {
     });
     this.cursorLabel = new CursorLabel();
     root.appendChild(this.cursorLabel.element);
-    this.applyPinToolVisuals();
+    this.applyToolVisuals();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
     // 看到「群組」這個概念、按「＋ 新增群組」（issue #43）。
@@ -1348,13 +1335,25 @@ export class JellySandbox {
   }
 
   /**
-   * 游標（十字）＋ Pin 標記的「可點掉」紅色脈動——只在目前工具是 Pin 時出現
-   * （issue #115；ADR-0015 取代原本的「Pin 模式」勾選框）。兩者都是純粹的提示，
-   * 不影響任何判定邏輯（轉接見 `routeForPinTool`）。
+   * 跟「目前工具＋模式」綁在一起的游標回饋與提示（issue #123 收攏）——「切工具」
+   * （`setActiveTool`）與「切模式」（`setToolMode`／`cycleMode`）都呼叫這裡，才不會某一條
+   * 路漏改：
+   *
+   * - 畫布游標：Pin 工具兩種模式都是十字（issue #115）。
+   * - Pin 標記「可點掉」的紅色脈動：只在 Pin 工具的拔模式（issue #123）。
+   * - 筆刷圓圈：Pin 工具兩種模式都顯示，放＝琥珀、拔＝紅（見 `brushFor`）；不需要另外的
+   *   顯示開關，選到就看得到，切走就收起來。
+   * - 大把抓取範圍圈：只在抓取工具的大把模式（issue #122）。
+   *
+   * 都是純粹的回饋，不影響任何判定邏輯（判定在 `ToolRouter`）。
    */
-  private applyPinToolVisuals(): void {
+  private applyToolVisuals(): void {
     this.applyCanvasCursor();
-    this.pinMarkers.setRemovable(this.activeTool === 'pin');
+    this.pinMarkers.setRemovable(this.isPinMode('remove'));
+    const brush = this.brushFor();
+    if (brush) this.brushCursor.setVariant(brush.variant);
+    this.brushCursor.setActive(brush !== null);
+    this.applyHandfulRangeVisibility();
   }
 
   /**
@@ -1399,28 +1398,23 @@ export class JellySandbox {
   /**
    * 「目前工具」選擇器變更（issue #65 / V2 T3-1）——轉發給 `PointerInput.setActiveTool`；
    * `activeTool` 另外存一份給重新匯入圖片後換綁新 canvas 時重套（見 `attachInputHandlers`
-   * 呼叫處）。切進／切出 Pin 工具會改變游標／標記的視覺提示，所以要跟著重算。
+   * 呼叫處）。切工具會改變游標／標記／圓圈的視覺回饋，所以要跟著重算。
    */
   private setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
     this.input.setActiveTool(tool);
-    this.applyPinToolVisuals();
-    // 筆刷圓圈游標不需要另外的顯示開關，選到用得到它的工具就看得到，切走就收起來。
-    const brush = this.brushFor(tool);
-    if (brush) this.brushCursor.setVariant(brush.variant);
-    this.brushCursor.setActive(brush !== null);
-    this.applyHandfulRangeVisibility();
+    this.applyToolVisuals();
   }
 
   /**
    * 某個工具的模式換了（issue #122）——參數卡模式鈕（`onModeChange`）走這裡；中鍵單擊走
    * `cycleMode`。轉給 `ToolRouter`（只影響下一次按下）、同步面板高亮，再重算跟模式有關的
-   * 提示（大把抓取範圍圈只在大把模式出現）。游標標籤每幀自己重算，不必在這裡推。
+   * 回饋（大把抓取範圍圈、Pin 筆刷圓圈顏色與標記脈動）。游標標籤每幀自己重算，不必在這裡推。
    */
   private setToolMode(tool: ModalToolId, mode: ToolMode): void {
-    this.input.setMode(tool, mode as GrabMode);
+    this.input.setMode(tool, mode);
     this.controlPanel.setToolMode(tool, mode);
-    this.applyHandfulRangeVisibility();
+    this.applyToolVisuals();
   }
 
   /**
@@ -1432,12 +1426,17 @@ export class JellySandbox {
     if (mode === null) return;
     const tool = this.activeTool as ModalToolId;
     this.controlPanel.setToolMode(tool, mode);
-    this.applyHandfulRangeVisibility();
+    this.applyToolVisuals();
   }
 
   /** 目前是不是抓取工具的這個模式（issue #122：範圍圈與編隊提示只在各自的模式出現）。 */
   private isGrabMode(mode: GrabMode): boolean {
     return this.activeTool === 'grab' && this.input.modeOf('grab') === mode;
+  }
+
+  /** 目前是不是 Pin 工具的這個模式（issue #123：標記脈動只在拔模式、圓圈顏色隨模式）。 */
+  private isPinMode(mode: PinMode): boolean {
+    return this.activeTool === 'pin' && this.input.modeOf('pin') === mode;
   }
 
   /**
@@ -1470,7 +1469,7 @@ export class JellySandbox {
         ? 'ready'
         : 'none';
     this.cursorLabel.setText(
-      cursorLabelText({ tool, mode, value: this.input.activeValue?.value ?? null, formation }),
+      cursorLabelText({ mode, value: this.input.activeValue?.value ?? null, formation }),
     );
     this.cursorLabel.setPosition(this.canvasHover.point);
   }
@@ -1484,16 +1483,15 @@ export class JellySandbox {
   }
 
   /**
-   * 這個工具要不要筆刷圓圈游標、要什麼顏色、半徑讀哪一條滑桿（issue #69／#70）
-   * ——`null` = 不要。撒 Pin 與移除 Pin 共用同一顆圓圈、只有顏色與半徑來源不同
-   * （見 `BrushCursor`），這三件事綁在一起，收成一個地方才不會「切工具」
-   * （`setActiveTool`）跟「每幀換算半徑」（`frame`）兩處各判斷一次、日後加第三個
-   * 用得到圓圈的工具時漏改其中一處。
+   * 目前要不要筆刷圓圈游標、要什麼顏色、半徑多大（issue #69／#70；issue #123 起是 Pin 工具
+   * 兩種模式共用一條 Pin 筆刷半徑，只有顏色隨模式：放＝琥珀、拔＝紅，見 `BrushCursor`）
+   * ——`null` = 不要。收成一個地方才不會「切工具／切模式」（`applyToolVisuals`）跟「每幀
+   * 換算半徑」（`frame`）兩處各判斷一次、日後加別的用得到圓圈的模式時漏改其中一處。
    */
-  private brushFor(tool: ToolId): { variant: BrushVariant; radius: number } | null {
-    if (tool === 'spray') return { variant: 'spray', radius: this.sprayRadius };
-    if (tool === 'erase') return { variant: 'erase', radius: this.eraseRadius };
-    return null;
+  private brushFor(): { variant: BrushVariant; radius: number } | null {
+    if (this.activeTool !== 'pin') return null;
+    const variant = this.input.modeOf('pin') === 'place' ? 'spray' : 'erase';
+    return { variant, radius: this.pinBrushRadius };
   }
 
   /** 「匯入尺寸」拉霸（issue #88）——只記下意圖，下一次匯入才套用；場上的果凍不動。 */
@@ -1520,22 +1518,16 @@ export class JellySandbox {
     this.showNotice(`效能不足，已把網格密度降到 ${reduced}；下一次匯入／重建生效`);
   }
 
-  /** 「撒 Pin 範圍半徑」滑桿（issue #69）——下一次撒點用，同時是筆刷圓圈的大小。 */
-  private setSprayRadius(radius: number): void {
-    this.sprayRadius = radius;
-    this.input.setSprayParams({ radius });
+  /** 「Pin 筆刷半徑」拉霸（issue #123）——撒 Pin 與橡皮擦的範圍，同時是筆刷圓圈的大小。 */
+  private setPinBrushRadius(radius: number): void {
+    this.pinBrushRadius = radius;
+    this.input.setPinBrushParams({ radius });
   }
 
-  /** 「撒 Pin 間距」滑桿（issue #69）——越小越密，見 `ToolRouter.sprayOnce`。 */
+  /** 「撒 Pin 間距」拉霸（issue #69）——越小越密，見 `ToolRouter.sprayAt`。 */
   private setSpraySpacing(spacing: number): void {
     this.spraySpacing = spacing;
-    this.input.setSprayParams({ spacing });
-  }
-
-  /** 「移除 Pin 範圍半徑」滑桿（issue #70）——橡皮擦範圍，同時是筆刷圓圈的大小。 */
-  private setEraseRadius(radius: number): void {
-    this.eraseRadius = radius;
-    this.input.setEraseParams({ radius });
+    this.input.setPinBrushParams({ spacing });
   }
 
   /** 「大把抓取半徑」拉霸（issue #113）——下一次按下用，同時是範圍圈的大小。 */
@@ -1555,8 +1547,7 @@ export class JellySandbox {
     if (!adjusted) return false;
     const { key, value } = adjusted;
     const setValue: Record<ModeValueKey, (v: number) => void> = {
-      sprayRadius: (v) => this.setSprayRadius(v),
-      eraseRadius: (v) => this.setEraseRadius(v),
+      pinBrushRadius: (v) => this.setPinBrushRadius(v),
       handfulRadius: (v) => this.setHandfulRadius(v),
     };
     setValue[key](value);
@@ -1705,8 +1696,8 @@ export class JellySandbox {
    * `HintKey`／`hintIntent` 的初始值、這裡一行、以及（若它需要每幀投影）
    * `needsHintProjection`——不必回頭找散在各處的旗標。
    *
-   * 撒 Pin／移除 Pin 的筆刷圓圈**不在**這裡：它本來就只在選中那個工具時才出現
-   * （見 `setActiveTool`），是「現在這個工具的作用範圍在哪」的游標而非場景提示，
+   * Pin 工具的筆刷圓圈**不在**這裡：它本來就只在選中那個工具時才出現
+   * （見 `applyToolVisuals`），是「現在這個工具的作用範圍在哪」的游標而非場景提示，
    * 播放中不該跟著消失（issue #64 US36）。
    */
   private applyHintVisibility(): void {
@@ -1717,20 +1708,6 @@ export class JellySandbox {
     this.fanOverlay.setShowIcon(hints.fanIcon);
     this.formationOverlay.setVisible(hints.formation);
     this.applyHandfulRangeVisibility();
-  }
-
-  /**
-   * `removeRadius` 換算成螢幕像素、再除以目前的相機縮放（`transform.scale`）
-   * 換回世界座標——這樣不管縮多近多遠，「點多靠近算點中一個 Pin」在螢幕上看
-   * 起來永遠是同樣大小（跟 Pin 標記本身固定的 CSS 像素直徑一致）。原本用
-   * 「bbox 對角線的固定比例」是世界座標常數，縮得越近，同一個世界半徑換算成
-   * 螢幕像素就越大，會出現「明明離標記很遠，點下去卻被當成點中」的錯覺。
-   */
-  private pinToolContext(): { pins: ReturnType<World['listPins']>; removeRadius: number } {
-    return {
-      pins: this.world.listPins(),
-      removeRadius: PIN_REMOVE_RADIUS_PX / this.cameraState.transform.scale,
-    };
   }
 
   /**
@@ -2240,15 +2217,14 @@ export class JellySandbox {
       hitTest,
       getFan: () => this.world.fanState(),
       // 撒 Pin 的間距判定要跟場上既有的 Pin 也比一次（issue #69），不然在撒過的
-      // 地方再撒一次會疊成一坨。
+      // 地方再撒一次會疊成一坨；拔模式（issue #123）從這份清單挑要拔的。
       listPins: () => this.world.listPins(),
       // 生成／移除 Jelly 兩個工具（issue #97）只回報「在這裡點了一下」，該放哪張圖、
       // 該移除哪一塊由沙盒自己決定（見 `spawnAt`／`removeJellyAt`）。
       onClickTool: (tool, world) => this.runClickTool(tool, world),
-      applyInput: (event) => {
-        const routed = routeForPinTool(event, this.activeTool, this.pinToolContext());
-        if (routed) this.dispatchInput(routed); // 進 World + no-op 除非正在錄製（issue #29）
-      },
+      // 進 World + no-op 除非正在錄製（issue #29）。Pin 工具直接送 pin／unpin（issue #123），
+      // 不再經 `routeForPinTool` 轉換。
+      applyInput: (event) => this.dispatchInput(event),
     });
     const cameraInput = new CameraInput(canvas, {
       screenToWorld: project,
@@ -2440,7 +2416,7 @@ export class JellySandbox {
    */
   private updateBrushCursor(): void {
     this.brushCursor.setPosition(this.canvasHover.point);
-    const brush = this.brushFor(this.activeTool);
+    const brush = this.brushFor();
     if (brush) {
       this.brushCursor.setRadiusPx(brush.radius * this.cameraState.transform.scale);
     }

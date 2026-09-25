@@ -30,14 +30,13 @@ import type { FanState, InputEvent, PinInfo, Point } from '../sim';
 import type { GestureConfig } from './GestureTracker';
 import {
   type ClickToolId,
-  type EraseParams,
   type HandfulParams,
   type FanParams,
   type ModalToolId,
   type ModeValue,
   type ToolMode,
   type ToolModeOf,
-  type SprayParams,
+  type PinBrushParams,
   type ToolId,
   ToolRouter,
 } from './ToolRouter';
@@ -49,7 +48,7 @@ export interface PointerInputOptions {
   hitTest?: (world: Point) => boolean;
   /** 轉發給 `ToolRouter`（issue #67）——場上目前的電風扇幾何，供拖曳既有風扇的判定用。 */
   getFan?: () => FanState | null;
-  /** 轉發給 `ToolRouter`（issue #69）——場上目前的 Pin，供撒 Pin 的間距判定用。 */
+  /** 轉發給 `ToolRouter`（issue #69 / #123）——場上目前的 Pin，供撒 Pin 間距與拔模式用。 */
   listPins?: () => readonly PinInfo[];
   /** 轉發給 `ToolRouter`（issue #97）——「點一下」工具（生成／移除 Jelly）完成一次點擊。 */
   onClickTool?: (tool: ClickToolId, world: Point) => void;
@@ -106,14 +105,9 @@ export class PointerInput {
     this.tracker.setFanParams(params);
   }
 
-  /** 轉發給 `ToolRouter.setSprayParams`（issue #69）——面板撒 Pin 滑桿變更時呼叫。 */
-  setSprayParams(params: Partial<SprayParams>): void {
-    this.tracker.setSprayParams(params);
-  }
-
-  /** 轉發給 `ToolRouter.setEraseParams`（issue #70）——面板移除 Pin 滑桿變更時呼叫。 */
-  setEraseParams(params: Partial<EraseParams>): void {
-    this.tracker.setEraseParams(params);
+  /** 轉發給 `ToolRouter.setPinBrushParams`（issue #123）——面板 Pin 筆刷半徑／撒 Pin 間距變更時呼叫。 */
+  setPinBrushParams(params: Partial<PinBrushParams>): void {
+    this.tracker.setPinBrushParams(params);
   }
 
   /** 轉發給 `ToolRouter.setHandfulParams`（issue #113）——面板大把抓取半徑拉霸變更時呼叫。 */

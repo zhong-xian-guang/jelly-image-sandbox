@@ -9,8 +9,6 @@ import type { ToolId, ToolMode } from '../input';
 export const TOOL_LABELS: Readonly<Record<ToolId, { icon: string; text: string }>> = {
   grab: { icon: '✋', text: '抓取' },
   pin: { icon: '📌', text: 'Pin' },
-  spray: { icon: '✳', text: '撒 Pin' },
-  erase: { icon: '⌫', text: '移除 Pin' },
   fan: { icon: '🌀', text: '電風扇' },
   spawn: { icon: '➕', text: '生成 Jelly' },
   removeJelly: { icon: '✖', text: '移除 Jelly' },
@@ -22,4 +20,6 @@ export const MODE_LABELS: Readonly<Record<ToolMode, string>> = {
   single: '單點',
   handful: '大把',
   formation: '編隊',
+  place: '放',
+  remove: '拔',
 };

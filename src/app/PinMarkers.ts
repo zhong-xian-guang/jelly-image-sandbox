@@ -4,8 +4,8 @@
  *
  * 純 DOM 覆蓋層：不知道 `SimCore`／相機的存在，每幀由呼叫端（`JellySandbox`）
  * 把投影好的螢幕座標餵進來（`update`）。節點用 `id` 索引重用，不會每幀整批
- * 重建 DOM。`pointer-events: none`——標記本身不接手勢；「點掉特定 Pin」是靠
- * 世界座標鄰近判定（見 `../input/pinToolRouting`），不是靠點中這個 DOM 節點，
+ * 重建 DOM。`pointer-events: none`——標記本身不接手勢；拔模式「點掉特定 Pin」是靠
+ * 世界座標鄰近判定（見 `../input/ToolRouter`），不是靠點中這個 DOM 節點，
  * 這樣命中判定跟其餘輸入邏輯走同一條純函式路徑、不必另外處理 DOM 命中測試。
  */
 
