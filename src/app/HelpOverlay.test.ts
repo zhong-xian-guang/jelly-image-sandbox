@@ -24,8 +24,14 @@ const throwingStorage: KeyValueStorage = {
   },
 };
 
-function pointerDown(target: Element): void {
-  target.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+function pointerDown(target: Element, button = 0): void {
+  target.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button }));
+}
+
+function contextMenu(target: Element): MouseEvent {
+  const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 });
+  target.dispatchEvent(event);
+  return event;
 }
 
 function pressKey(key: string): KeyboardEvent {
@@ -98,6 +104,20 @@ describe('HelpOverlay — 「?」操作說明浮層（issue #132）', () => {
     pointerDown(overlay.element.querySelector('.jelly-help-dialog h3')!);
     expect(overlay.isOpen).toBe(true);
     pointerDown(overlay.element);
+    expect(overlay.isOpen).toBe(false);
+  });
+
+  it('右鍵、中鍵點背景不關浮層；背景上的右鍵也不跳原生選單（issue #138）', () => {
+    const overlay = make();
+    overlay.open();
+    pointerDown(overlay.element, 2);
+    expect(overlay.isOpen).toBe(true);
+    pointerDown(overlay.element, 1);
+    expect(overlay.isOpen).toBe(true);
+    expect(contextMenu(overlay.element).defaultPrevented).toBe(true);
+    expect(overlay.isOpen).toBe(true);
+    // 左鍵照舊關得掉。
+    pointerDown(overlay.element, 0);
     expect(overlay.isOpen).toBe(false);
   });
 

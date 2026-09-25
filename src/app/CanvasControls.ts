@@ -11,6 +11,8 @@
  *
  * 兩組都是薄 DOM 接線（同 `ControlPanel`）：只畫、只回呼，不知道播放／相機的實際狀態，
  * 由呼叫端每次變化時灌回來。它們只佔自己那一小塊，畫布其他地方的指標事件照常落到畫布上。
+ * 在它們上面按右鍵什麼都不發生（不跳瀏覽器原生選單，issue #138）——它們疊在畫布上，
+ * 畫布本身的右鍵已經被攔下，這兩塊跟著一致。
  */
 
 /** 播放控制條的四顆鈕，也是 DOM 上的 `data-action`。 */
@@ -40,6 +42,7 @@ export class PlaybackBar {
     bar.className = 'jelly-playback-bar';
     bar.setAttribute('role', 'toolbar');
     bar.setAttribute('aria-label', '播放控制');
+    blockContextMenu(bar);
 
     this.buttons = {
       record: barButton('record', RECORD_IDLE_TEXT, opts.onToggleRecording),
@@ -121,6 +124,7 @@ export class CameraControls {
     box.className = 'jelly-camera-controls';
     box.setAttribute('role', 'toolbar');
     box.setAttribute('aria-label', '相機');
+    blockContextMenu(box);
 
     this.followLocked = opts.followLocked;
     this.followLockButton = barButton('follow-lock', '鎖定跟隨', () => {
@@ -168,6 +172,11 @@ export function formatZoomFactor(factor: number): string {
 
 function timeText(seconds: number): string {
   return `${seconds.toFixed(2)} 秒`;
+}
+
+/** 在這一塊（含裡面的按鈕、讀數）上按右鍵不跳瀏覽器原生選單（issue #138）。 */
+function blockContextMenu(element: HTMLElement): void {
+  element.addEventListener('contextmenu', (event) => event.preventDefault());
 }
 
 function barButton(action: string, text: string, onClick: () => void): HTMLButtonElement {

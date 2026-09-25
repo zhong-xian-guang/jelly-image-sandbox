@@ -6,6 +6,7 @@ import {
   fitTransform,
   updateCamera,
 } from './updateCamera';
+import { worldToScreen } from './project';
 import type { CameraCommand, CameraState, CameraTarget, CanvasSize } from './types';
 
 const CANVAS: CanvasSize = { width: 800, height: 600 };
@@ -53,6 +54,73 @@ describe('fitTransform', () => {
     expect(huge.scale).toBe(CFG.minScale);
     const tiny = fitTransform({ minX: -0.001, minY: -0.001, maxX: 0.001, maxY: 0.001 }, CANVAS);
     expect(tiny.scale).toBe(CFG.maxScale);
+  });
+});
+
+describe('fitTransform — 避開被介面蓋住的畫布邊（fitInsets，issue #138）', () => {
+  /** 800×600 畫布：底部 90px 被控制條／匯入提示蓋住、左邊 200px 被側欄蓋住。 */
+  const COVERED: CanvasSize = {
+    width: 800,
+    height: 600,
+    fitInsets: { top: 0, right: 0, bottom: 90, left: 200 },
+  };
+
+  it('bbox 塞進扣掉蓋住部分（再扣邊距）的矩形，並置中在那個矩形裡', () => {
+    const bbox = targetAt(0, 0).bbox;
+    const t = fitTransform(bbox, COVERED);
+    // 可用 600×510，再扣 80 邊距 → 520×430，高度較緊：430 / 200
+    expect(t.scale).toBeCloseTo((600 - 90 - 80) / 200, 6);
+    const center = worldToScreen(t, COVERED, 0, 0);
+    expect(center.x).toBeCloseTo((200 + 800) / 2, 6);
+    expect(center.y).toBeCloseTo((0 + 510) / 2, 6);
+    // bbox 四邊都落在可用矩形內、且留著半個邊距
+    const min = worldToScreen(t, COVERED, bbox.minX, bbox.minY);
+    const max = worldToScreen(t, COVERED, bbox.maxX, bbox.maxY);
+    expect(min.x).toBeGreaterThanOrEqual(200 + 40 - 1e-6);
+    expect(max.x).toBeLessThanOrEqual(800 - 40 + 1e-6);
+    expect(min.y).toBeGreaterThanOrEqual(40 - 1e-6);
+    expect(max.y).toBeCloseTo(510 - 40, 6);
+  });
+
+  it('沒有 fitInsets 或四邊都是 0：跟整張畫布一樣', () => {
+    const bbox = targetBox(-50, 20, 250, 120).bbox;
+    const zero: CanvasSize = { ...CANVAS, fitInsets: { top: 0, right: 0, bottom: 0, left: 0 } };
+    expect(fitTransform(bbox, zero)).toEqual(fitTransform(bbox, CANVAS));
+  });
+
+  it('蓋住的部分比畫布還大：不除以零、scale 夾在範圍內', () => {
+    const t = fitTransform(targetAt(0, 0).bbox, {
+      width: 800,
+      height: 600,
+      fitInsets: { top: 400, right: 0, bottom: 400, left: 0 },
+    });
+    expect(Number.isFinite(t.x) && Number.isFinite(t.y)).toBe(true);
+    expect(t.scale).toBeGreaterThanOrEqual(CFG.minScale);
+  });
+
+  it('自動跟隨、框住果凍、起始鏡位都收斂到避開蓋住部分的 fit', () => {
+    const target = targetAt(30, -20);
+    const fit = fitTransform(target.bbox, COVERED);
+    expect(createCameraState(target, COVERED).transform).toEqual(fit);
+
+    // 從整張畫布的 fit 出發（例如剛離開乾淨畫面）→ 自動跟隨收斂到新的 fit
+    let s = createCameraState(target, CANVAS);
+    for (let f = 0; f < 240; f++) s = updateCamera(s, target, COVERED, [], 1 / 60);
+    expect(s.transform.x).toBeCloseTo(fit.x, 3);
+    expect(s.transform.y).toBeCloseTo(fit.y, 3);
+    expect(s.transform.scale).toBeCloseTo(fit.scale, 3);
+
+    // 框住果凍：手動亂動後按一下，到位的鏡位也是它
+    s = updateCamera(
+      s,
+      target,
+      COVERED,
+      [{ type: 'panBy', dxScreen: 900, dyScreen: -400 }, { type: 'frame' }],
+      1 / 60,
+    );
+    for (let f = 0; f < 240; f++) s = updateCamera(s, target, COVERED, [], 1 / 60);
+    expect(s.framing).toBe(false);
+    expect(s.transform).toEqual(fit);
   });
 });
 

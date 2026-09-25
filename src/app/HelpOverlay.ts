@@ -2,8 +2,8 @@
  * `HelpOverlay`（issue #132 / V4 U5；spec #127「操作說明」）——側欄標題列「?」打開的操作說明
  * 浮層：四個工具在各模式下的滑鼠操作、相機操作與快捷鍵（文字在 `./helpText`）。
  *
- * - 關閉：按關閉鈕、按 Esc、或點浮層外面（整片半透明背景）。背景蓋住整個畫面，所以「點外面」
- *   那一下只會關掉說明，不會順手抓到果凍。
+ * - 關閉：按關閉鈕、按 Esc、或左鍵點浮層外面（整片半透明背景）。背景蓋住整個畫面，所以「點外面」
+ *   那一下只會關掉說明，不會順手抓到果凍。右鍵點背景不關、也不跳原生選單（issue #138）。
  * - 第一次打開網頁時自動出現一次（`showIfFirstVisit`），**關掉**時才在 `localStorage` 記下看過；
  *   讀不到或讀寫丟錯一律當作第一次（寧可多出現，spec #127）。
  *
@@ -50,8 +50,13 @@ export class HelpOverlay {
     const backdrop = document.createElement('div');
     backdrop.className = 'jelly-help-backdrop';
     backdrop.hidden = true;
+    // 只有左鍵點背景才關（issue #138）；右鍵、中鍵點背景浮層照舊開著，背景上的右鍵也不跳
+    // 瀏覽器原生選單。說明卡片裡的右鍵不攔（留給複製文字）。
     backdrop.addEventListener('pointerdown', (event) => {
-      if (event.target === backdrop) this.close();
+      if (event.target === backdrop && event.button === 0) this.close();
+    });
+    backdrop.addEventListener('contextmenu', (event) => {
+      if (event.target === backdrop) event.preventDefault();
     });
 
     const dialog = document.createElement('div');
