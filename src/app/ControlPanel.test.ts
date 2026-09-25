@@ -5,7 +5,7 @@
  * 鎖定狀態涵蓋整區。`ControlPanel` 是純 DOM 接線層，jsdom 下可直接建。
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ControlPanel, type ControlPanelOptions, type TrackListRow } from './ControlPanel';
 import { PANEL_LAYOUT_STORAGE_KEY, type KeyValueStorage } from './panelLayout';
@@ -1342,10 +1342,12 @@ describe('ControlPanel — 匯入區塊：「全部重建」按鈕（issue #90 /
     return button!;
   }
 
-  it('面板有一顆「全部重建」按鈕，點擊呼叫 onRebuildAll（issue #98）', () => {
+  it('面板有一顆「全部重建」按鈕，按兩下（再按一次確認，issue #131）呼叫 onRebuildAll（issue #98）', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
-    rebuildButton(panel).click();
+    const button = rebuildButton(panel);
+    button.click();
+    button.click();
     expect(opts.onRebuildAll).toHaveBeenCalledTimes(1);
   });
 
@@ -1383,10 +1385,12 @@ describe('ControlPanel — 「清空全部」按鈕（issue #95 / V3 T3-2；ADR-
     return button!;
   }
 
-  it('面板有一顆「清空全部」按鈕，點擊呼叫 onClearAll', () => {
+  it('面板有一顆「清空全部」按鈕，按兩下（再按一次確認，issue #131）呼叫 onClearAll', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
-    clearAllButton(panel).click();
+    const button = clearAllButton(panel);
+    button.click();
+    button.click();
     expect(opts.onClearAll).toHaveBeenCalledTimes(1);
   });
 
@@ -1608,8 +1612,8 @@ describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () =>
       labelByText(panel, '網格密度'),
       buttonByText(panel, '全部重建').closest('.jelly-control-row')!,
     ].map((row) => rows.indexOf(row));
-    expect(order).toEqual([0, 1, 2, 3]);
     expect(rows).toHaveLength(4);
+    expect(order).toEqual([0, 1, 2, 3]);
   });
 
   it('片段區三顆按鈕排成同一列', () => {
@@ -2019,5 +2023,253 @@ describe('ControlPanel — 側欄不再有播放與相機控制（issue #129）'
       '播放時隱藏提示',
       '顯示游標標籤',
     ]);
+  });
+});
+
+describe('ControlPanel — 再按一次確認（issue #131 / V4 U4）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const CASES = [
+    { label: '清空全部', confirm: '再按一次確認…', callback: 'onClearAll' },
+    { label: '全部重建', confirm: '再按一次確認…', callback: 'onRebuildAll' },
+  ] as const;
+
+  for (const { label, confirm, callback } of CASES) {
+    describe(label, () => {
+      function setup() {
+        vi.useFakeTimers();
+        const opts = makeOptions();
+        const panel = new ControlPanel(opts);
+        const button = buttonByText(panel, label);
+        return { opts, panel, button };
+      }
+
+      it('第一次按不執行，文字變成確認提示並換警示樣式', () => {
+        const { opts, button } = setup();
+        button.click();
+        expect(opts[callback]).not.toHaveBeenCalled();
+        expect(button.textContent).toBe(confirm);
+        expect(button.classList.contains('jelly-confirm-pending')).toBe(true);
+      });
+
+      it('3 秒內第二次按才執行，並還原文字', () => {
+        const { opts, button } = setup();
+        button.click();
+        vi.advanceTimersByTime(2900);
+        button.click();
+        expect(opts[callback]).toHaveBeenCalledTimes(1);
+        expect(button.textContent).toBe(label);
+        expect(button.classList.contains('jelly-confirm-pending')).toBe(false);
+        // 執行後回到初始狀態：下一次又要按兩下。
+        button.click();
+        expect(opts[callback]).toHaveBeenCalledTimes(1);
+      });
+
+      it('逾時（3 秒）沒再按 → 還原，之後的一下只算第一次', () => {
+        const { opts, button } = setup();
+        button.click();
+        vi.advanceTimersByTime(3000);
+        expect(button.textContent).toBe(label);
+        expect(button.classList.contains('jelly-confirm-pending')).toBe(false);
+        button.click();
+        expect(opts[callback]).not.toHaveBeenCalled();
+        expect(button.textContent).toBe(confirm);
+      });
+
+      it('待確認時被鎖住（錄製中／播放中）→ 取消待確認，解鎖後要重新按兩下', () => {
+        const { opts, panel, button } = setup();
+        button.click();
+        panel.setRecordingActive(true);
+        expect(button.disabled).toBe(true);
+        expect(button.textContent).toBe(label);
+        expect(button.classList.contains('jelly-confirm-pending')).toBe(false);
+        panel.setRecordingActive(false);
+        button.click();
+        expect(opts[callback]).not.toHaveBeenCalled();
+
+        panel.setPlaybackControlsEnabled(false);
+        expect(button.textContent).toBe(label);
+        panel.setPlaybackControlsEnabled(true);
+        button.click();
+        expect(opts[callback]).not.toHaveBeenCalled();
+        button.click();
+        expect(opts[callback]).toHaveBeenCalledTimes(1);
+      });
+    });
+  }
+
+  it('兩顆各自獨立：一顆待確認不影響另一顆', () => {
+    vi.useFakeTimers();
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    buttonByText(panel, '清空全部').click();
+    const rebuild = buttonByText(panel, '全部重建');
+    rebuild.click();
+    rebuild.click();
+    expect(opts.onRebuildAll).toHaveBeenCalledTimes(1);
+    expect(opts.onClearAll).not.toHaveBeenCalled();
+    expect(buttonByText(panel, '再按一次確認…')).toBeDefined();
+  });
+});
+
+describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）', () => {
+  const ALL_SLIDERS = [
+    '軟硬度',
+    '輕拍力道',
+    '重力',
+    '匯入尺寸',
+    '網格密度',
+    '風扇寬度',
+    '風扇強度',
+    '風扇衰減程度',
+    '風扇頻率',
+    'Pin 筆刷半徑',
+    '撒 Pin 間距',
+    '大把抓取半徑',
+  ];
+
+  function valueOf(input: HTMLInputElement): string | null | undefined {
+    return input.closest('label')!.querySelector('output')?.textContent;
+  }
+
+  function dblclick(input: HTMLInputElement): void {
+    input.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  }
+
+  it('面板上每一條拉霸旁都有數值', () => {
+    const panel = new ControlPanel(makeOptions());
+    const ranges = [...panel.element.querySelectorAll('input[type=range]')] as HTMLInputElement[];
+    expect(ranges).toHaveLength(ALL_SLIDERS.length);
+    for (const input of ranges) {
+      const output = input.closest('label')!.querySelector('output.jelly-range-value');
+      expect(output?.textContent, input.closest('label')!.textContent!).toMatch(/\d/);
+    }
+    for (const text of ALL_SLIDERS)
+      expect(valueOf(findRangeInputByLabel(panel, text))).toBeTruthy();
+  });
+
+  it('0–1 的量（軟硬度）顯示成百分比，拖動時跟著更新', () => {
+    const panel = new ControlPanel(makeOptions());
+    const softness = findRangeInputByLabel(panel, '軟硬度');
+    expect(valueOf(softness)).toBe('50%');
+    softness.value = '0.37';
+    softness.dispatchEvent(new Event('input'));
+    expect(valueOf(softness)).toBe('37%');
+  });
+
+  it('其他量依 step 的小數位數顯示', () => {
+    const panel = new ControlPanel(makeOptions());
+    expect(valueOf(findRangeInputByLabel(panel, '輕拍力道'))).toBe('6000');
+    expect(valueOf(findRangeInputByLabel(panel, '風扇頻率'))).toBe('2.0');
+    const falloff = findRangeInputByLabel(panel, '風扇衰減程度');
+    falloff.value = '1.7';
+    falloff.dispatchEvent(new Event('input'));
+    expect(valueOf(falloff)).toBe('1.7');
+  });
+
+  it('雙擊回到預設值（建立時的值），並走跟拖動相同的變更回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const tap = findRangeInputByLabel(panel, '輕拍力道');
+    tap.value = '9000';
+    tap.dispatchEvent(new Event('input'));
+    expect(opts.onTapStrengthChange).toHaveBeenLastCalledWith(9000);
+
+    dblclick(tap);
+    expect(tap.value).toBe('6000');
+    expect(valueOf(tap)).toBe('6000');
+    expect(opts.onTapStrengthChange).toHaveBeenLastCalledWith(6000);
+
+    const softness = findRangeInputByLabel(panel, '軟硬度');
+    softness.value = '0.9';
+    softness.dispatchEvent(new Event('input'));
+    dblclick(softness);
+    expect(valueOf(softness)).toBe('50%');
+    expect(opts.onSoftnessChange).toHaveBeenLastCalledWith(0.5);
+  });
+
+  it('每條拉霸雙擊都回到自己的預設值並回呼自己的 onChange', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const cases: [string, keyof ControlPanelOptions, number][] = [
+      ['重力', 'onGravityChange', 0],
+      ['匯入尺寸', 'onImportSizeChange', 512],
+      ['網格密度', 'onMeshDensityChange', 350],
+      ['風扇寬度', 'onFanWidthChange', 150],
+      ['風扇強度', 'onFanStrengthChange', 4000],
+      ['風扇衰減程度', 'onFanFalloffChange', 2],
+      ['風扇頻率', 'onFanFrequencyChange', 2],
+      ['Pin 筆刷半徑', 'onPinBrushRadiusChange', 120],
+      ['撒 Pin 間距', 'onSpraySpacingChange', 36],
+      ['大把抓取半徑', 'onHandfulRadiusChange', 140],
+    ];
+    for (const [text, callback, value] of cases) {
+      const input = findRangeInputByLabel(panel, text);
+      input.value = input.max;
+      input.dispatchEvent(new Event('input'));
+      dblclick(input);
+      expect(Number(input.value), text).toBe(value);
+      expect(opts[callback], text).toHaveBeenLastCalledWith(value);
+    }
+  });
+
+  it('外部灌值（載入片段、效能退路、右鍵＋滾輪）同步數值顯示、不觸發回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    panel.setSoftness(0.25);
+    panel.setTapStrength(3000);
+    panel.setGravity(1200);
+    panel.setMeshDensity(170);
+    panel.setModeValue('pinBrushRadius', 230);
+    panel.setModeValue('handfulRadius', 310);
+
+    expect(valueOf(findRangeInputByLabel(panel, '軟硬度'))).toBe('25%');
+    expect(valueOf(findRangeInputByLabel(panel, '輕拍力道'))).toBe('3000');
+    expect(valueOf(findRangeInputByLabel(panel, '重力'))).toBe('1200');
+    expect(valueOf(findRangeInputByLabel(panel, '網格密度'))).toBe('170');
+    expect(valueOf(findRangeInputByLabel(panel, 'Pin 筆刷半徑'))).toBe('230');
+    expect(valueOf(findRangeInputByLabel(panel, '大把抓取半徑'))).toBe('310');
+
+    for (const callback of [
+      'onSoftnessChange',
+      'onTapStrengthChange',
+      'onGravityChange',
+      'onMeshDensityChange',
+      'onPinBrushRadiusChange',
+      'onHandfulRadiusChange',
+    ] as const) {
+      expect(opts[callback], callback).not.toHaveBeenCalled();
+    }
+  });
+
+  it('電風扇四條拉霸（issue #125 的右鍵＋滾輪）：setModeValue 同步數值顯示、不觸發回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const cases = [
+      ['fanWidth', '風扇寬度', 185, '185'],
+      ['fanStrength', '風扇強度', 4200, '4200'],
+      ['fanFalloffExponent', '風扇衰減程度', 2.3, '2.3'],
+      ['fanFrequency', '風扇頻率', 0.7, '0.7'],
+    ] as const;
+    for (const [key, label, value, shown] of cases) {
+      panel.setModeValue(key, value);
+      expect(valueOf(findRangeInputByLabel(panel, label)), label).toBe(shown);
+    }
+    expect(opts.onFanWidthChange).not.toHaveBeenCalled();
+    expect(opts.onFanStrengthChange).not.toHaveBeenCalled();
+    expect(opts.onFanFalloffChange).not.toHaveBeenCalled();
+    expect(opts.onFanFrequencyChange).not.toHaveBeenCalled();
+  });
+
+  it('外部灌值不改預設值：雙擊仍回到建立時的值', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    panel.setGravity(1200);
+    const gravity = findRangeInputByLabel(panel, '重力');
+    dblclick(gravity);
+    expect(gravity.value).toBe('0');
+    expect(opts.onGravityChange).toHaveBeenLastCalledWith(0);
   });
 });
