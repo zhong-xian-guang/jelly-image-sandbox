@@ -185,34 +185,94 @@ body {
 }
 
 /**
- * 「沙盒工具」可折疊區塊（issue #67 事後檢視追加，見 `ControlPanel.toolSection`
- * 說明）——預設收合，展開後裡面是「目前工具」選擇器 + 目前選中工具的專屬
- * 參數。`summary` 拿掉預設的三角形項目符號，改用文字前綴＋`::marker`／
- * `[open]` 切換文字提示是否展開，避免瀏覽器預設樣式在深色面板上不易辨識。
+ * 工具列＋參數卡（issue #122 / V4 T1，見 `ControlPanel.toolbarSection`）——側欄最上方，
+ * 取代原本的「▸ 沙盒工具」收合區塊。工具列是一格一格的按鈕（圖示在上、文字在下），
+ * 目前工具高亮；正下方是目前工具的參數卡。
  */
 .jelly-tool-section {
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 4px;
-  padding: 4px 6px;
-  margin: 2px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.jelly-tool-section summary {
+.jelly-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.jelly-tool-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-height: 44px;
+  padding: 3px 2px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font: inherit;
   cursor: pointer;
+}
+
+.jelly-tool-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.jelly-tool-button.is-active {
+  border-color: rgba(90, 200, 255, 0.9);
+  background: rgba(90, 200, 255, 0.28);
   font-weight: 600;
-  list-style: none;
 }
 
-.jelly-tool-section summary::before {
-  content: '▸ ';
+.jelly-tool-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-.jelly-tool-section[open] summary::before {
-  content: '▾ ';
+.jelly-tool-button-icon {
+  font-size: 1.05rem;
+  line-height: 1.1;
 }
 
-.jelly-tool-section[open] summary {
-  margin-bottom: 4px;
+.jelly-tool-button-text {
+  font-size: 0.7rem;
+  line-height: 1.15;
+  text-align: center;
+}
+
+/** 參數卡最上方的模式切換鈕（issue #122）——一排分段按鈕，目前模式高亮。 */
+.jelly-mode-row {
+  gap: 0;
+}
+
+.jelly-mode-row .jelly-mode-button {
+  flex: 1;
+  padding: 3px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  cursor: pointer;
+}
+
+.jelly-mode-row .jelly-mode-button + .jelly-mode-button {
+  border-left: none;
+}
+
+.jelly-mode-row .jelly-mode-button:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.jelly-mode-row .jelly-mode-button:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.jelly-mode-row .jelly-mode-button.is-active {
+  background: rgba(90, 200, 255, 0.35);
+  border-color: rgba(90, 200, 255, 0.9);
+  font-weight: 600;
 }
 
 /**
@@ -235,8 +295,8 @@ body {
  * `display: flex` 會蓋掉瀏覽器內建的 `[hidden] { display: none }`（作者樣式
  * 優先於 UA 樣式）——issue #67 只有電風扇一組參數時不明顯，issue #68 加了
  * 編隊抓取之後就變成兩組同時攤在面板上、看起來像一長串混在一起的參數
- * （使用者事後檢視回報）。這條把 `hidden` 補回來，`toolSection` 依「目前
- * 工具」切換 `el.hidden` 才真的有效。
+ * （使用者事後檢視回報）。這條把 `hidden` 補回來，`toolbarSection` 依目前
+ * 工具切換 `el.hidden` 才真的有效。
  */
 .jelly-tool-params[hidden] {
   display: none;
@@ -713,4 +773,28 @@ body {
 .jelly-brush-cursor-circle.is-handful {
   border-color: rgba(90, 220, 200, 0.9);
   background: rgba(90, 220, 200, 0.08);
+}
+
+/**
+ * 游標標籤（issue #122，見 `CursorLabel`）——跟著指標的小標籤，顯示目前模式與滾輪調到
+ * 的數值。位置由 JS 每幀寫 `transform`（已含相對指標的位移）；不吃指標事件。
+ */
+.jelly-cursor-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 6;
+  display: none;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.jelly-cursor-label.is-visible {
+  display: block;
 }

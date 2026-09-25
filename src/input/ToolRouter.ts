@@ -3,6 +3,15 @@
  * 原本直接持有的 `GestureTracker`。issue #66 / V2 T3-2 加上第一個新工具：電風扇。
  * issue #68 / V2 T3-4 加上第二個：編隊抓取。
  *
+ * **工具與模式**（issue #122 / V4 T1；ADR-0016，取代下面 ADR-0011／0015 的選擇器設計）：
+ * 一般操作、大把抓取、編隊抓取合成「抓取」工具（`'grab'`），三者變成它的模式（單點／
+ * 大把／編隊，`TOOL_MODES`）。每個工具各自記住自己的模式（`modes`），中鍵單擊
+ * （`cycleMode`）或參數卡的模式鈕（`setMode`）切換。「工具＋模式」推出內部的手勢分支
+ * （`Behavior`）——就是原本各工具的那些分支，內容一行沒改，只換掉「目前是哪個分支」
+ * 的來源；而且改成**按下當下**定下、記在 `pointerBehaviors`，`move`／`up`／`cancel`
+ * 照它分派，拖曳中切工具或切模式都只影響下一次按下。下面各段提到的「一般操作」
+ * ＝單點模式、「大把抓取」＝大把模式、「編隊抓取」＝編隊模式。
+ *
  * ADR-0011：「目前工具」選擇器只涵蓋新增的沙盒工具（電風扇／編隊抓取／撒
  * Pin／移除 Pin），Grab／Tap 維持純手勢辨識、不進選擇器（Pin 原本也在此列，
  * ADR-0015 / issue #115 把它移進選擇器）。
@@ -136,22 +145,58 @@ import {
 } from './GestureTracker';
 
 /**
- * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）、
- * `'erase'`（issue #70，＝「移除 Pin」）、`'spawn'`／`'removeJelly'`（issue #97）、
- * `'rebuildJelly'`（issue #98）、`'handfulGrab'`（issue #113）、`'pin'`（issue #115；
- * ADR-0015）加進 ADR-0011 選擇器；`'general'` 維持既有 Grab/Tap 手勢。
+ * 工具列上的工具（issue #122 / V4 T1；ADR-0016）。一般操作、大把抓取、編隊抓取合成
+ * `'grab'`（三者變成它的模式，見 `TOOL_MODES`）；其餘是還沒合併的舊工具，各佔一顆
+ * 按鈕、沒有模式——#123 把 `'spray'`／`'erase'` 收進 `'pin'`、#124 把三個 Jelly
+ * 工具收成 `'jelly'`。工具與模式都不存檔、也不是 Track 事件，改名不影響舊片段檔。
  */
 export type ToolId =
-  | 'general'
-  | 'pin'
-  | 'handfulGrab'
-  | 'fan'
-  | 'formation'
-  | 'spray'
-  | 'erase'
-  | 'spawn'
-  | 'removeJelly'
-  | 'rebuildJelly';
+  'grab' | 'pin' | 'spray' | 'erase' | 'fan' | 'spawn' | 'removeJelly' | 'rebuildJelly';
+
+/** 工具列的順序（issue #122）——面板照這個順序排按鈕。 */
+export const TOOL_IDS: readonly ToolId[] = [
+  'grab',
+  'pin',
+  'spray',
+  'erase',
+  'fan',
+  'spawn',
+  'removeJelly',
+  'rebuildJelly',
+];
+
+/**
+ * 有模式的工具與它們的模式，依中鍵單擊輪替的順序排（issue #122；CONTEXT.md「模式」）。
+ * 第一個是預設模式。之後的票在這裡加 `pin: ['place', 'remove']`、`fan: [...]`。
+ */
+export const TOOL_MODES = {
+  grab: ['single', 'handful', 'formation'],
+} as const satisfies Partial<Record<ToolId, readonly string[]>>;
+
+/** 有模式的工具。 */
+export type ModalToolId = keyof typeof TOOL_MODES;
+/** 某個工具的模式。 */
+export type ToolModeOf<T extends ModalToolId> = (typeof TOOL_MODES)[T][number];
+/** 任一工具的模式。 */
+export type ToolMode = ToolModeOf<ModalToolId>;
+/** 抓取工具的模式：單點（原一般操作）／大把（原大把抓取）／編隊（原編隊抓取）。 */
+export type GrabMode = ToolModeOf<'grab'>;
+
+export function isModalTool(tool: ToolId): tool is ModalToolId {
+  return tool in TOOL_MODES;
+}
+
+/** 這個工具的模式清單（輪替順序）；沒有模式的工具回空陣列。 */
+export function modesOf(tool: ToolId): readonly ToolMode[] {
+  return isModalTool(tool) ? TOOL_MODES[tool] : [];
+}
+
+/**
+ * 按下當下定下的手勢分支（issue #122）——「工具＋模式」推出來的，`ToolRouter` 內既有的
+ * 各分支原樣沿用，只換掉「目前是哪個分支」的來源：抓取工具的三個模式各自對應原本的
+ * 一般操作／大把抓取／編隊抓取，其餘工具就是它自己。
+ */
+type Behavior = 'single' | 'handful' | 'formation' | Exclude<ToolId, 'grab'>;
 
 /**
  * 「點一下就完成」的那幾個工具（issue #97）——`down`→`up` 無拖曳才作用，見
@@ -164,15 +209,15 @@ export const CLICK_TOOL_IDS = ['spawn', 'removeJelly', 'rebuildJelly'] as const;
 
 export type ClickToolId = (typeof CLICK_TOOL_IDS)[number];
 
-function isClickTool(tool: ToolId): tool is ClickToolId {
-  return (CLICK_TOOL_IDS as readonly ToolId[]).includes(tool);
+function isClickTool(behavior: Behavior): behavior is ClickToolId {
+  return (CLICK_TOOL_IDS as readonly string[]).includes(behavior);
 }
 
-export const DEFAULT_TOOL: ToolId = 'general';
+export const DEFAULT_TOOL: ToolId = 'grab';
 
-/** 手勢直接交給 `GestureTracker` 的工具——一般操作與 Pin（issue #115，見類別頂端說明）。 */
-function usesGestureTracker(tool: ToolId): boolean {
-  return tool === 'general' || tool === 'pin';
+/** 手勢直接交給 `GestureTracker` 的分支——單點抓取與 Pin（issue #115，見類別頂端說明）。 */
+function usesGestureTracker(behavior: Behavior): boolean {
+  return behavior === 'single' || behavior === 'pin';
 }
 
 /** 電風扇矩形的初始預設值（issue #66）——`setFanParams`（issue #67）可在執行期間覆寫。 */
@@ -255,13 +300,24 @@ export const DEFAULT_HANDFUL_RADIUS = 140;
 /** 大把抓取半徑拉霸的範圍（issue #113），世界單位——跟撒 Pin 一致（spec #112）。 */
 export const HANDFUL_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 };
 
-/** 有半徑、能用「右鍵＋滾輪」調整的工具（issue #114）。 */
-export type RadiusToolId = 'spray' | 'erase' | 'handfulGrab';
+/**
+ * 「按住右鍵＋滾輪」能調的數值（issue #114 的「工具半徑」由 issue #122 推廣成「目前模式
+ * 的數值」）：抓取／大把的大把抓取半徑，以及還沒合併的撒 Pin、移除 Pin 各自的半徑
+ * （這張票維持現狀，#123 合成 Pin 筆刷半徑）。
+ */
+export type ModeValueKey = 'handfulRadius' | 'sprayRadius' | 'eraseRadius';
 
-/** `adjustActiveRadius` 的回報（issue #114）：調的是哪個工具、新半徑多少。 */
-export interface ToolRadius {
-  tool: RadiusToolId;
-  radius: number;
+/** 各數值的拉霸範圍——面板拉霸與「右鍵＋滾輪」共用同一份。 */
+export const MODE_VALUE_RANGES: Readonly<Record<ModeValueKey, RadiusRange>> = {
+  handfulRadius: HANDFUL_RADIUS_RANGE,
+  sprayRadius: SPRAY_RADIUS_RANGE,
+  eraseRadius: ERASE_RADIUS_RANGE,
+};
+
+/** 目前模式的數值（issue #122）：哪一個、現在多少。 */
+export interface ModeValue {
+  key: ModeValueKey;
+  value: number;
 }
 
 /** `setHandfulParams` 接受的部分更新（issue #113）——目前只有半徑一個欄位。 */
@@ -396,6 +452,16 @@ export class ToolRouter {
   private readonly random: () => number;
   private readonly onClickTool: ((tool: ClickToolId, world: Point) => void) | undefined;
   private activeTool: ToolId = DEFAULT_TOOL;
+  /**
+   * 每個有模式的工具各自目前的模式（issue #122）——整個 session 內記住、不存檔；切去
+   * 別的工具再切回來模式不變。初值＝各工具清單裡的第一個。
+   */
+  private readonly modes: { [T in ModalToolId]: ToolModeOf<T> } = { grab: TOOL_MODES.grab[0] };
+  /**
+   * 每個進行中的指標在**按下當下**定下的手勢分支（issue #122）——`move`／`up`／`cancel`
+   * 一律照這個分派，拖曳中切工具或切模式只影響下一次按下。`up`／`cancel` 時移除。
+   */
+  private readonly pointerBehaviors = new Map<PointerId, Behavior>();
   /** 進行中的電風扇手勢（放置或拖曳），鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly fanSessions = new Map<PointerId, FanSession>();
   /**
@@ -453,6 +519,47 @@ export class ToolRouter {
 
   setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
+  }
+
+  get currentTool(): ToolId {
+    return this.activeTool;
+  }
+
+  /** 某個工具目前的模式（issue #122）；沒有模式的工具回 `null`。 */
+  modeOf<T extends ModalToolId>(tool: T): ToolModeOf<T>;
+  modeOf(tool: ToolId): ToolMode | null;
+  modeOf(tool: ToolId): ToolMode | null {
+    return isModalTool(tool) ? this.modes[tool] : null;
+  }
+
+  /** 目前工具的模式；沒有模式回 `null`。 */
+  get currentMode(): ToolMode | null {
+    return this.modeOf(this.activeTool);
+  }
+
+  /** 設定某個工具的模式（參數卡的模式鈕）——只影響下一次按下。 */
+  setMode<T extends ModalToolId>(tool: T, mode: ToolModeOf<T>): void {
+    this.modes[tool] = mode;
+  }
+
+  /**
+   * 中鍵單擊（issue #122）：目前工具的模式換成清單裡的下一個（最後一個繞回第一個），
+   * 回報新模式讓呼叫端同步參數卡與游標標籤。目前工具沒有模式就回 `null`、什麼都不做。
+   */
+  cycleMode(): ToolMode | null {
+    const tool = this.activeTool;
+    if (!isModalTool(tool)) return null;
+    const list: readonly ToolMode[] = TOOL_MODES[tool];
+    const next = list[(list.indexOf(this.modes[tool]) + 1) % list.length] as ToolModeOf<
+      typeof tool
+    >;
+    this.modes[tool] = next;
+    return next;
+  }
+
+  /** 這一次按下要走的分支：抓取工具看模式，其餘工具就是自己。 */
+  private currentBehavior(): Behavior {
+    return this.activeTool === 'grab' ? this.modes.grab : this.activeTool;
   }
 
   /** 「開始設定形狀」按鈕（issue #68）——之後的 `down` 只記點，不 emit。 */
@@ -557,39 +664,52 @@ export class ToolRouter {
     if (params.radius !== undefined) this.handfulRadius = params.radius;
   }
 
-  /**
-   * 「右鍵＋滾輪」調整目前工具的半徑（issue #114）：`steps` 格（正 = 放大），每格一個
-   * 拉霸 step，夾在該拉霸範圍內，回報新值讓呼叫端同步面板與圓圈。目前工具沒有半徑
-   * 就回 `null`（「不處理」——呼叫端照舊縮放相機）。跟拉霸一樣只影響**下一次**按下：
-   * 進行中的大把抓取 session 已經在按下時記下自己的半徑。
-   */
-  adjustActiveRadius(steps: number): ToolRadius | null {
-    const tool = this.activeTool;
-    if (tool === 'spray') {
-      this.sprayRadius = stepRadius(this.sprayRadius, steps, SPRAY_RADIUS_RANGE);
-      return { tool, radius: this.sprayRadius };
-    }
-    if (tool === 'erase') {
-      this.eraseRadius = stepRadius(this.eraseRadius, steps, ERASE_RADIUS_RANGE);
-      return { tool, radius: this.eraseRadius };
-    }
-    if (tool === 'handfulGrab') {
-      this.handfulRadius = stepRadius(this.handfulRadius, steps, HANDFUL_RADIUS_RANGE);
-      return { tool, radius: this.handfulRadius };
-    }
+  /** 目前模式（或沒有模式的工具）的數值是哪一個（issue #122）；沒有數值回 `null`。 */
+  private activeValueKey(): ModeValueKey | null {
+    const behavior = this.currentBehavior();
+    if (behavior === 'handful') return 'handfulRadius';
+    if (behavior === 'spray') return 'sprayRadius';
+    if (behavior === 'erase') return 'eraseRadius';
     return null;
   }
 
-  get currentTool(): ToolId {
-    return this.activeTool;
+  /** 目前模式的數值與它現在的值（游標標籤用）；沒有數值回 `null`。 */
+  get activeValue(): ModeValue | null {
+    const key = this.activeValueKey();
+    return key === null ? null : { key, value: this.valueOf(key) };
+  }
+
+  /**
+   * 「右鍵＋滾輪」調整目前模式的數值（issue #114 的調半徑，issue #122 推廣）：`steps` 格
+   * （正 = 放大），每格一個拉霸 step，夾在該拉霸範圍內，回報新值讓呼叫端同步面板與
+   * 圓圈。沒有數值的模式回 `null`（「不處理」——呼叫端照舊縮放相機）。跟拉霸一樣只影響
+   * **下一次**按下：進行中的大把抓取 session 已經在按下時記下自己的半徑。
+   */
+  adjustActiveValue(steps: number): ModeValue | null {
+    const key = this.activeValueKey();
+    if (key === null) return null;
+    const value = stepRadius(this.valueOf(key), steps, MODE_VALUE_RANGES[key]);
+    if (key === 'handfulRadius') this.handfulRadius = value;
+    else if (key === 'sprayRadius') this.sprayRadius = value;
+    else this.eraseRadius = value;
+    return { key, value };
+  }
+
+  private valueOf(key: ModeValueKey): number {
+    if (key === 'handfulRadius') return this.handfulRadius;
+    if (key === 'sprayRadius') return this.sprayRadius;
+    return this.eraseRadius;
   }
 
   down(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
-    if (usesGestureTracker(this.activeTool)) {
+    // 按下當下就定下這次手勢的分支（issue #122），之後切工具／切模式都不影響它。
+    const behavior = this.currentBehavior();
+    this.pointerBehaviors.set(id, behavior);
+    if (usesGestureTracker(behavior)) {
       this.gestureTracker.down(id, screenX, screenY, timeMs);
       return;
     }
-    if (this.activeTool === 'handfulGrab') {
+    if (behavior === 'handful') {
       const world = this.screenToWorld(screenX, screenY);
       if (this.hitTest && !this.hitTest(world)) return; // 背景拖曳 → 不歸求解器
       const radius = this.handfulRadius;
@@ -603,7 +723,7 @@ export class ToolRouter {
       this.emit({ type: 'grab', id, x: world.x, y: world.y, handfulRadius: radius });
       return;
     }
-    if (this.activeTool === 'fan') {
+    if (behavior === 'fan') {
       const world = this.screenToWorld(screenX, screenY);
       const fan = this.getFan?.() ?? null;
       if (fan && isPointInFanRect(fan, world)) {
@@ -626,12 +746,13 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'formation') {
+    if (behavior === 'formation') {
       const world = this.screenToWorld(screenX, screenY);
       if (this.formationDefinePoints) {
         this.formationDefinePoints.push(world);
         return;
       }
+      // 還沒定義形狀：編隊模式下的左鍵拖曳不做任何事（spec #121）。
       if (!this.formationOffsets || this.formationOffsets.length === 0) return;
       const session = this.nextFormationSession++;
       const attached: { offset: Point; id: string }[] = [];
@@ -654,24 +775,24 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'spray') {
+    if (behavior === 'spray') {
       // 撒 Pin 只有 `down` 有事做——點一下就完成，`move`/`up`/`cancel` 那三個
       // 方法因此沒有對應的分支（見類別頂端說明）。
       this.sprayOnce(this.screenToWorld(screenX, screenY));
       return;
     }
-    if (this.activeTool === 'erase') {
+    if (behavior === 'erase') {
       // 按下當下就擦一次——不必等到 move，點一下也該能清掉腳下那幾顆。
       const session: EraseSession = { erasedPinIds: new Set() };
       this.eraseSessions.set(id, session);
       this.eraseAt(this.screenToWorld(screenX, screenY), session);
       return;
     }
-    if (isClickTool(this.activeTool)) {
+    if (isClickTool(behavior)) {
       // 生成／移除都要等 `up` 才算數（issue #97）——按下當下先記位置，拖曳與否
       // 由 `move` 判定。刻意不在 `down` 就動手：按錯地方時還能拖開取消。
       this.clickSessions.set(id, {
-        tool: this.activeTool,
+        tool: behavior,
         startX: screenX,
         startY: screenY,
         startT: timeMs,
@@ -681,28 +802,24 @@ export class ToolRouter {
     }
   }
 
+  // `move`／`up`／`cancel` 一律照 `down` 當下定下的分支（`pointerBehaviors`）分派，不看
+  // 現在選的工具與模式（issue #122）：按住途中切走工具或按中鍵切模式，這次手勢仍屬於
+  // 按下時那個分支、照常跟隨與放開（issue #97 的點一下、#113 的大把抓取原本就是這條規則，
+  // 現在所有分支一體適用）。
   move(id: PointerId, screenX: number, screenY: number): void {
-    // 「點一下」的進行中手勢先攔（issue #97）：session 只有那幾個工具建得出來，
-    // 但按住途中可能被切到別的工具——照 `activeTool` 分支會把它漏掉，見 `up`。
-    const click = this.clickSessions.get(id);
-    if (click) {
-      // 超過輕拍的位移門檻（跟一般操作同一把尺）就不再是「點一下」。
-      if (!click.dragged && movedFromStart(click, screenX, screenY) > this.config.tapMaxDist) {
-        click.dragged = true;
-      }
+    const behavior = this.pointerBehaviors.get(id);
+    if (behavior === undefined) return;
+    if (usesGestureTracker(behavior)) {
+      this.gestureTracker.move(id, screenX, screenY);
       return;
     }
-    // 大把抓取同理：這一把屬於按下當下的工具（issue #113）。
-    if (this.handfulSessions.has(id)) {
+    if (behavior === 'handful') {
+      if (!this.handfulSessions.has(id)) return;
       const world = this.screenToWorld(screenX, screenY);
       this.emit({ type: 'moveGrab', id, x: world.x, y: world.y });
       return;
     }
-    if (usesGestureTracker(this.activeTool)) {
-      this.gestureTracker.move(id, screenX, screenY);
-      return;
-    }
-    if (this.activeTool === 'fan') {
+    if (behavior === 'fan') {
       const session = this.fanSessions.get(id);
       if (!session) return;
       const world = this.screenToWorld(screenX, screenY);
@@ -713,7 +830,7 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'formation') {
+    if (behavior === 'formation') {
       if (this.formationDefinePoints) return; // 定義中：只有 down 記點，move 不理會
       const session = this.formationSessions.get(id);
       if (!session) return;
@@ -729,26 +846,37 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'erase') {
+    if (behavior === 'erase') {
       // 沒有進行中的手勢就不作用——橡皮擦是「按住拖過去才擦」，不是滑過就擦。
       const session = this.eraseSessions.get(id);
       if (!session) return;
       this.eraseAt(this.screenToWorld(screenX, screenY), session);
+      return;
+    }
+    if (isClickTool(behavior)) {
+      const click = this.clickSessions.get(id);
+      // 超過輕拍的位移門檻（跟一般操作同一把尺）就不再是「點一下」。
+      if (
+        click &&
+        !click.dragged &&
+        movedFromStart(click, screenX, screenY) > this.config.tapMaxDist
+      ) {
+        click.dragged = true;
+      }
     }
   }
 
   up(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
-    // 「點一下」的進行中手勢先結（issue #97）：按住途中切走工具（觸控裝置做得
-    // 到）時，照 `activeTool` 分支會在別的工具那裡先 `return`，這次點擊就永遠
-    // 不會完成、session 也留在表上。手勢屬於按下當下那個工具，跟現在選什麼無關。
-    const click = this.clickSessions.get(id);
-    if (click) {
-      this.clickSessions.delete(id);
-      if (!click.dragged) this.onClickTool?.(click.tool, click.startWorld);
+    const behavior = this.pointerBehaviors.get(id);
+    if (behavior === undefined) return;
+    this.pointerBehaviors.delete(id);
+    if (usesGestureTracker(behavior)) {
+      this.gestureTracker.up(id, screenX, screenY, timeMs);
       return;
     }
-    const handful = this.handfulSessions.get(id);
-    if (handful) {
+    if (behavior === 'handful') {
+      const handful = this.handfulSessions.get(id);
+      if (!handful) return;
       this.handfulSessions.delete(id);
       // 快速按放＝以同一個半徑對按下點 Tap（ADR-0014），跟一般操作的 grab → tap → release 同形。
       if (isTap(handful, screenX, screenY, timeMs, this.config)) {
@@ -762,11 +890,7 @@ export class ToolRouter {
       this.emit({ type: 'release', id });
       return;
     }
-    if (usesGestureTracker(this.activeTool)) {
-      this.gestureTracker.up(id, screenX, screenY, timeMs);
-      return;
-    }
-    if (this.activeTool === 'fan') {
+    if (behavior === 'fan') {
       const session = this.fanSessions.get(id);
       if (!session) return;
       this.fanSessions.delete(id);
@@ -778,51 +902,61 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'formation') {
+    if (behavior === 'formation') {
       if (this.formationDefinePoints) return; // 定義中：down 才算數
       this.emitFormationTapIfAny(id, screenX, screenY, timeMs);
       this.releaseFormationSession(id);
       return;
     }
-    if (this.activeTool === 'erase') {
+    if (behavior === 'erase') {
       // `up` 跟 `cancel` 在這裡是同一件事：結束這次擦除、丟掉已處理集合。刻意
       // **不**在放開當下再補擦一次——放開前瀏覽器一定送過同座標的 `move`，補的
       // 那一次只會在 Track 上多錄一筆一模一樣的 `unpin`，還會讓 `up` 與 `cancel`
       // 無謂地不對稱。
       this.eraseSessions.delete(id);
+      return;
+    }
+    if (isClickTool(behavior)) {
+      const click = this.clickSessions.get(id);
+      if (!click) return;
+      this.clickSessions.delete(id);
+      if (!click.dragged) this.onClickTool?.(click.tool, click.startWorld);
     }
   }
 
   cancel(id: PointerId): void {
-    // 生成／移除都還沒發生（要等 `up`），中斷就是整個作廢，不留痕跡（issue #97）。
-    // 先攔的理由同 `up`：手勢屬於按下當下那個工具。
-    if (this.clickSessions.delete(id)) return;
-    // 大把抓取已經是活著的約束：中斷要真的放開（同一般 Grab），不送 tap。
-    if (this.handfulSessions.delete(id)) {
-      this.emit({ type: 'release', id });
-      return;
-    }
-    if (usesGestureTracker(this.activeTool)) {
+    const behavior = this.pointerBehaviors.get(id);
+    if (behavior === undefined) return;
+    this.pointerBehaviors.delete(id);
+    if (usesGestureTracker(behavior)) {
       this.gestureTracker.cancel(id);
       return;
     }
-    if (this.activeTool === 'fan') {
+    if (behavior === 'handful') {
+      // 大把抓取已經是活著的約束：中斷要真的放開（同一般 Grab），不送 tap。
+      if (this.handfulSessions.delete(id)) this.emit({ type: 'release', id });
+      return;
+    }
+    if (behavior === 'fan') {
       // 放置中：放棄這次放置，不 emit 任何事件。拖曳中：`move` 已經即時把風扇挪
       // 過去了，這裡只是停止跟隨指標，風扇留在目前位置（見類別頂端說明）。
       this.fanSessions.delete(id);
       return;
     }
-    if (this.activeTool === 'formation') {
+    if (behavior === 'formation') {
       // 已經是活著的約束（`down` 就 emit 過 grab），跟一般 Grab 的 cancel 同一個
       // 道理：真的要放開，不能悄悄留著（見類別頂端說明）。
       this.releaseFormationSession(id);
       return;
     }
-    if (this.activeTool === 'erase') {
+    if (behavior === 'erase') {
       // 已經擦掉的 Pin 是既成事實，取消不會把它們變回來（比照拖曳風扇的 cancel
       // 不回捲）——這裡只是停止繼續跟著指標擦。
       this.eraseSessions.delete(id);
+      return;
     }
+    // 生成／移除都還沒發生（要等 `up`），中斷就是整個作廢，不留痕跡（issue #97）。
+    this.clickSessions.delete(id);
   }
 
   /**

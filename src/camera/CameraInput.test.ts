@@ -110,7 +110,7 @@ describe('CameraInput — 相機指標判定（滑鼠看鍵、觸控看是否命
   });
 });
 
-describe('CameraInput — 按住右鍵＋滾輪調工具半徑（issue #114）', () => {
+describe('CameraInput — 按住右鍵＋滾輪調目前模式的數值（issue #114；issue #122 推廣）', () => {
   let el: HTMLDivElement;
 
   beforeEach(() => {
@@ -120,13 +120,13 @@ describe('CameraInput — 按住右鍵＋滾輪調工具半徑（issue #114）',
     stubPointerCapture(el);
   });
 
-  function setup(adjustToolRadius?: (steps: number) => boolean) {
+  function setup(adjustModeValue?: (steps: number) => boolean) {
     const cmds: CameraCommand[] = [];
     const input = new CameraInput(el, {
       screenToWorld: (x, y) => ({ x, y }),
       hitTest: () => false,
       emit: (c) => cmds.push(c),
-      adjustToolRadius,
+      adjustModeValue,
     });
     return { cmds, input };
   }
@@ -144,7 +144,7 @@ describe('CameraInput — 按住右鍵＋滾輪調工具半徑（issue #114）',
     return ev;
   }
 
-  it('按住右鍵＋滾輪、工具有半徑 → 交給 adjustToolRadius（往上滾 = +1、往下滾 = −1），相機不縮放', () => {
+  it('按住右鍵＋滾輪、模式有數值 → 交給 adjustModeValue（往上滾 = +1、往下滾 = −1），相機不縮放', () => {
     const steps: number[] = [];
     const { cmds } = setup((s) => {
       steps.push(s);
@@ -157,13 +157,13 @@ describe('CameraInput — 按住右鍵＋滾輪調工具半徑（issue #114）',
     expect(ev.defaultPrevented).toBe(true);
   });
 
-  it('按住右鍵＋滾輪、工具沒有半徑（adjustToolRadius 回報不處理）→ 照舊縮放', () => {
+  it('按住右鍵＋滾輪、模式沒有數值（adjustModeValue 回報不處理）→ 照舊縮放', () => {
     const { cmds } = setup(() => false);
     wheel(-100, 2);
     expect(cmds.some((c) => c.type === 'zoomBy')).toBe(true);
   });
 
-  it('沒按右鍵 → 不問 adjustToolRadius，照舊縮放', () => {
+  it('沒按右鍵 → 不問 adjustModeValue，照舊縮放', () => {
     let called = false;
     const { cmds } = setup(() => {
       called = true;
@@ -217,6 +217,121 @@ describe('CameraInput — 按住右鍵＋滾輪調工具半徑（issue #114）',
     );
     el.dispatchEvent(makePointerEvent('pointermove', { pointerId: 1, clientX: 90, clientY: 70 }));
     el.dispatchEvent(makePointerEvent('pointerup', { pointerId: 1, clientX: 90, clientY: 70 }));
+    expect(cmds).toEqual([]);
+  });
+});
+
+describe('CameraInput — 中鍵單擊輪替模式、中鍵拖曳平移（issue #122；ADR-0016）', () => {
+  let el: HTMLDivElement;
+
+  beforeEach(() => {
+    el = document.createElement('div');
+    document.body.appendChild(el);
+    el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 200 }) as DOMRect;
+    stubPointerCapture(el);
+  });
+
+  function setup() {
+    const cmds: CameraCommand[] = [];
+    const clicks: { x: number; y: number }[] = [];
+    const input = new CameraInput(el, {
+      screenToWorld: (x, y) => ({ x, y }),
+      hitTest: () => true,
+      emit: (c) => cmds.push(c),
+      onMiddleClick: (x, y) => clicks.push({ x, y }),
+    });
+    return { cmds, clicks, input };
+  }
+
+  function fire(type: string, init: Parameters<typeof makePointerEvent>[1]): void {
+    el.dispatchEvent(makePointerEvent(type, init));
+  }
+
+  it('中鍵點放（沒動）→ 觸發中鍵單擊、相機不動', () => {
+    const { cmds, clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, button: 1, buttons: 4 });
+    fire('pointerup', { pointerId: 1, clientX: 50, clientY: 50, button: 1, buttons: 0 });
+    expect(clicks).toEqual([{ x: 50, y: 50 }]);
+    expect(cmds).toEqual([]);
+  });
+
+  it('中鍵點放、途中抖動不超過 Tap 門檻 → 仍是單擊，完全不平移', () => {
+    const { cmds, clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, button: 1, buttons: 4 });
+    fire('pointermove', { pointerId: 1, clientX: 53, clientY: 52, buttons: 4 });
+    fire('pointerup', { pointerId: 1, clientX: 53, clientY: 52, button: 1, buttons: 0 });
+    expect(clicks).toHaveLength(1);
+    expect(cmds).toEqual([]);
+  });
+
+  it('中鍵拖曳超過門檻 → 平移（第一筆就補上從按下點起算的整段位移），不輪替', () => {
+    const { cmds, clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, button: 1, buttons: 4 });
+    fire('pointermove', { pointerId: 1, clientX: 53, clientY: 50, buttons: 4 });
+    fire('pointermove', { pointerId: 1, clientX: 70, clientY: 60, buttons: 4 });
+    fire('pointermove', { pointerId: 1, clientX: 80, clientY: 60, buttons: 4 });
+    fire('pointerup', { pointerId: 1, clientX: 80, clientY: 60, button: 1, buttons: 0 });
+    expect(clicks).toEqual([]);
+    expect(cmds).toEqual([
+      { type: 'panBy', dxScreen: 20, dyScreen: 10 },
+      { type: 'panBy', dxScreen: 10, dyScreen: 0 },
+    ]);
+  });
+
+  it('拖出門檻又拖回原點放開 → 不算單擊', () => {
+    const { clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, button: 1, buttons: 4 });
+    fire('pointermove', { pointerId: 1, clientX: 90, clientY: 50, buttons: 4 });
+    fire('pointermove', { pointerId: 1, clientX: 50, clientY: 50, buttons: 4 });
+    fire('pointerup', { pointerId: 1, clientX: 50, clientY: 50, button: 1, buttons: 0 });
+    expect(clicks).toEqual([]);
+  });
+
+  it('中鍵 pointercancel → 不算單擊', () => {
+    const { clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, button: 1, buttons: 4 });
+    fire('pointercancel', { pointerId: 1, clientX: 50, clientY: 50 });
+    expect(clicks).toEqual([]);
+  });
+
+  it('左鍵拖曳中再點中鍵（chorded，只有 pointermove）→ 算中鍵單擊，相機不動', () => {
+    const { cmds, clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, button: 0, buttons: 1 });
+    fire('pointermove', { pointerId: 1, clientX: 60, clientY: 50, buttons: 1 });
+    fire('pointermove', { pointerId: 1, clientX: 60, clientY: 50, button: 1, buttons: 5 });
+    fire('pointermove', { pointerId: 1, clientX: 61, clientY: 50, button: 1, buttons: 1 });
+    fire('pointerup', { pointerId: 1, clientX: 61, clientY: 50, button: 0, buttons: 0 });
+    expect(clicks).toEqual([{ x: 61, y: 50 }]);
+    expect(cmds).toEqual([]);
+  });
+
+  it('左鍵拖曳中按住中鍵拖一段（chorded）→ 不算單擊、也不平移（那個指標正在抓果凍）', () => {
+    const { cmds, clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, button: 0, buttons: 1 });
+    fire('pointermove', { pointerId: 1, clientX: 50, clientY: 50, button: 1, buttons: 5 });
+    fire('pointermove', { pointerId: 1, clientX: 90, clientY: 50, buttons: 5 });
+    fire('pointermove', { pointerId: 1, clientX: 90, clientY: 50, button: 1, buttons: 1 });
+    fire('pointerup', { pointerId: 1, clientX: 90, clientY: 50, button: 0, buttons: 0 });
+    expect(clicks).toEqual([]);
+    expect(cmds).toEqual([]);
+  });
+
+  it('左鍵點放 → 不是中鍵單擊', () => {
+    const { clicks } = setup();
+    fire('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, button: 0, buttons: 1 });
+    fire('pointerup', { pointerId: 1, clientX: 50, clientY: 50, button: 0, buttons: 0 });
+    expect(clicks).toEqual([]);
+  });
+
+  it('沒接 onMiddleClick → 中鍵點放什麼都不做、不爆炸', () => {
+    const cmds: CameraCommand[] = [];
+    new CameraInput(el, {
+      screenToWorld: (x, y) => ({ x, y }),
+      hitTest: () => true,
+      emit: (c) => cmds.push(c),
+    });
+    fire('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, button: 1, buttons: 4 });
+    fire('pointerup', { pointerId: 1, clientX: 50, clientY: 50, button: 1, buttons: 0 });
     expect(cmds).toEqual([]);
   });
 });

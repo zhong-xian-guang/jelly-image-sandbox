@@ -33,7 +33,10 @@ import {
   type EraseParams,
   type HandfulParams,
   type FanParams,
-  type ToolRadius,
+  type ModalToolId,
+  type ModeValue,
+  type ToolMode,
+  type ToolModeOf,
   type SprayParams,
   type ToolId,
   ToolRouter,
@@ -118,9 +121,37 @@ export class PointerInput {
     this.tracker.setHandfulParams(params);
   }
 
-  /** 轉發給 `ToolRouter.adjustActiveRadius`（issue #114）——按住右鍵＋滾輪調目前工具的半徑。 */
-  adjustActiveRadius(steps: number): ToolRadius | null {
-    return this.tracker.adjustActiveRadius(steps);
+  /**
+   * 轉發給 `ToolRouter.adjustActiveValue`（issue #114 的調半徑，issue #122 推廣）——按住
+   * 右鍵＋滾輪調目前模式的數值。
+   */
+  adjustActiveValue(steps: number): ModeValue | null {
+    return this.tracker.adjustActiveValue(steps);
+  }
+
+  /** 目前模式的數值（游標標籤用，issue #122）。 */
+  get activeValue(): ModeValue | null {
+    return this.tracker.activeValue;
+  }
+
+  /** 轉發給 `ToolRouter` 的模式介面（issue #122）——參數卡模式鈕、中鍵單擊、游標標籤。 */
+  modeOf<T extends ModalToolId>(tool: T): ToolModeOf<T>;
+  modeOf(tool: ToolId): ToolMode | null;
+  modeOf(tool: ToolId): ToolMode | null {
+    return this.tracker.modeOf(tool);
+  }
+
+  setMode<T extends ModalToolId>(tool: T, mode: ToolModeOf<T>): void {
+    this.tracker.setMode(tool, mode);
+  }
+
+  cycleMode(): ToolMode | null {
+    return this.tracker.cycleMode();
+  }
+
+  /** 已定義的編隊形狀（issue #122：游標標籤要知道「尚未設定形狀」）。 */
+  get formationShape(): readonly Point[] | null {
+    return this.tracker.formationShape;
   }
 
   /** 轉發給 `ToolRouter`（issue #68）——面板「開始設定形狀」／「完成設定」按鈕呼叫。 */

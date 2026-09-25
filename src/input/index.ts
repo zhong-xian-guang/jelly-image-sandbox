@@ -17,6 +17,11 @@ export {
   ERASE_RADIUS_RANGE,
   HANDFUL_RADIUS_RANGE,
   CLICK_TOOL_IDS,
+  TOOL_IDS,
+  TOOL_MODES,
+  MODE_VALUE_RANGES,
+  isModalTool,
+  modesOf,
 } from './ToolRouter';
 export type {
   ToolId,
@@ -26,8 +31,12 @@ export type {
   SprayParams,
   EraseParams,
   HandfulParams,
-  RadiusToolId,
-  ToolRadius,
+  ModalToolId,
+  ToolMode,
+  ToolModeOf,
+  GrabMode,
+  ModeValueKey,
+  ModeValue,
 } from './ToolRouter';
 export { PointerInput } from './PointerInput';
 export type { PointerInputOptions } from './PointerInput';
