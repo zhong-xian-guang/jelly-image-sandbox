@@ -225,6 +225,7 @@ import { clampFanIconRadiusPx, FanOverlay } from './FanOverlay';
 import { FileImportInput } from './FileImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
 import { FormationOverlay, type FormationOverlayGroup } from './FormationOverlay';
+import { HandfulRanges, type HandfulRangeCircle } from './HandfulRanges';
 import { DEFAULT_MESH_DENSITY, halveMeshDensity, MESH_DENSITY_RANGE } from './meshDensity';
 import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
@@ -391,11 +392,12 @@ export class JellySandbox {
    */
   private readonly brushCursor: BrushCursor;
   /**
-   * 大把抓取的範圍圈（issue #113）——幾何沿用筆刷圓圈（另一顆 `BrushCursor`、自己的
-   * 顏色），但它是**提示**：有自己的顯示開關、受「播放時隱藏提示」壓下（見
-   * `applyHandfulRangeVisibility`），所以不跟 Pin 工具共用 `brushCursor`。
+   * 大把抓取的範圍圈（issue #113；issue #135 起可多顆：編隊每點大把每個點一顆）——幾何
+   * 沿用筆刷圓圈（`BrushCursor`、自己的顏色），但它是**提示**：有自己的顯示開關、受
+   * 「播放時隱藏提示」壓下（見 `applyHandfulRangeVisibility`），所以不跟 Pin 工具共用
+   * `brushCursor`。每幀畫哪幾顆見 `handfulRangeCircles`。
    */
-  private readonly handfulRange: BrushCursor;
+  private readonly handfulRange: HandfulRanges;
   /**
    * 指標在畫布上的懸停位置（issue #79 / V2 T3-8）——`PointerInput` 只追按下之後
    * 的移動，「按下去之前先讓使用者看到這一下會做什麼」的兩個預覽（筆刷圓圈、
@@ -663,6 +665,7 @@ export class JellySandbox {
         spraySpacing: this.spraySpacing,
         handfulRadius: this.handfulRadius,
         showHandfulRange: this.hintIntent.handfulRange,
+        formationPerPointHandful: this.input.perPointHandful,
         hideHintsDuringPlayback: this.hideHintsDuringPlayback,
         importSize: this.importSize,
         meshDensity: this.meshDensity,
@@ -699,6 +702,9 @@ export class JellySandbox {
       onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
       onHandfulRadiusChange: (radius) => this.setHandfulRadius(radius),
       onShowHandfulRangeChange: (visible) => this.setHintVisible('handfulRange', visible),
+      // 每點大把（issue #135）：只影響下一次按下；範圍圈與游標標籤每幀自己重算。
+      onFormationPerPointHandfulChange: (enabled) =>
+        this.input.setFormationParams({ perPointHandful: enabled }),
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onImportSizeChange: (size) => this.setImportSize(size),
       onMeshDensityChange: (density) => this.setMeshDensity(density),
@@ -745,8 +751,7 @@ export class JellySandbox {
     root.appendChild(this.formationOverlay.element);
     this.brushCursor = new BrushCursor();
     root.appendChild(this.brushCursor.element);
-    this.handfulRange = new BrushCursor();
-    this.handfulRange.setVariant('handful');
+    this.handfulRange = new HandfulRanges();
     root.appendChild(this.handfulRange.element);
     this.canvasHover = new CanvasHover(root, {
       isCanvas: (target) => target === this.renderer.canvas,
@@ -1416,7 +1421,9 @@ export class JellySandbox {
    */
   private setToolMode(tool: ModalToolId, mode: ToolMode): void {
     this.input.setMode(tool, mode);
-    this.controlPanel.setToolMode(tool, mode);
+    // 定義編隊形狀途中抓取工具鎖在編隊（issue #135，見 `ToolRouter.writeMode`）：模式鈕
+    // 按了也切不走，面板高亮照實際的模式回填。
+    this.controlPanel.setToolMode(tool, this.input.modeOf(tool));
     this.applyToolVisuals();
   }
 
@@ -1478,11 +1485,12 @@ export class JellySandbox {
   }
 
   /**
-   * 大把抓取範圍圈（issue #113）顯示與否＝抓取工具的大把模式 且 這層提示實際上可見
-   * （使用者開著、沒被播放壓下）。「切工具」「切模式」與「提示可見性變了」都呼叫這裡。
+   * 大把抓取範圍圈（issue #113）整層顯示與否＝這層提示實際上可見（使用者開著、沒被播放
+   * 壓下）。「切工具」「切模式」與「提示可見性變了」都呼叫這裡；目前模式該畫哪幾顆
+   * （大把模式一顆、編隊每點大把每個點一顆，issue #135）由 `handfulRangeCircles` 每幀決定。
    */
   private applyHandfulRangeVisibility(): void {
-    this.handfulRange.setActive(this.isGrabMode('handful') && this.effectiveHints().handfulRange);
+    this.handfulRange.setVisible(this.effectiveHints().handfulRange);
   }
 
   /**
@@ -1544,7 +1552,7 @@ export class JellySandbox {
    * 「調目前模式的數值」）：目前模式有數值就由 `ToolRouter` 增減並夾在範圍內，新值走跟
    * 拉霸同一條路（`setXRadius`：沙盒狀態＝圓圈大小 + `ToolRouter`；電風扇四個參數走
    * `setFanX`，issue #125：同時即時套用到場上的風扇、錄製中照樣錄進 Track），再灌回面板拉霸。
-   * 回傳 `false`（沒有數值，例如單點、編隊模式）時相機照舊縮放。
+   * 回傳 `false`（沒有數值，例如單點、沒開每點大把的編隊模式）時相機照舊縮放。
    */
   private adjustModeValue(steps: number): boolean {
     const adjusted = this.input.adjustActiveValue(steps);
@@ -2449,11 +2457,48 @@ export class JellySandbox {
     if (brush) {
       this.brushCursor.setRadiusPx(brush.radius * this.cameraState.transform.scale);
     }
-    // 大把抓取範圍圈（issue #113）：同一套幾何；拖曳中 `canvasHover` 照樣更新，圈跟著游標。
-    if (this.isGrabMode('handful')) {
-      this.handfulRange.setPosition(this.canvasHover.point);
-      this.handfulRange.setRadiusPx(this.handfulRadius * this.cameraState.transform.scale);
+    this.handfulRange.update(this.handfulRangeCircles());
+  }
+
+  /**
+   * 這一幀的大把抓取範圍圈（issue #113；issue #135 加上編隊的每點大把）：
+   *
+   * - **大把模式**：一顆，在游標處；拖曳中 `canvasHover` 照樣更新，圈跟著游標。
+   * - **編隊拖曳中**：每個這一抓真的抓到的點各一顆，半徑是按下當下的那個
+   *   （`formationActiveGroups[].handfulRadius`；單點編隊的那一抓不畫）。按下之後才切走
+   *   模式或關掉開關，這一抓仍照畫到放開——跟 `formationOverlayGroups` 同一條規則。
+   * - **編隊＋每點大把、沒有進行中的一抓**：定義形狀中畫在已經點下的每個點上；否則畫在
+   *   游標＋各偏移的位置（跟形狀預覽同一組點）。
+   *
+   * 半徑是世界座標，每幀換算成目前縮放下的螢幕像素。
+   */
+  private handfulRangeCircles(): HandfulRangeCircle[] {
+    const scale = this.cameraState.transform.scale;
+    const canvasSize = this.canvasSize();
+    const circleAt = (p: Point, radius: number): HandfulRangeCircle => ({
+      ...worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y),
+      radiusPx: radius * scale,
+    });
+    const hover = this.canvasHover.point;
+    const active = this.input.formationActiveGroups;
+    const circles: HandfulRangeCircle[] = [];
+    for (const group of active) {
+      const radius = group.handfulRadius;
+      if (radius !== null) for (const p of group.points) circles.push(circleAt(p, radius));
     }
+    if (this.isGrabMode('handful')) {
+      if (hover) circles.push({ x: hover.x, y: hover.y, radiusPx: this.handfulRadius * scale });
+    } else if (this.isGrabMode('formation') && this.input.perPointHandful && active.length === 0) {
+      const points = this.input.isDefiningFormation
+        ? this.input.formationDefinePreview
+        : hover
+          ? this.input.formationPreviewAt(
+              screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y),
+            )
+          : [];
+      for (const p of points) circles.push(circleAt(p, this.handfulRadius));
+    }
+    return circles;
   }
 
   /**
