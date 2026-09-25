@@ -23,7 +23,7 @@ function memoryStorage(initial: Record<string, string> = {}): KeyValueStorage {
   };
 }
 
-/** 依 `<label>` 文字內容找出裡面的 range input——`rangeRow` 產生的每個滑桿都是這個形狀。 */
+/** 依 `<label>` 文字內容找出裡面的 range input——`createRangeSlider` 產生的每個滑桿都是這個形狀。 */
 function findRangeInputByLabel(panel: ControlPanel, labelText: string): HTMLInputElement {
   const label = [...panel.element.querySelectorAll('label')].find((l) =>
     l.textContent?.includes(labelText),

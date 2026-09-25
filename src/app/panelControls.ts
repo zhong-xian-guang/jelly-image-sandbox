@@ -21,10 +21,9 @@ export interface RangeSlider {
   row: HTMLLabelElement;
   input: HTMLInputElement;
   output: HTMLOutputElement;
+  /** 建立時的範圍——`setRangeSliderValue` 格式化數值用。 */
+  range: SliderRange;
 }
-
-/** 每條拉霸旁的 `<output>`——`setRangeSliderValue` 只拿得到 input 時靠這個找。 */
-const outputs = new WeakMap<HTMLInputElement, HTMLOutputElement>();
 
 /**
  * 拉霸旁數值的文字：0–1 的量（`min` 0、`max` 1）顯示成四捨五入的百分比，其他依 `step`
@@ -39,10 +38,6 @@ function decimalPlaces(step: number): number {
   const text = String(step);
   const dot = text.indexOf('.');
   return dot < 0 ? 0 : text.length - dot - 1;
-}
-
-function rangeOf(input: HTMLInputElement): SliderRange {
-  return { min: Number(input.min), max: Number(input.max), step: Number(input.step) };
 }
 
 /**
@@ -69,7 +64,6 @@ export function createRangeSlider(
   const output = document.createElement('output');
   output.className = 'jelly-range-value';
   output.textContent = formatSliderValue(value, range);
-  outputs.set(input, output);
 
   input.addEventListener('input', () => {
     const next = Number(input.value);
@@ -84,19 +78,18 @@ export function createRangeSlider(
   });
 
   row.append(labelText, input, output);
-  return { row, input, output };
+  return { row, input, output, range };
 }
 
 /**
  * 程式碼從外部把值灌回拉霸（載入片段、效能退路、右鍵＋滾輪）：拉霸位置與數值一起
  * 更新、只在真的變了才寫 DOM、不觸發 `input` 事件（所以不會回呼變更）。
  */
-export function setRangeSliderValue(input: HTMLInputElement, value: number): void {
+export function setRangeSliderValue(slider: RangeSlider, value: number): void {
+  const { input, output, range } = slider;
   const text = String(value);
   if (input.value !== text) input.value = text;
-  const output = outputs.get(input);
-  if (!output) return;
-  const shown = formatSliderValue(Number(input.value), rangeOf(input));
+  const shown = formatSliderValue(Number(input.value), range);
   if (output.textContent !== shown) output.textContent = shown;
 }
 

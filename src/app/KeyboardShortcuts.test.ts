@@ -97,6 +97,8 @@ describe('KeyboardShortcuts — 鍵盤快捷鍵（issue #126）', () => {
     ['Meta', { metaKey: true }],
     ['Alt', { altKey: true }],
     ['按鍵連發', { repeat: true }],
+    // 輸入法組字中（例如注音選字時按數字鍵、空白鍵）是在打字，不是快捷鍵（issue #139）
+    ['輸入法組字中', { isComposing: true }],
   ])('%s 時數字鍵與空白鍵都不作用', (_name, init) => {
     playing = true;
     press('3', init);

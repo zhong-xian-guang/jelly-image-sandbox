@@ -21,10 +21,25 @@ export interface CameraTransform {
   scale: number;
 }
 
+/** 畫布四邊各被蓋住多寬（CSS 像素，≥ 0）。 */
+export interface ScreenInsets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
 /** 畫布尺寸（CSS 像素），zoom-to-fit 與正／逆投影用。 */
 export interface CanvasSize {
   width: number;
   height: number;
+  /**
+   * 畫布邊上被介面蓋住的部分（issue #138：底部的播放控制條與匯入提示、展開的側欄）。
+   * 只有 zoom-to-fit（`fitTransform`：自動跟隨、「框住果凍」、起始鏡位）會避開它，把果凍
+   * 塞進剩下的矩形並置中在那裡；正／逆投影、手動縮放照舊以整張畫布為準。省略＝四邊都沒蓋住。
+   * 由 app 層量好傳進來——相機不碰 DOM。
+   */
+  fitInsets?: ScreenInsets;
 }
 
 /**
@@ -93,8 +108,8 @@ export interface CameraState {
  * - `setFollow`：切「鎖定跟隨」——`enabled = false` 即自動跟隨關。
  * - `frame`：「框住果凍」按鈕——一次性緩動 fit 當前 bbox。純粹的一次性動作，
  *   不改 `followEnabled`：鎖定跟隨時 fit 完停在原地，沒鎖定時 fit 完照常繼續
- *   自動跟隨（因為本來就是開的）。不會讓「鎖定跟隨」勾選框背後的狀態跟畫面
- *   對不上。
+ *   自動跟隨（因為本來就是開的）。不會讓畫布上「鎖定跟隨」切換鈕背後的狀態跟
+ *   畫面對不上。
  * - `setState`：絕對指令（issue #36 / V2 T1-4）——把相機瞬間設成 `state`，這一幀
  *   **不做任何平滑**（framing／follow 的 ease 全部略過）。即時輸入層不會產生它；
  *   只有 v2 素材工具的相機軌（Camera Track）用得到：`mergeTracks` 在每條相機軌的

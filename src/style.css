@@ -154,7 +154,7 @@ body {
   display: none;
 }
 
-/** 側欄標題列（issue #128）：名稱＋右側控制鈕（收起側欄；之後的乾淨畫面、「?」也放這裡）。 */
+/** 側欄標題列（issue #128）：名稱＋右側控制鈕（乾淨畫面、「?」、收起側欄）。 */
 .jelly-panel-titlebar {
   display: flex;
   align-items: center;
