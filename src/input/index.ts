@@ -14,6 +14,10 @@ export {
   DEFAULT_HANDFUL_RADIUS,
   PIN_BRUSH_RADIUS_RANGE,
   HANDFUL_RADIUS_RANGE,
+  FAN_WIDTH_RANGE,
+  FAN_STRENGTH_RANGE,
+  FAN_FALLOFF_RANGE,
+  FAN_FREQUENCY_RANGE,
   TOOL_IDS,
   TOOL_MODES,
   MODE_VALUE_RANGES,
@@ -31,6 +35,7 @@ export type {
   ToolModeOf,
   GrabMode,
   PinMode,
+  FanMode,
   ModeValueKey,
   ModeValue,
 } from './ToolRouter';
