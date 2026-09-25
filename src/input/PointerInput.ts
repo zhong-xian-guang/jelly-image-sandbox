@@ -29,7 +29,6 @@
 import type { FanState, InputEvent, PinInfo, Point } from '../sim';
 import type { GestureConfig } from './GestureTracker';
 import {
-  type ClickToolId,
   type HandfulParams,
   type FanParams,
   type ModalToolId,
@@ -50,8 +49,10 @@ export interface PointerInputOptions {
   getFan?: () => FanState | null;
   /** 轉發給 `ToolRouter`（issue #69 / #123）——場上目前的 Pin，供撒 Pin 間距與拔模式用。 */
   listPins?: () => readonly PinInfo[];
-  /** 轉發給 `ToolRouter`（issue #97）——「點一下」工具（生成／移除 Jelly）完成一次點擊。 */
-  onClickTool?: (tool: ClickToolId, world: Point) => void;
+  /** 轉發給 `ToolRouter`（issue #97 / #124）——Jelly 工具左鍵點一下（生成）。 */
+  onJellyClick?: (world: Point) => void;
+  /** 轉發給 `ToolRouter`（issue #124）——Jelly 工具右鍵單擊點中某塊 Jelly（開選單）。 */
+  onJellyContextMenu?: (world: Point, screen: Point) => void;
   config?: Partial<GestureConfig>;
   /** 時鐘來源（測試可注入）。預設 `performance.now`。 */
   now?: () => number;
@@ -74,7 +75,8 @@ export class PointerInput {
       hitTest: opts.hitTest,
       getFan: opts.getFan,
       listPins: opts.listPins,
-      onClickTool: opts.onClickTool,
+      onJellyClick: opts.onJellyClick,
+      onJellyContextMenu: opts.onJellyContextMenu,
       config: opts.config,
     });
 
@@ -141,6 +143,14 @@ export class PointerInput {
 
   cycleMode(): ToolMode | null {
     return this.tracker.cycleMode();
+  }
+
+  /**
+   * 轉發給 `ToolRouter.rightClick`（issue #124）——畫布上的右鍵單擊（`CameraInput` 判定）
+   * 交給目前工具。
+   */
+  rightClick(world: Point, screenX: number, screenY: number): void {
+    this.tracker.rightClick(world, screenX, screenY);
   }
 
   /** 已定義的編隊形狀（issue #122：游標標籤要知道「尚未設定形狀」）。 */

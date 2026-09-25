@@ -14,7 +14,6 @@ export {
   DEFAULT_HANDFUL_RADIUS,
   PIN_BRUSH_RADIUS_RANGE,
   HANDFUL_RADIUS_RANGE,
-  CLICK_TOOL_IDS,
   TOOL_IDS,
   TOOL_MODES,
   MODE_VALUE_RANGES,
@@ -23,7 +22,6 @@ export {
 } from './ToolRouter';
 export type {
   ToolId,
-  ClickToolId,
   ToolRouterOptions,
   FanParams,
   PinBrushParams,

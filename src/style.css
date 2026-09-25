@@ -798,3 +798,66 @@ body {
 .jelly-cursor-label.is-visible {
   display: block;
 }
+
+/**
+ * 畫布上的右鍵選單（issue #124，見 `ContextMenu`）——Jelly 工具右鍵點中某塊時在游標處開
+ * [重建｜移除]。蓋在控制面板（z-index 10）與提示字之上：開在面板邊緣時不該被面板蓋住。
+ * `[hidden]` 要明寫 `display: none`，不然會被這裡的 `display: flex` 蓋掉。
+ */
+.jelly-context-menu {
+  position: absolute;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  background: rgba(20, 20, 20, 0.94);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.jelly-context-menu[hidden] {
+  display: none;
+}
+
+.jelly-context-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jelly-context-menu-item:hover:not(:disabled) {
+  background: rgba(90, 200, 255, 0.28);
+}
+
+.jelly-context-menu-item:disabled {
+  cursor: not-allowed;
+}
+
+.jelly-context-menu-item:disabled .jelly-context-menu-label {
+  opacity: 0.4;
+}
+
+.jelly-context-menu-reason {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+}
+
+/** Jelly 工具參數卡的一行操作說明（issue #124）。 */
+.jelly-tool-help {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.75);
+}
