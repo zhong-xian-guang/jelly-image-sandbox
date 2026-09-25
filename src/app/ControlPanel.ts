@@ -37,6 +37,13 @@
  * 錄好的那條。`setPlaybackControlsEnabled(false)` 也會一併鎖住這兩顆鈕：Track
  * 重播跟 Demo 播放共用同一個 `DemoRunner`，播放中不能再錄一次或重疊播放。
  *
+ * **畫布上的控制**（issue #129 / V4 U2；spec #127「播放控制條」「相機按鈕」）：錄製、播放、
+ * 暫停／繼續、停止／重設與時間讀數是畫布底部中央的 `playbackBar`；「鎖定跟隨」「框住果凍」
+ * 與縮放倍率讀數是畫布右下角的 `cameraControls`（DOM 見 `./CanvasControls`）。兩者由面板
+ * 建出、但不在側欄裡，`JellySandbox` 把它們掛到畫布容器上；可用狀態照舊在
+ * `updateTrackControlsState` 一處算，對外的 `setRecordingActive`／`setPlaybackActive`／
+ * `setPaused`／`setPlaybackTime`／`setFollowLocked` 名稱不變。
+ *
  * **分區與收起**（issue #128 / V4 U1；spec #127「側欄」）：最上方是側欄標題列（「收起側欄」
  * 鈕；之後的乾淨畫面、「?」也放這裡，見 `titleBarActions`），底下工具列＋參數卡常駐，再往下
  * 是七個可收合的分區（`PANEL_SECTION_IDS`：匯入、片段、物理、檢視、Demo、錄製、開發者），
@@ -75,6 +82,7 @@ import {
   type PanelLayout,
   type PanelSectionId,
 } from './panelLayout';
+import { CameraControls, PlaybackBar } from './CanvasControls';
 import {
   confirmOnSecondClick,
   createRangeSlider,
@@ -447,8 +455,19 @@ export class ControlPanel {
   private readonly storage: KeyValueStorage | null;
   /** 播放中鎖住，避免疊加播放兩個 Demo（issue #15）——見 `setPlaybackControlsEnabled`。 */
   private readonly demoButtons: HTMLButtonElement[] = [];
-  private readonly recordButton: HTMLButtonElement;
-  private readonly playAllButton: HTMLButtonElement;
+  /**
+   * 畫布底部中央的播放控制條（issue #129）——[● 錄製] [▶ 播放] [⏸ 暫停／繼續] [■ 停止／重設]
+   * ＋時間讀數。不在側欄裡：`JellySandbox` 把它掛到畫布容器上；可用狀態仍由這裡的
+   * `updateTrackControlsState` 統一算（見 `./CanvasControls`）。
+   */
+  readonly playbackBar: HTMLElement;
+  /**
+   * 畫布右下角的相機按鈕（issue #129）——「鎖定跟隨」切換鈕、「框住果凍」、縮放倍率讀數。
+   * 同上，由 `JellySandbox` 掛到畫布容器上。
+   */
+  readonly cameraControls: HTMLElement;
+  private readonly bar: PlaybackBar;
+  private readonly camera: CameraControls;
   private readonly recordTargetSelect: HTMLSelectElement;
   /**
    * 「片段初始 Pin：N 個 ｜ 設為目前 Pin ｜ 清除」列（issue #39 / ADR-0007 追記）
@@ -470,19 +489,6 @@ export class ControlPanel {
   private readonly toolCards = new Map<ToolId, HTMLElement>();
   /** 各有模式工具的模式鈕（issue #122）——`setToolMode` 切高亮。 */
   private readonly modeButtons = new Map<ModalToolId, Map<ToolMode, HTMLButtonElement>>();
-  /**
-   * 「鎖定跟隨」勾選框（issue #36 追加把手）——`setFollowLocked` 讓 `JellySandbox`
-   * 每幀把它同步到相機實際的 `followEnabled`，這樣相機軌播放（`setState` 硬切、
-   * 錄進去的 `setFollow`）或 `playAll` 重設鏡頭改動了跟隨狀態時，勾選框不會跟
-   * 實際狀態脫鉤。
-   */
-  private readonly followLockCheckbox: HTMLInputElement;
-  /** 「⏸ 暫停／▶ 繼續」鈕 + 「目前 X.XX 秒」讀出（issue #34）——同一列，只在播放中顯示。 */
-  private readonly playbackStatusRow: HTMLElement;
-  private readonly pauseButton: HTMLButtonElement;
-  private readonly playbackTimeEl: HTMLElement;
-  /** `setPlaybackTime` 比對用；避免秒數字串沒變時每幀重寫 DOM（同 `lastPerfText`）。 */
-  private lastPlaybackText: string | null = null;
   /**
    * Track 清單容器（issue #33；issue #43 改成**依群組分區**）——每個群組一段
    * `.jelly-group-section`：群組標頭列（開關／名稱／獨奏／刪除）+ 該群組的成員
@@ -556,8 +562,20 @@ export class ControlPanel {
 
     this.perfStatus = this.perfStatusRow();
 
-    const followLock = this.followLockRow(opts.initial.followLocked, opts.onFollowLockChange);
-    this.followLockCheckbox = followLock.checkbox;
+    // 畫布上的播放控制條與相機按鈕（issue #129）——不進任何分區。
+    this.bar = new PlaybackBar({
+      onToggleRecording: opts.onToggleRecording,
+      onPlayAll: opts.onPlayAll,
+      onTogglePause: opts.onTogglePause,
+      onReset: opts.onReset,
+    });
+    this.playbackBar = this.bar.element;
+    this.camera = new CameraControls({
+      followLocked: opts.initial.followLocked,
+      onFollowLockChange: opts.onFollowLockChange,
+      onFrameJelly: opts.onFrameJelly,
+    });
+    this.cameraControls = this.camera.element;
 
     const pinRows = this.pinRows(opts.initial.showPins, opts.onClearPins, opts.onShowPinsChange);
 
@@ -744,10 +762,6 @@ export class ControlPanel {
 
     const target = this.recordTargetRow(opts.initial.recordTarget, opts.onRecordTargetChange);
     this.recordTargetSelect = target.select;
-    const track = this.trackRow(opts.onToggleRecording, opts.onPlayAll);
-    this.recordButton = track.recordButton;
-    this.playAllButton = track.playAllButton;
-
     const setupPins = this.setupPinsRow(opts.onSnapshotSetupPins, opts.onClearSetupPins);
     this.setupPinsCountEl = setupPins.countEl;
     this.setupPinsSnapshotButton = setupPins.snapshotButton;
@@ -758,11 +772,6 @@ export class ControlPanel {
     this.groupedTracksEl.className = 'jelly-grouped-tracks';
     const addGroup = this.addGroupRow(() => this.onAddGroup());
     this.addGroupButton = addGroup.button;
-
-    const playback = this.playbackStatusRowEl(opts.onTogglePause);
-    this.playbackStatusRow = playback.row;
-    this.pauseButton = playback.pauseButton;
-    this.playbackTimeEl = playback.timeEl;
 
     // 各分區內容（issue #128；spec #127「側欄」的表格）。
     const sectionRows: Record<PanelSectionId, HTMLElement[]> = {
@@ -789,21 +798,10 @@ export class ControlPanel {
           opts.initial.showCursorLabel,
           opts.onShowCursorLabelChange,
         ),
-        // 相機兩顆暫放檢視區，#129 會搬到畫布右下角。
-        followLock.row,
-        this.buttonRow('框住果凍', opts.onFrameJelly),
       ],
       demo: opts.demos.map((demo) => this.demoButtonRow(demo.label, () => opts.onRunDemo(demo.id))),
-      // 錄製、播放、暫停、停止／重設這張票先留在錄製區，#129 才搬到畫布上的播放控制條。
-      record: [
-        target.row,
-        track.row,
-        setupPins.row,
-        this.playbackStatusRow,
-        this.groupedTracksEl,
-        addGroup.row,
-        this.buttonRow('停止／重設', opts.onReset),
-      ],
+      // 錄製、播放、暫停、停止／重設在畫布上的播放控制條（issue #129），這裡只留設定與清單。
+      record: [target.row, setupPins.row, this.groupedTracksEl, addGroup.row],
       dev: [
         this.perfStatus,
         this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
@@ -958,8 +956,7 @@ export class ControlPanel {
    */
   setRecordingActive(active: boolean): void {
     this.recording = active;
-    this.recordButton.classList.toggle('jelly-recording-active', active);
-    this.recordButton.textContent = active ? '■ 停止錄製' : '● 開始錄製 Track';
+    this.bar.setRecording(active);
     this.updateTrackControlsState();
   }
 
@@ -1049,7 +1046,7 @@ export class ControlPanel {
   private updateTrackControlsState(): void {
     const busy = this.playbackLocked || this.recording;
     // 錄製中「開始錄製」要保持可按（它此時是「停止錄製」）；只有播放中才鎖它。
-    this.recordButton.disabled = this.playbackLocked;
+    this.bar.setEnabled('record', !this.playbackLocked);
     this.recordTargetSelect.disabled = busy;
     // 片段初始 Pin 的兩顆鈕比照 Track 清單編輯：錄製中／播放中鎖住（issue #39）。
     this.setupPinsSnapshotButton.disabled = busy;
@@ -1066,7 +1063,7 @@ export class ControlPanel {
     // 工具列按鈕永遠可按（issue #124）：Jelly 工具的播放中／錄製中限制改在畫布上的右鍵
     // 選單各項變灰（`ContextMenu`），生成則由 `JellySandbox` 用禁止游標＋提示擋。
     // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
-    this.playAllButton.disabled = busy || this.trackCount === 0 || this.playableTrackCount === 0;
+    this.bar.setEnabled('play', !busy && this.trackCount > 0 && this.playableTrackCount > 0);
     this.addGroupButton.disabled = busy;
     // 分區清單裡的群組標頭控制項 + Track 卡片欄位 + `群組 ▾` 一起鎖住（issue #43）。
     for (const el of this.groupedTracksEl.querySelectorAll('input, button, select')) {
@@ -1076,17 +1073,11 @@ export class ControlPanel {
 
   /**
    * 播放中／未播放的切換（issue #34）——`JellySandbox` 在 Demo／Track 播放開始
-   * 與結束時各呼叫一次。播放中「⏸ 暫停／▶ 繼續」鈕與「目前 X.XX 秒」讀出才
-   * 出現；結束時整列藏起來（「沒有在播放時暫停鈕隱藏」的驗收條件），並把讀出
-   * 歸零、暫停鈕文字重設回「⏸ 暫停」。
+   * 與結束時各呼叫一次。issue #129 起控制條常駐：播放中「⏸ 暫停／▶ 繼續」鈕才可按，
+   * 開始與結束時都把時間讀數歸零、暫停鈕文字重設回「⏸ 暫停」。
    */
   setPlaybackActive(active: boolean): void {
-    this.playbackStatusRow.hidden = !active;
-    if (active) {
-      this.setPaused(false);
-      this.lastPlaybackText = null;
-      this.setPlaybackTime(0);
-    }
+    this.bar.setPlaying(active);
   }
 
   /**
@@ -1095,10 +1086,7 @@ export class ControlPanel {
    * 秒數字串真的變了才寫 DOM（同 `setPerfStatus`）。
    */
   setPlaybackTime(seconds: number): void {
-    const text = `目前 ${formatSeconds(seconds)} 秒`;
-    if (text === this.lastPlaybackText) return;
-    this.lastPlaybackText = text;
-    this.playbackTimeEl.textContent = text;
+    this.bar.setTime(seconds);
   }
 
   /**
@@ -1106,18 +1094,25 @@ export class ControlPanel {
    * 時呼叫；暫停中按鈕變成「▶ 繼續」並加上 `.jelly-paused-active` 提示色。
    */
   setPaused(paused: boolean): void {
-    this.pauseButton.textContent = paused ? '▶ 繼續' : '⏸ 暫停';
-    this.pauseButton.classList.toggle('jelly-paused-active', paused);
+    this.bar.setPaused(paused);
   }
 
   /**
-   * `JellySandbox` 每幀同步一次「鎖定跟隨」勾選框到相機實際的鎖定狀態（issue #36）
-   * ——相機軌播放（`setState` 硬切、錄進去的 `setFollow`）或 `playAll` 重設鏡頭會
-   * 在使用者沒點勾選框的情況下改動 `followEnabled`，同步後勾選框不會脫鉤。值沒變
-   * 就不寫 DOM。
+   * `JellySandbox` 每幀同步一次畫布右下角的「鎖定跟隨」切換鈕到相機實際的鎖定狀態
+   * （issue #36；issue #129 從側欄勾選框搬成切換鈕）——相機軌播放（`setState` 硬切、錄進去
+   * 的 `setFollow`）或 `playAll` 重設鏡頭會在使用者沒按鈕的情況下改動 `followEnabled`，
+   * 同步後不會脫鉤。值沒變就不寫 DOM、不回呼。
    */
   setFollowLocked(locked: boolean): void {
-    if (this.followLockCheckbox.checked !== locked) this.followLockCheckbox.checked = locked;
+    this.camera.setFollowLocked(locked);
+  }
+
+  /**
+   * `JellySandbox` 每幀同步一次畫布右下角的縮放倍率讀數（issue #129）——相對 zoom-to-fit
+   * （「框住果凍」／自動跟隨的錨點）的倍率，例如 1.5 顯示成「×1.5」。文字沒變不寫 DOM。
+   */
+  setZoomFactor(factor: number): void {
+    this.camera.setZoomFactor(factor);
   }
 
   /**
@@ -1202,6 +1197,8 @@ export class ControlPanel {
 
   destroy(): void {
     this.element.remove();
+    this.playbackBar.remove();
+    this.cameraControls.remove();
   }
 
   /**
@@ -1448,26 +1445,6 @@ export class ControlPanel {
     return row;
   }
 
-  /**
-   * 「鎖定跟隨」列（issue #36）——跟 `checkboxRow` 同構，但回傳勾選框本身，讓
-   * `setFollowLocked` 能把它同步到相機實際狀態（相機軌播放會改 `followEnabled`）。
-   */
-  private followLockRow(
-    locked: boolean,
-    onChange: (locked: boolean) => void,
-  ): { row: HTMLElement; checkbox: HTMLInputElement } {
-    const row = document.createElement('label');
-    row.className = 'jelly-control-row';
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = locked;
-    checkbox.addEventListener('change', () => onChange(checkbox.checked));
-
-    row.append(checkbox, '鎖定跟隨');
-    return { row, checkbox };
-  }
-
   /** 唯讀 debug 讀出列，文字由 `setPerfStatus` 填入（建構時先放預設值）。 */
   private perfStatusRow(): HTMLElement {
     const row = document.createElement('div');
@@ -1575,33 +1552,6 @@ export class ControlPanel {
   }
 
   /**
-   * 「開始錄製／停止錄製」切換鈕 + 「▶ 播放全部」按鈕（issue #29 / issue #33）。
-   * 回傳個別按鈕讓建構子能直接賦值給 `readonly` 欄位（明確賦值檢查要求賦值發生
-   * 在建構子本體）。可用狀態一律交給 `updateTrackControlsState` 算，這裡不預設。
-   */
-  private trackRow(
-    onToggleRecording: () => void,
-    onPlayAll: () => void,
-  ): { row: HTMLElement; recordButton: HTMLButtonElement; playAllButton: HTMLButtonElement } {
-    const row = document.createElement('div');
-    row.className = 'jelly-control-row';
-
-    const recordButton = document.createElement('button');
-    recordButton.type = 'button';
-    recordButton.textContent = '● 開始錄製 Track';
-    recordButton.addEventListener('click', onToggleRecording);
-
-    const playAllButton = document.createElement('button');
-    playAllButton.type = 'button';
-    // issue #43：改播「開啟中群組成員聯集」，不一定是「全部」，鈕名收斂成「▶ 播放」。
-    playAllButton.textContent = '▶ 播放';
-    playAllButton.addEventListener('click', onPlayAll);
-
-    row.append(recordButton, playAllButton);
-    return { row, recordButton, playAllButton };
-  }
-
-  /**
    * 「片段初始 Pin：N 個 ｜ 設為目前 Pin ｜ 清除」列（issue #39 / ADR-0007 追記）。
    * 「設為目前 Pin」把畫面上所有 Pin 拍成片段初始快照（`播放全部` 於 step 0 還原）；
    * 「清除」清空快照。可用狀態一律交給 `updateTrackControlsState`（錄製中／播放中鎖住）。
@@ -1637,33 +1587,6 @@ export class ControlPanel {
 
     row.append(countEl, snapshotButton, clearButton);
     return { row, countEl, snapshotButton, clearButton };
-  }
-
-  /**
-   * 「⏸ 暫停／▶ 繼續」鈕 + 「目前 X.XX 秒」讀出（issue #34）——同一列，建構時
-   * 先 `hidden`，由 `setPlaybackActive` 在播放開始／結束時顯示／隱藏。回傳個別
-   * 節點讓建構子直接賦值給 `readonly` 欄位。
-   */
-  private playbackStatusRowEl(onTogglePause: () => void): {
-    row: HTMLElement;
-    pauseButton: HTMLButtonElement;
-    timeEl: HTMLElement;
-  } {
-    const row = document.createElement('div');
-    row.className = 'jelly-control-row jelly-playback-status';
-    row.hidden = true;
-
-    const pauseButton = document.createElement('button');
-    pauseButton.type = 'button';
-    pauseButton.textContent = '⏸ 暫停';
-    pauseButton.addEventListener('click', onTogglePause);
-
-    const timeEl = document.createElement('span');
-    timeEl.className = 'jelly-playback-time';
-    timeEl.textContent = '目前 0.00 秒';
-
-    row.append(pauseButton, timeEl);
-    return { row, pauseButton, timeEl };
   }
 
   /**
