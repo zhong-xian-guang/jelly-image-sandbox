@@ -31,9 +31,9 @@
  * 「Demo」按鈕（issue #15）播放中會被 `JellySandbox` 呼叫 `setPlaybackControlsEnabled(false)`
  * 全部鎖住，理由同上——避免疊加播放兩個 Demo 留下沒人清的殘留 Pin/Grab。
  *
- * 「Track」錄製（issue #29 / V2 T1a）：一顆「開始錄製／停止錄製」切換鈕，錄製中
+ * 「Track」錄製（issue #29 / V2 T1a）：一顆「● 錄製」／「■ 停止錄製」切換鈕，錄製中
  * 文字變色＋脈動（`.jelly-recording-active`，樣式見
- * `style.css`）——低頭一眼就知道現在正在錄。停止後解鎖「播放 Track」按鈕重播剛
+ * `style.css`）——低頭一眼就知道現在正在錄。停止後解鎖「▶ 播放」按鈕重播剛
  * 錄好的那條。`setPlaybackControlsEnabled(false)` 也會一併鎖住這兩顆鈕：Track
  * 重播跟 Demo 播放共用同一個 `DemoRunner`，播放中不能再錄一次或重疊播放。
  *
@@ -414,7 +414,7 @@ export interface ControlPanelOptions {
   onWireframeChange: (visible: boolean) => void;
   /** 「錄製目標」選擇器變更（issue #33）——只錄動作／只錄運鏡／兩者同時。 */
   onRecordTargetChange: (target: RecordTarget) => void;
-  /** 「開始錄製／停止錄製」切換鈕（issue #29）。 */
+  /** 「● 錄製」／「■ 停止錄製」切換鈕（issue #29）。 */
   onToggleRecording: () => void;
   /** 「▶ 播放」按鈕（issue #33；issue #43 改播「開啟中群組成員聯集」）——依起始時間疊加重播。 */
   onPlayAll: () => void;
@@ -538,7 +538,7 @@ export class ControlPanel {
    * 維護；為 0 時（所有群組都關／開啟中群組沒有成員）「▶ 播放」變灰。
    */
   private playableTrackCount = 0;
-  /** 正在錄製中——`setRecordingActive` 維護；錄製與播放互斥，錄製中「播放全部」與清單編輯鎖住。 */
+  /** 正在錄製中——`setRecordingActive` 維護；錄製與播放互斥，錄製中「▶ 播放」與清單編輯鎖住。 */
   private recording = false;
   /** Demo／Track 播放中鎖住——`setPlaybackControlsEnabled` 維護。 */
   private playbackLocked = false;
@@ -1259,9 +1259,17 @@ export class ControlPanel {
     for (const tool of TOOL_IDS) {
       const params = toolParams[tool];
       // 每張卡最底下一行固定的滑鼠操作說明（issue #132；文字集中在 `./helpText`）。
+      // 以「｜」切段、每段不斷行，只在「｜」之後換行——窄側欄裡不會把「右鍵＋滾輪」拆開或剩一個
+      // 字孤行（issue #141）。「｜」跟著前一段，不會出現在行首。
       const help = document.createElement('div');
       help.className = 'jelly-control-row jelly-tool-help';
-      help.textContent = TOOL_HELP_LINES[tool];
+      const segments = TOOL_HELP_LINES[tool].split('｜');
+      segments.forEach((segment, i) => {
+        const part = document.createElement('span');
+        part.className = 'jelly-tool-help-part';
+        part.textContent = i < segments.length - 1 ? `${segment}｜` : segment;
+        help.appendChild(part);
+      });
       params.appendChild(help);
       this.toolCards.set(tool, params);
       card.appendChild(params);
@@ -1551,7 +1559,7 @@ export class ControlPanel {
 
   /**
    * 「片段初始 Pin：N 個 ｜ 設為目前 Pin ｜ 清除」列（issue #39 / ADR-0007 追記）。
-   * 「設為目前 Pin」把畫面上所有 Pin 拍成片段初始快照（`播放全部` 於 step 0 還原）；
+   * 「設為目前 Pin」把畫面上所有 Pin 拍成片段初始快照（「▶ 播放」於 step 0 還原）；
    * 「清除」清空快照。可用狀態一律交給 `updateTrackControlsState`（錄製中／播放中鎖住）。
    * 回傳個別節點讓建構子直接賦值給 `readonly` 欄位。
    */
