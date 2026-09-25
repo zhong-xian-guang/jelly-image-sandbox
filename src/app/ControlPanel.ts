@@ -4,12 +4,18 @@
  * 薄的 DOM 接線層（對照 `PointerInput`/`CameraInput`/`DropImportInput`）：建控制
  * 項、聽使用者操作、透過回呼往外送——不知道 `SimCore`/`JellySandbox` 的存在，
  * 邏輯（Softness 曲線、Walled 邊界範圍、Pin 工具轉接）都在各自的純函式模組
- * （`../sim/softness`、`./boundaryGeometry`、`../input/pinToolRouting`），接線在
+ * （`../sim/softness`、`./boundaryGeometry`、`../input/ToolRouter`），接線在
  * `JellySandbox`。
  *
- * 放 Pin 是「目前工具」選擇器裡的「Pin」工具（issue #115；ADR-0015，取代原本的
- * 「Pin 模式」勾選框）。選著它時 `JellySandbox` 會把畫布游標換成十字、把
- * `PinMarkers` 標記切成「可點掉」的視覺（紅色脈動）。
+ * **工具列**（issue #122 / V4 T1；ADR-0016，取代原本「▸ 沙盒工具」收合區塊裡的下拉）：
+ * 側欄最上方每個工具一顆按鈕（圖示＋文字），目前工具高亮；正下方是目前工具的參數卡，
+ * 有模式的工具（抓取、Pin）參數卡最上方是模式切換鈕。面板自己記一份高亮狀態只為了畫——
+ * 真正的狀態在 `ToolRouter`，中鍵單擊輪替後由 `JellySandbox` 呼叫 `setToolMode` 灌回來
+ * （跟 `setSoftness` 同一個「只動 DOM、不回呼」的慣例）。
+ *
+ * 「Pin」工具（issue #115；issue #123 合併撒 Pin、移除 Pin，模式為放／拔）的參數卡是
+ * 模式鈕、Pin 筆刷半徑、撒 Pin 間距。選著它時 `JellySandbox` 會把畫布游標換成十字，
+ * 拔模式下再把 `PinMarkers` 標記切成「可點掉」的視覺（紅色脈動）。
  *
  * 「顯示 Pin」關掉時，所見即所得：畫面上看不到 Pin 標記，「清除所有 Pin」按鈕就
  * 跟著鎖住（`disabled`）——不能對看不見的東西下手。
@@ -38,15 +44,18 @@
  * 不會產生多餘的 reflow（在想省效能的降級路徑上，多餘 DOM 寫入是反效果）。
  */
 
-import type { RadiusToolId, ToolId } from '../input';
+import {
+  modesOf,
+  TOOL_IDS,
+  type ModalToolId,
+  type ModeValueKey,
+  type ToolId,
+  type ToolMode,
+  type ToolModeOf,
+} from '../input';
 import type { BoundaryMode } from '../sim';
+import { MODE_LABELS, TOOL_LABELS } from './toolLabels';
 import type { RecordTarget } from './track';
-
-/**
- * 「目前工具」下拉裡某個選項什麼時候要變灰（issue #97 / #98）——`'none'` 永遠可選、
- * `'playback'` 只在播放中鎖、`'busy'` 錄製中也鎖。見 `lockedToolOptions`。
- */
-type ToolLock = 'none' | 'playback' | 'busy';
 
 /** 一顆 Demo 按鈕要顯示的最小資訊——`ControlPanel` 特意不 import `./demos`，維持跟 `SimCore`/`JellySandbox` 無關的薄接線層，這裡自己開一個形狀就好。 */
 export interface DemoMenuItem {
@@ -119,8 +128,12 @@ export interface GroupListRow {
 }
 
 export interface ControlPanelInitial {
-  /** 「目前工具」選擇器的初始值（issue #65 / V2 T3-1；ADR-0011）。 */
+  /** 工具列目前工具的初始值（issue #65；issue #122 改成工具列）。 */
   activeTool: ToolId;
+  /** 每個有模式的工具目前的模式（issue #122）——參數卡模式鈕的初始高亮。 */
+  toolModes: { [T in ModalToolId]: ToolModeOf<T> };
+  /** 「顯示游標標籤」開關的初始值（issue #122）——見 `onShowCursorLabelChange`。 */
+  showCursorLabel: boolean;
   boundary: BoundaryMode;
   /** Softness 滑桿目前值，0–1（見 `../sim/softness`）。 */
   softness: number;
@@ -148,11 +161,10 @@ export interface ControlPanelInitial {
   fanFrequency: number;
   /** 編隊抓取形狀標記顯示開關的初始值（issue #68）。 */
   showFormationHint: boolean;
-  /** 撒 Pin 兩個滑桿的初始值（issue #69）——見 `../input` 的 `DEFAULT_SPRAY_*`。 */
-  sprayRadius: number;
+  /** Pin 筆刷半徑拉霸的初始值（issue #123）——見 `../input` 的 `DEFAULT_PIN_BRUSH_RADIUS`。 */
+  pinBrushRadius: number;
+  /** 撒 Pin 間距拉霸的初始值（issue #69）——見 `../input` 的 `DEFAULT_SPRAY_SPACING`。 */
   spraySpacing: number;
-  /** 移除 Pin 半徑滑桿的初始值（issue #70）——見 `../input` 的 `DEFAULT_ERASE_RADIUS`。 */
-  eraseRadius: number;
   /** 大把抓取半徑拉霸的初始值（issue #113）——見 `../input` 的 `DEFAULT_HANDFUL_RADIUS`。 */
   handfulRadius: number;
   /** 大把抓取範圍圈（提示）顯示開關的初始值（issue #113）。 */
@@ -182,11 +194,9 @@ export interface ControlPanelOptions {
   fanStrengthRange: RangeSpec;
   fanFalloffRange: RangeSpec;
   fanFrequencyRange: RangeSpec;
-  /** 撒 Pin「範圍半徑」／「最小間距」兩個滑桿各自的範圍（issue #69）。 */
-  sprayRadiusRange: RangeSpec;
+  /** 「Pin 筆刷半徑」（issue #123）／「撒 Pin 間距」（issue #69）兩條拉霸各自的範圍。 */
+  pinBrushRadiusRange: RangeSpec;
   spraySpacingRange: RangeSpec;
-  /** 移除 Pin「範圍半徑」滑桿的範圍（issue #70）。 */
-  eraseRadiusRange: RangeSpec;
   /** 「大把抓取半徑」拉霸的範圍（issue #113）。 */
   handfulRadiusRange: RangeSpec;
   /** 「匯入尺寸」拉霸的範圍（issue #88）。 */
@@ -212,10 +222,20 @@ export interface ControlPanelOptions {
    */
   onLoadClip: () => void;
   /**
-   * 「目前工具」選擇器變更（issue #65 / V2 T3-1；ADR-0011）——切換給 `JellySandbox`
-   * 轉發到 `PointerInput.setActiveTool`。
+   * 工具列按鈕被按（issue #65；issue #122 改成工具列）——切換給 `JellySandbox` 轉發到
+   * `PointerInput.setActiveTool`。
    */
   onToolChange: (tool: ToolId) => void;
+  /**
+   * 參數卡的模式鈕被按（issue #122）——`JellySandbox` 轉發到 `PointerInput.setMode`，
+   * 並同步游標標籤與提示。跟中鍵單擊輪替走同一條路。
+   */
+  onModeChange: (tool: ModalToolId, mode: ToolMode) => void;
+  /**
+   * 「顯示游標標籤」開關（issue #122）——游標標籤不是提示（CONTEXT.md「提示」），不受
+   * 「播放時隱藏提示」影響、也不被播放／錄製鎖住，只聽這一顆。
+   */
+  onShowCursorLabelChange: (visible: boolean) => void;
   /**
    * 「移除風扇」按鈕被按（issue #66）——動作上比照「清除所有 Pin」：一個無座標的
    * `clearFan` 經 `applyInput` 送進去，清掉場上目前的風扇（若有）。**不**跟著
@@ -252,17 +272,12 @@ export interface ControlPanelOptions {
   /** 「顯示編隊抓取提示」開關（issue #68）——同 `onShowFanRangeChange` 的理由，純視覺。 */
   onShowFormationHintChange: (visible: boolean) => void;
   /**
-   * 撒 Pin「範圍半徑」／「最小間距」滑桿變更（issue #69）——比照四個電風扇滑桿，
-   * `ControlPanel` 只負責把新數值原封不動送出去，影響下一次撒點（已經撒出去的
-   * Pin 是既成事實，不會回頭重排）。
+   * 「Pin 筆刷半徑」（issue #123；撒 Pin 與橡皮擦共用）／「撒 Pin 間距」（issue #69）拉霸
+   * 變更——比照四個電風扇滑桿，`ControlPanel` 只負責把新數值原封不動送出去，影響之後的
+   * 撒／擦與畫布上的筆刷圓圈（已經撒出去的 Pin 是既成事實，不會回頭重排）。
    */
-  onSprayRadiusChange: (radius: number) => void;
+  onPinBrushRadiusChange: (radius: number) => void;
   onSpraySpacingChange: (spacing: number) => void;
-  /**
-   * 移除 Pin「範圍半徑」滑桿變更（issue #70）——跟撒 Pin 的半徑是兩個各自獨立的
-   * 值（見 `ToolRouter.setEraseParams`），這裡也就是兩個各自獨立的回呼。
-   */
-  onEraseRadiusChange: (radius: number) => void;
   /**
    * 「大把抓取半徑」拉霸變更（issue #113 / V3 T4-1）——影響下一次按下（已抓住的那一把
    * 不變）與畫布上的範圍圈，兩件事都交給 `JellySandbox`。
@@ -381,16 +396,11 @@ export class ControlPanel {
   private readonly rebuildAllButton: HTMLButtonElement;
   /** 「清空全部」鈕（issue #95）——同上鎖法。 */
   private readonly clearAllButton: HTMLButtonElement;
-  /**
-   * 「目前工具」下拉裡**會被鎖住**的選項，附各自的鎖法（issue #97 / #98）——鎖的是
-   * 選項而不是整個下拉：播放中仍要能切到其他工具。兩種鎖法對應兩種語意：
-   *
-   * - `'playback'`（生成 Jelly／移除 Jelly）：只在播放中變灰。錄製中照常可用，那兩個
-   *   工具在錄製中本來就要錄成 `spawn`／`remove` 事件（ADR-0013）。
-   * - `'busy'`（重建 Jelly）：錄製中也變灰，跟「全部重建」／「清空全部」兩顆鈕同一組
-   *   ——重建只改 Scene、不是 Track 事件，錄製中點下去沒意義。
-   */
-  private readonly lockedToolOptions: { option: HTMLOptionElement; lock: ToolLock }[] = [];
+  /** 工具列按鈕與各工具的參數卡（issue #122）——`setActiveTool` 切高亮與顯示。 */
+  private readonly toolButtons = new Map<ToolId, HTMLButtonElement>();
+  private readonly toolCards = new Map<ToolId, HTMLElement>();
+  /** 各有模式工具的模式鈕（issue #122）——`setToolMode` 切高亮。 */
+  private readonly modeButtons = new Map<ModalToolId, Map<ToolMode, HTMLButtonElement>>();
   /**
    * 「鎖定跟隨」勾選框（issue #36 追加把手）——`setFollowLocked` 讓 `JellySandbox`
    * 每幀把它同步到相機實際的 `followEnabled`，這樣相機軌播放（`setState` 硬切、
@@ -459,8 +469,8 @@ export class ControlPanel {
   /** 「網格密度」拉霸與旁邊的數值——效能退路 `setMeshDensity` 兩個都要更新（issue #89）。 */
   private readonly meshDensityInput: HTMLInputElement;
   private readonly meshDensityOutput: HTMLOutputElement;
-  /** 三條工具半徑拉霸（issue #114）——「右鍵＋滾輪調半徑」經 `setToolRadius` 灌回。 */
-  private readonly radiusInputs: Record<RadiusToolId, HTMLInputElement>;
+  /** 「右鍵＋滾輪」調得到的數值拉霸（issue #114；issue #122 推廣）——經 `setModeValue` 灌回。 */
+  private readonly valueInputs: Record<ModeValueKey, HTMLInputElement>;
 
   constructor(opts: ControlPanelOptions) {
     this.onTrackStartTimeChange = opts.onTrackStartTimeChange;
@@ -563,9 +573,8 @@ export class ControlPanel {
 
     // 電風扇專屬參數（issue #67 事後檢視拆成兩顆顯示開關；「顯示風扇提示」→
     // 「顯示風扇範圍」／「顯示風扇圖示」，見 `ControlPanelInitial.showFanRange`
-    // ／`showFanIcon` 的說明）。這整包只在「目前工具」是電風扇時才需要看到
-    // （見下方 `toolSection`），先組起來、`hidden` 交給 `toolSection` 依目前
-    // 工具切換。
+    // ／`showFanIcon` 的說明）。這整包只在目前工具是電風扇時才需要看到
+    // （見下方 `toolbarSection`），先組起來、`hidden` 依目前工具切換。
     const fanParams = this.toolParams('電風扇', [
       this.checkboxRow('顯示風扇範圍', opts.initial.showFanRange, opts.onShowFanRangeChange),
       this.checkboxRow('顯示風扇圖示', opts.initial.showFanIcon, opts.onShowFanIconChange),
@@ -576,30 +585,20 @@ export class ControlPanel {
       this.buttonRow('移除風扇', opts.onRemoveFan),
     ]);
 
-    // 編隊抓取專屬參數（issue #68）：「顯示提示」+ 一顆依定義狀態換文字的按鈕
-    // （見 `formationDefineRow`），比照 `fanParams` 的收合模式。
-    const formationParams = this.toolParams('編隊抓取', [
-      this.checkboxRow(
-        '顯示編隊抓取提示',
-        opts.initial.showFormationHint,
-        opts.onShowFormationHintChange,
-      ),
-      this.formationDefineRow(opts.onFormationDefineStart, opts.onFormationDefineEnd),
-    ]);
-
-    // 撒 Pin 專屬參數（issue #69）：範圍半徑 + 最小間距兩個滑桿，比照 `fanParams`
-    // 的收合模式。半徑同時決定畫布上那圈筆刷游標的大小（見 `BrushCursor`），
-    // 所以「調半徑」這件事在畫面上是所見即所得，不需要另外的預覽開關。
-    const sprayRadiusRow = this.rangeRow(
-      '撒 Pin 範圍半徑',
-      opts.sprayRadiusRange.min,
-      opts.sprayRadiusRange.max,
-      opts.sprayRadiusRange.step,
-      opts.initial.sprayRadius,
-      opts.onSprayRadiusChange,
+    // Pin 工具的參數卡（issue #123：Pin、撒 Pin、移除 Pin 合成 Pin 工具）——模式鈕、Pin 筆刷
+    // 半徑（撒 Pin 與橡皮擦共用，同時是畫布上那圈筆刷游標的大小，見 `BrushCursor`，所以
+    // 調半徑是所見即所得）、撒 Pin 間距。
+    const pinBrushRadiusRow = this.rangeRow(
+      'Pin 筆刷半徑',
+      opts.pinBrushRadiusRange.min,
+      opts.pinBrushRadiusRange.max,
+      opts.pinBrushRadiusRange.step,
+      opts.initial.pinBrushRadius,
+      opts.onPinBrushRadiusChange,
     );
-    const sprayParams = this.toolParams('撒 Pin', [
-      sprayRadiusRow.row,
+    const pinParams = this.toolParams('Pin', [
+      this.modeRow('pin', opts.initial.toolModes.pin, opts.onModeChange),
+      pinBrushRadiusRow.row,
       this.rangeRow(
         '撒 Pin 間距（越小越密）',
         opts.spraySpacingRange.min,
@@ -610,19 +609,8 @@ export class ControlPanel {
       ).row,
     ]);
 
-    // 移除 Pin 專屬參數（issue #70）：只有橡皮擦半徑一個滑桿。跟撒 Pin 的半徑
-    // 各自獨立，所以是兩個區塊裡的兩條滑桿，而不是共用一條。
-    const eraseRadiusRow = this.rangeRow(
-      '移除 Pin 範圍半徑',
-      opts.eraseRadiusRange.min,
-      opts.eraseRadiusRange.max,
-      opts.eraseRadiusRange.step,
-      opts.initial.eraseRadius,
-      opts.onEraseRadiusChange,
-    );
-    const eraseParams = this.toolParams('移除 Pin', [eraseRadiusRow.row]);
-
-    // 大把抓取專屬參數（issue #113）：範圍圈提示開關 + 半徑拉霸。
+    // 抓取工具的參數卡（issue #122：一般操作／大把抓取／編隊抓取合成抓取工具）——模式鈕、
+    // 大把抓取半徑（issue #113）、兩顆提示開關、編隊形狀的設定按鈕（issue #68）。
     const handfulRadiusRow = this.rangeRow(
       '大把抓取半徑',
       opts.handfulRadiusRange.min,
@@ -631,30 +619,37 @@ export class ControlPanel {
       opts.initial.handfulRadius,
       opts.onHandfulRadiusChange,
     );
-    const handfulParams = this.toolParams('大把抓取', [
+    const grabParams = this.toolParams('抓取', [
+      this.modeRow('grab', opts.initial.toolModes.grab, opts.onModeChange),
+      handfulRadiusRow.row,
       this.checkboxRow(
         '顯示大把抓取範圍',
         opts.initial.showHandfulRange,
         opts.onShowHandfulRangeChange,
       ),
-      handfulRadiusRow.row,
+      this.checkboxRow(
+        '顯示編隊抓取提示',
+        opts.initial.showFormationHint,
+        opts.onShowFormationHintChange,
+      ),
+      this.formationDefineRow(opts.onFormationDefineStart, opts.onFormationDefineEnd),
     ]);
 
-    this.radiusInputs = {
-      spray: sprayRadiusRow.input,
-      erase: eraseRadiusRow.input,
-      handfulGrab: handfulRadiusRow.input,
+    this.valueInputs = {
+      pinBrushRadius: pinBrushRadiusRow.input,
+      handfulRadius: handfulRadiusRow.input,
     };
 
-    const toolSection = this.toolSection(
+    // Jelly 工具的參數卡（issue #124：生成、移除、重建 Jelly 合成 Jelly 工具）——沒有模式也
+    // 沒有參數，只放一行操作說明：移除與重建藏在畫布上的右鍵選單，不寫出來沒人會發現。
+    const jellyHelp = document.createElement('div');
+    jellyHelp.className = 'jelly-control-row jelly-tool-help';
+    jellyHelp.textContent = '左鍵生成；右鍵點果凍：重建／移除';
+    const jellyParams = this.toolParams('Jelly', [jellyHelp]);
+
+    const toolbarSection = this.toolbarSection(
       opts.initial.activeTool,
-      {
-        fan: fanParams,
-        formation: formationParams,
-        spray: sprayParams,
-        erase: eraseParams,
-        handfulGrab: handfulParams,
-      },
+      { grab: grabParams, pin: pinParams, fan: fanParams, jelly: jellyParams },
       opts.onToolChange,
     );
 
@@ -668,14 +663,17 @@ export class ControlPanel {
     this.clearAllButton = clearAll.button;
 
     panel.append(
+      // 工具列＋參數卡在側欄最上方（issue #122；spec #121「側欄」）。
+      toolbarSection,
       this.perfStatus,
       this.buttonRow('匯入圖片…', opts.onImportImage),
       this.buttonRow('儲存片段', opts.onSaveClip),
       this.buttonRow('載入片段…', opts.onLoadClip),
       clearAll.row,
-      toolSection,
       boundary.row,
       this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
+      // 游標標籤（issue #122）是游標回饋、不是提示，開關跟顯示類開關放一起。
+      this.checkboxRow('顯示游標標籤', opts.initial.showCursorLabel, opts.onShowCursorLabelChange),
       // 全域一列（issue #71）：蓋掉的是所有提示，所以刻意放在工具專屬區塊外面、
       // 緊接在「顯示網格」這類視覺開關旁邊，切工具不會讓它消失。
       this.checkboxRow(
@@ -857,10 +855,8 @@ export class ControlPanel {
     this.rebuildAllButton.disabled = busy;
     // 「清空全部」（issue #95）同理：它會清掉正在錄／正在播的片段本身。
     this.clearAllButton.disabled = busy;
-    // 三個 Jelly 工具（issue #97 / #98）各自的鎖法，見 `lockedToolOptions`。
-    for (const { option, lock } of this.lockedToolOptions) {
-      option.disabled = lock === 'busy' ? busy : this.playbackLocked;
-    }
+    // 工具列按鈕永遠可按（issue #124）：Jelly 工具的播放中／錄製中限制改在畫布上的右鍵
+    // 選單各項變灰（`ContextMenu`），生成則由 `JellySandbox` 用禁止游標＋提示擋。
     // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
     this.playAllButton.disabled = busy || this.trackCount === 0 || this.playableTrackCount === 0;
     this.addGroupButton.disabled = busy;
@@ -955,13 +951,38 @@ export class ControlPanel {
   }
 
   /**
-   * 「按住右鍵＋滾輪」調過半徑後把新值灌回對應工具的拉霸（issue #114）。同
-   * `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、不回呼 `onXRadiusChange`。
+   * 「按住右鍵＋滾輪」調過數值後把新值灌回對應的拉霸（issue #114；issue #122 推廣）。
+   * 同 `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、不回呼 `onXChange`。
    */
-  setToolRadius(tool: RadiusToolId, value: number): void {
-    const input = this.radiusInputs[tool];
+  setModeValue(key: ModeValueKey, value: number): void {
+    const input = this.valueInputs[key];
     const text = String(value);
     if (input.value !== text) input.value = text;
+  }
+
+  /**
+   * 目前工具換了、但不是從工具列按的（issue #122；之後 #126 的數字鍵快捷鍵也走這裡）——
+   * 只動高亮與參數卡顯示，不回呼 `onToolChange`。
+   */
+  setActiveTool(tool: ToolId): void {
+    for (const [id, button] of this.toolButtons) {
+      const active = id === tool;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+    for (const [id, card] of this.toolCards) card.hidden = id !== tool;
+  }
+
+  /**
+   * 某個工具的模式換了、但不是從模式鈕按的（issue #122：畫布上中鍵單擊輪替、或
+   * 「開始設定形狀」順手切到編隊）——只動模式鈕高亮，不回呼 `onModeChange`。
+   */
+  setToolMode(tool: ModalToolId, mode: ToolMode): void {
+    for (const [m, button] of this.modeButtons.get(tool) ?? []) {
+      const active = m === mode;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
   }
 
   /**
@@ -980,82 +1001,90 @@ export class ControlPanel {
   }
 
   /**
-   * 「目前工具」下拉（issue #65 / V2 T3-1；ADR-0011）——只涵蓋新增的沙盒工具。
-   * 「一般操作」＝維持既有 Grab/Tap 純手勢，選中它時 `ToolRouter` 原封不動
-   * 委派給既有 `GestureTracker`；「Pin」（issue #115；ADR-0015，取代原本的「Pin 模式」
-   * 勾選框）同一套手勢，只是 `grab` 換成放 Pin／點掉 Pin；「電風扇」（issue #66）之後在畫布上按下拖曳放開
-   * 即放置一個風扇；「編隊抓取」（issue #68）、「撒 Pin」（issue #69）、
-   * 「移除 Pin」（issue #70）同理各自接管畫布手勢。
+   * 工具列＋參數卡（issue #122 / V4 T1；ADR-0016，取代 issue #65 的「目前工具」下拉與
+   * issue #67 的「▸ 沙盒工具」收合區塊）。每個工具一顆按鈕（圖示＋文字，照 `TOOL_IDS`
+   * 的順序），目前工具高亮（`.is-active` + `aria-pressed`）；按鈕下方是參數卡，只顯示
+   * 目前工具那一組（`toolParams`）。
    */
-  private toolRow(
-    initial: ToolId,
+  private toolbarSection(
+    initialTool: ToolId,
+    toolParams: Record<ToolId, HTMLElement>,
     onChange: (tool: ToolId) => void,
-  ): { row: HTMLElement; select: HTMLSelectElement } {
-    const row = document.createElement('label');
-    row.className = 'jelly-control-row';
+  ): HTMLElement {
+    const section = document.createElement('div');
+    section.className = 'jelly-tool-section';
 
-    const select = document.createElement('select');
-    // 第三欄 = 這個選項的鎖法（issue #97 / #98，見 `lockedToolOptions`）。
-    for (const [value, text, lock] of [
-      ['general', '一般操作', 'none'],
-      ['pin', 'Pin', 'none'],
-      ['handfulGrab', '大把抓取', 'none'],
-      ['fan', '電風扇', 'none'],
-      ['formation', '編隊抓取', 'none'],
-      ['spray', '撒 Pin', 'none'],
-      ['erase', '移除 Pin', 'none'],
-      ['spawn', '生成 Jelly', 'playback'],
-      ['removeJelly', '移除 Jelly', 'playback'],
-      ['rebuildJelly', '重建 Jelly', 'busy'],
-    ] as const) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = text;
-      option.selected = value === initial;
-      if (lock !== 'none') this.lockedToolOptions.push({ option, lock });
-      select.appendChild(option);
+    const toolbar = document.createElement('div');
+    toolbar.className = 'jelly-toolbar';
+    toolbar.setAttribute('role', 'toolbar');
+    toolbar.setAttribute('aria-label', '工具');
+    for (const tool of TOOL_IDS) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'jelly-tool-button';
+      button.dataset.tool = tool;
+      const label = TOOL_LABELS[tool];
+      const icon = document.createElement('span');
+      icon.className = 'jelly-tool-button-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = label.icon;
+      const text = document.createElement('span');
+      text.className = 'jelly-tool-button-text';
+      text.textContent = label.text;
+      button.append(icon, text);
+      button.addEventListener('click', () => {
+        this.setActiveTool(tool);
+        onChange(tool);
+      });
+      this.toolButtons.set(tool, button);
+      toolbar.appendChild(button);
     }
-    select.addEventListener('change', () => onChange(select.value as ToolId));
 
-    row.append('目前工具', select);
-    return { row, select };
+    const card = document.createElement('div');
+    card.className = 'jelly-tool-card';
+    for (const tool of TOOL_IDS) {
+      const params = toolParams[tool];
+      this.toolCards.set(tool, params);
+      card.appendChild(params);
+    }
+
+    section.append(toolbar, card);
+    this.setActiveTool(initialTool);
+    return section;
   }
 
   /**
-   * 「沙盒工具」可折疊區塊（issue #67 事後檢視追加；issue #68 把單一 `fanParams`
-   * 參數推廣成「每個非一般操作工具各自一塊」的映射）——「目前工具」選擇器 +
-   * 目前選中工具的專屬參數，包進一個預設收合的 `<details>`。理由：後續還會
-   * 陸續加撒 Pin／移除 Pin 兩個工具，每個都有自己的專屬參數列，攤在面板最上層
-   * 只會越疊越長、越來越擠；收合起來預設只看到一行「▸ 沙盒工具」，需要用某個
-   * 工具時才展開。每個新工具依樣把自己的參數區塊加進 `toolParams`、依「目前
-   * 工具」用 `hidden` 切換顯示／隱藏即可（issue #70 的移除 Pin 就是這樣加的）。
+   * 參數卡最上方的模式切換鈕（issue #122）——一排分段按鈕，目前模式高亮。按下只影響
+   * 下一次按下（進行中的手勢已經在按下時定下，見 `ToolRouter`）；畫布上中鍵單擊輪替後
+   * 由 `setToolMode` 同步回來。
    */
-  private toolSection(
-    initialTool: ToolId,
-    toolParams: Partial<Record<Exclude<ToolId, 'general' | 'pin'>, HTMLElement>>,
-    onChange: (tool: ToolId) => void,
-  ): HTMLDetailsElement {
-    const details = document.createElement('details');
-    details.className = 'jelly-tool-section';
-
-    const summary = document.createElement('summary');
-    summary.textContent = '沙盒工具';
-    details.appendChild(summary);
-
-    const applyVisibility = (tool: ToolId): void => {
-      for (const [key, el] of Object.entries(toolParams)) {
-        if (el) el.hidden = key !== tool;
-      }
-    };
-    applyVisibility(initialTool);
-
-    const tool = this.toolRow(initialTool, (t) => {
-      onChange(t);
-      applyVisibility(t);
-    });
-
-    details.append(tool.row, ...Object.values(toolParams).filter((el): el is HTMLElement => !!el));
-    return details;
+  private modeRow(
+    tool: ModalToolId,
+    initial: ToolMode,
+    onChange: (tool: ModalToolId, mode: ToolMode) => void,
+  ): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'jelly-control-row jelly-mode-row';
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', '模式');
+    row.dataset.tool = tool;
+    const buttons = new Map<ToolMode, HTMLButtonElement>();
+    for (const mode of modesOf(tool)) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'jelly-mode-button';
+      button.dataset.mode = mode;
+      button.textContent = MODE_LABELS[mode];
+      button.addEventListener('click', () => {
+        this.setToolMode(tool, mode);
+        onChange(tool, mode);
+      });
+      buttons.set(mode, button);
+      row.appendChild(button);
+    }
+    this.modeButtons.set(tool, buttons);
+    this.setToolMode(tool, initial);
+    return row;
   }
 
   /**

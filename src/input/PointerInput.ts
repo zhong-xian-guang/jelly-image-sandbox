@@ -29,12 +29,13 @@
 import type { FanState, InputEvent, PinInfo, Point } from '../sim';
 import type { GestureConfig } from './GestureTracker';
 import {
-  type ClickToolId,
-  type EraseParams,
   type HandfulParams,
   type FanParams,
-  type ToolRadius,
-  type SprayParams,
+  type ModalToolId,
+  type ModeValue,
+  type ToolMode,
+  type ToolModeOf,
+  type PinBrushParams,
   type ToolId,
   ToolRouter,
 } from './ToolRouter';
@@ -46,10 +47,12 @@ export interface PointerInputOptions {
   hitTest?: (world: Point) => boolean;
   /** 轉發給 `ToolRouter`（issue #67）——場上目前的電風扇幾何，供拖曳既有風扇的判定用。 */
   getFan?: () => FanState | null;
-  /** 轉發給 `ToolRouter`（issue #69）——場上目前的 Pin，供撒 Pin 的間距判定用。 */
+  /** 轉發給 `ToolRouter`（issue #69 / #123）——場上目前的 Pin，供撒 Pin 間距與拔模式用。 */
   listPins?: () => readonly PinInfo[];
-  /** 轉發給 `ToolRouter`（issue #97）——「點一下」工具（生成／移除 Jelly）完成一次點擊。 */
-  onClickTool?: (tool: ClickToolId, world: Point) => void;
+  /** 轉發給 `ToolRouter`（issue #97 / #124）——Jelly 工具左鍵點一下（生成）。 */
+  onJellyClick?: (world: Point) => void;
+  /** 轉發給 `ToolRouter`（issue #124）——Jelly 工具右鍵單擊點中某塊 Jelly（開選單）。 */
+  onJellyContextMenu?: (world: Point, screen: Point) => void;
   config?: Partial<GestureConfig>;
   /** 時鐘來源（測試可注入）。預設 `performance.now`。 */
   now?: () => number;
@@ -72,7 +75,8 @@ export class PointerInput {
       hitTest: opts.hitTest,
       getFan: opts.getFan,
       listPins: opts.listPins,
-      onClickTool: opts.onClickTool,
+      onJellyClick: opts.onJellyClick,
+      onJellyContextMenu: opts.onJellyContextMenu,
       config: opts.config,
     });
 
@@ -103,14 +107,9 @@ export class PointerInput {
     this.tracker.setFanParams(params);
   }
 
-  /** 轉發給 `ToolRouter.setSprayParams`（issue #69）——面板撒 Pin 滑桿變更時呼叫。 */
-  setSprayParams(params: Partial<SprayParams>): void {
-    this.tracker.setSprayParams(params);
-  }
-
-  /** 轉發給 `ToolRouter.setEraseParams`（issue #70）——面板移除 Pin 滑桿變更時呼叫。 */
-  setEraseParams(params: Partial<EraseParams>): void {
-    this.tracker.setEraseParams(params);
+  /** 轉發給 `ToolRouter.setPinBrushParams`（issue #123）——面板 Pin 筆刷半徑／撒 Pin 間距變更時呼叫。 */
+  setPinBrushParams(params: Partial<PinBrushParams>): void {
+    this.tracker.setPinBrushParams(params);
   }
 
   /** 轉發給 `ToolRouter.setHandfulParams`（issue #113）——面板大把抓取半徑拉霸變更時呼叫。 */
@@ -118,9 +117,45 @@ export class PointerInput {
     this.tracker.setHandfulParams(params);
   }
 
-  /** 轉發給 `ToolRouter.adjustActiveRadius`（issue #114）——按住右鍵＋滾輪調目前工具的半徑。 */
-  adjustActiveRadius(steps: number): ToolRadius | null {
-    return this.tracker.adjustActiveRadius(steps);
+  /**
+   * 轉發給 `ToolRouter.adjustActiveValue`（issue #114 的調半徑，issue #122 推廣）——按住
+   * 右鍵＋滾輪調目前模式的數值。
+   */
+  adjustActiveValue(steps: number): ModeValue | null {
+    return this.tracker.adjustActiveValue(steps);
+  }
+
+  /** 目前模式的數值（游標標籤用，issue #122）。 */
+  get activeValue(): ModeValue | null {
+    return this.tracker.activeValue;
+  }
+
+  /** 轉發給 `ToolRouter` 的模式介面（issue #122）——參數卡模式鈕、中鍵單擊、游標標籤。 */
+  modeOf<T extends ModalToolId>(tool: T): ToolModeOf<T>;
+  modeOf(tool: ToolId): ToolMode | null;
+  modeOf(tool: ToolId): ToolMode | null {
+    return this.tracker.modeOf(tool);
+  }
+
+  setMode<T extends ModalToolId>(tool: T, mode: ToolModeOf<T>): void {
+    this.tracker.setMode(tool, mode);
+  }
+
+  cycleMode(): ToolMode | null {
+    return this.tracker.cycleMode();
+  }
+
+  /**
+   * 轉發給 `ToolRouter.rightClick`（issue #124）——畫布上的右鍵單擊（`CameraInput` 判定）
+   * 交給目前工具。
+   */
+  rightClick(world: Point, screenX: number, screenY: number): void {
+    this.tracker.rightClick(world, screenX, screenY);
+  }
+
+  /** 已定義的編隊形狀（issue #122：游標標籤要知道「尚未設定形狀」）。 */
+  get formationShape(): readonly Point[] | null {
+    return this.tracker.formationShape;
   }
 
   /** 轉發給 `ToolRouter`（issue #68）——面板「開始設定形狀」／「完成設定」按鈕呼叫。 */

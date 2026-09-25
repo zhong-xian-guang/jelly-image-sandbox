@@ -3,14 +3,17 @@
  * 原本直接持有的 `GestureTracker`。issue #66 / V2 T3-2 加上第一個新工具：電風扇。
  * issue #68 / V2 T3-4 加上第二個：編隊抓取。
  *
- * ADR-0011：「目前工具」選擇器只涵蓋新增的沙盒工具（電風扇／編隊抓取／撒
- * Pin／移除 Pin），Grab／Tap 維持純手勢辨識、不進選擇器（Pin 原本也在此列，
- * ADR-0015 / issue #115 把它移進選擇器）。
- * `'general'` 與 `'pin'` 下 `down`/`move`/`up`/`cancel` 原封不動委派給內部持有的
- * `GestureTracker`，不修改 `GestureTracker` 本身——Pin 工具的手勢跟一般操作一模
- * 一樣，把 `grab` 換成 `pin`/`unpin`、丟掉 `tap` 是呼叫端 `routeForPinTool` 的事
- * （那邊要讀場上的 Pin 與隨相機縮放的移除半徑）。後續三個工具會在這裡加上
- * 對應的 `ToolId` 分支。
+ * **工具與模式**（issue #122 / V4 T1；ADR-0016，取代下面 ADR-0011／0015 的選擇器設計）：
+ * 一般操作、大把抓取、編隊抓取合成「抓取」工具（`'grab'`），三者變成它的模式（單點／
+ * 大把／編隊，`TOOL_MODES`）。每個工具各自記住自己的模式（`modes`），中鍵單擊
+ * （`cycleMode`）或參數卡的模式鈕（`setMode`）切換。「工具＋模式」推出內部的手勢分支
+ * （`Behavior`）——就是原本各工具的那些分支，內容一行沒改，只換掉「目前是哪個分支」
+ * 的來源；而且改成**按下當下**定下、記在 `pointerBehaviors`，`move`／`up`／`cancel`
+ * 照它分派，拖曳中切工具或切模式都只影響下一次按下。下面各段提到的「一般操作」
+ * ＝單點模式、「大把抓取」＝大把模式、「編隊抓取」＝編隊模式。
+ *
+ * 單點模式下 `down`/`move`/`up`/`cancel` 原封不動委派給內部持有的 `GestureTracker`，
+ * 不修改 `GestureTracker` 本身。
  *
  * **編隊抓取**（issue #68）：兩個子狀態，`beginFormationDefine()`／
  * `endFormationDefine()`（面板「開始設定形狀」／「完成設定」按鈕觸發）之間是
@@ -39,45 +42,56 @@
  * 的位置（`startWorld + offset`），跟 `GestureTracker` 一致。`cancel` 是例外，
  * 不送 `tap`：中斷不是完成一次輕拍。
  *
- * **撒 Pin**（issue #69 / V2 T3-5）：點一下就完成的**單次**動作——`down` 以點擊
- * 處為圓心、`sprayRadius` 為半徑撒一批 Pin，`move`／`up`／`cancel` 完全不作用
- * （不是按住持續噴）。撒點用經典的 dart throwing：用注入的 `random`（預設
- * `Math.random`——**執行期**隨機，每次撒的分佈都不一樣；重播的決定性不靠這裡，
- * 見下段）在圓內反覆生成候選點，跟「這次已接受的候選」以及「注入的 `listPins`
- * 回傳的既有 Pin」都要 ≥ `spraySpacing` 才接受，再用 `hitTest`（同編隊抓取，
- * 語意上等同 issue 文件說的 `pick`）濾掉落在果凍外的，存活的才用合成 id
- * （`spray:<counter>`，跨多次撒點遞增、不重複）送既有的 `pin` 事件——不新增
- * `InputEvent` 種類，撒出來的每顆之後就跟手動放的 Pin 完全一樣（可單獨拖曳／
- * 解除／甩不掉）。
+ * **Pin 工具**（issue #123 / V4 T2；spec #121「Pin 工具」）：原本的 Pin、撒 Pin、移除 Pin
+ * 三個工具合成一個，模式為 放／拔。兩個模式都直接送 `pin`／`unpin`（不新增 `InputEvent`
+ * 種類），也都不送 `tap`——快速按放不觸發 Tap。以前 Pin 工具是照一般操作送 `grab`/`tap`
+ * 再由呼叫端 `routeForPinTool` 轉換，丟不丟 `tap` 要看「發出事件當下」選的工具，拖曳中
+ * 切走工具時那一下的 `tap` 會漏出去；現在分支在按下當下定下（`pointerBehaviors`），這個
+ * 缺口跟著消失。
+ *
+ * - **放**（`PinPlaceSession`）：`down` 落在 Jelly 上（`hitTest`）就在按下點放一顆（id =
+ *   指標 id）——**不再**因為點在既有 Pin 附近改成拔。拖曳超過 Tap 的位移門檻後，每次
+ *   `move` 以指標為圓心、`pinBrushRadius` 為半徑撒一輪（撒 Pin，見 `sprayAt`）。
+ * - **拔**（`PinRemoveSession`）：`down` 拔掉 `PIN_REMOVE_RADIUS_PX`（螢幕像素）內最近的
+ *   一顆；拖曳超過門檻後變成橡皮擦，每次 `move` 拔掉筆刷半徑內的所有 Pin（見 `eraseAt`）。
+ *   單擊不當橡皮擦：不然點一下就會清掉一整圈，「精準地拔一顆」做不到。
+ *
+ * 撒 Pin 與橡皮擦共用一條 Pin 筆刷半徑（`pinBrushRadius`，CONTEXT.md「Pin 筆刷半徑」），
+ * 撒 Pin 間距另外一條（`spraySpacing`），都由 `setPinBrushParams` 即時寫入。
+ *
+ * 撒點用經典的 dart throwing：用注入的 `random`（預設 `Math.random`——**執行期**隨機，
+ * 每次撒的分佈都不一樣；重播的決定性不靠這裡，見下段）在圓內反覆生成候選點，跟「這一筆
+ * 已放下的 Pin（含按下那一顆）」以及「注入的 `listPins` 回傳的既有 Pin」都要 ≥
+ * `spraySpacing` 才接受，再用 `hitTest`（同編隊抓取）濾掉落在果凍外的，存活的才用合成 id
+ * （`spray:<counter>`，跨多筆遞增、不重複）送 `pin`。這一筆自己記住放過的點，而不是只靠
+ * `listPins`：真實路徑上 `emit` 同步進 `sim.applyInput`、清單會跟著變，但那是呼叫端的
+ * 接線方式，不是這個類別能自己看到的事。每一筆撒出的數量有上限
+ * （`MAX_SPRAY_PINS_PER_STROKE`），每一輪的嘗試次數也有上限，求解器與這個迴圈都不會被壓垮。
  *
  * 重播的決定性：`pin` 事件本身帶著算好的絕對 `x`/`y`，`TrackRecorder` 錄的是
  * 那些具體座標，重播時原樣送回去，不會重算隨機分佈——所以這裡刻意不需要有
  * 種子的 PRNG。
  *
- * **生成 Jelly／移除 Jelly**（issue #97 / V3 T3-4）：兩個「點一下」工具
- * （`CLICK_TOOL_IDS`）——`down` 記下按下處，`up` 時只要途中沒拖曳（位移 ≤
- * `tapMaxDist`，跟一般操作同一把尺）就呼叫 `onClickTool(tool, world)`，帶的是
- * 按下當下的工具與世界座標。進行中的點一下手勢在 `move`／`up`／`cancel` 都**先於**
- * `activeTool` 分支處理：按住途中切走工具時，這次手勢仍算在按下時那個工具頭上。
- * 這類工具是本檔唯一**不** emit `InputEvent` 的分支：要送進 `World` 的 `spawn`
- * 需要來源圖、兩條拉霸的值與網格 bbox，`remove` 需要先 `pick` 出 `jellyId`——那些
+ * **Jelly 工具**（issue #97 / V3 T3-4 的「點一下」手勢；issue #124 / V4 T3 把生成、移除、
+ * 重建三個工具合成一個、沒有模式）：左鍵——`down` 記下按下處，`up` 時只要途中沒拖曳
+ * （位移 ≤ `tapMaxDist`，跟一般操作同一把尺）就呼叫 `onJellyClick(world)`（生成），帶的是
+ * 按下當下的世界座標；點在既有 Jelly 上也照樣生成。分支在按下當下定下，按住途中切走工具，
+ * 這次手勢仍算 Jelly 工具的。右鍵單擊（`rightClick`，判定在 `CameraInput`）點中某塊
+ * Jelly（`hitTest`）→ `onJellyContextMenu(world, screen)` 開「重建／移除」選單；點在空白處
+ * 什麼都不做。這個工具是本檔唯一**不** emit `InputEvent` 的分支：要送進 `World` 的 `spawn`
+ * 需要來源圖、兩條拉霸的值與網格 bbox，`remove`／重建需要先 `pick` 出 `jellyId`——那些
  * 都是 `JellySandbox` 的狀態，輸入層只回報「在這個世界座標點了一下」（ADR-0005）。
  *
- * **移除 Pin**（issue #70 / V2 T3-6）：撒 Pin 的反向操作，但手勢形狀相反——它是
- * **持續**的橡皮擦：`down` 開始一次擦除、`move` 沿路繼續擦、`up`／`cancel` 結束。
- * 每次（含 `down` 當下那一次）用注入的 `listPins()` 掃一遍場上的 Pin，落在
- * 「目前指標為圓心、`eraseRadius` 為半徑」的圓內就送既有的 `unpin` 事件——不新增
- * `InputEvent` 種類，被清掉的 Pin 跟使用者自己點掉的完全一樣。半徑跟撒 Pin 的
- * 半徑是兩個各自獨立的欄位（`setEraseParams` vs. `setSprayParams`）：兩個工具在
- * 手感上是分開調的，共用一個值會讓「撒得密一點、擦得準一點」變成不可能。
+ * **橡皮擦**（issue #70 / V2 T3-6 的移除 Pin，issue #123 變成拔模式的拖曳）：每次
+ * 用注入的 `listPins()` 掃一遍場上的 Pin，落在「目前指標為圓心、筆刷半徑為半徑」的圓內
+ * 就送 `unpin`——被清掉的 Pin 跟使用者自己點掉的完全一樣。
  *
- * 每次手勢記一組本次已經送過 `unpin` 的 Pin id（`EraseSession.erasedPinIds`），
- * `up`／`cancel` 時連同 session 一起丟掉。真實路徑上 `emit` 是同步進
- * `sim.applyInput` 的，下一次
- * `listPins()` 本來就讀不到已經清掉的那顆——但這條保證來自呼叫端的接線方式，
- * 不是這個類別能自己看到的事；擦除又是每次 `move` 都重掃一遍的高頻迴圈，多送
- * 一次 `unpin` 在別的接線方式下（例如事件先進佇列、下一幀才套用）就會變成
- * 重複事件寫進 Track。記一組 id 是這裡自己把這件事關死。
+ * 每次手勢記一組本次已經送過 `unpin` 的 Pin id（`PinRemoveSession.erasedPinIds`，含按下
+ * 當下點掉的那一顆），`up`／`cancel` 時連同 session 一起丟掉。真實路徑上 `emit` 是同步進
+ * `sim.applyInput` 的，下一次 `listPins()` 本來就讀不到已經清掉的那顆——但這條保證來自
+ * 呼叫端的接線方式；擦除又是每次 `move` 都重掃一遍的高頻迴圈，多送一次 `unpin` 在別的
+ * 接線方式下（例如事件先進佇列、下一幀才套用）就會變成重複事件寫進 Track。記一組 id 是
+ * 這裡自己把這件事關死。
  *
  * 只作用於 Pin：不碰 `release`，所以一般 Grab（含還跟著別的指標走的那些）完全
  * 不受影響。
@@ -136,43 +150,59 @@ import {
 } from './GestureTracker';
 
 /**
- * `'fan'`（issue #66）、`'formation'`（issue #68）、`'spray'`（issue #69）、
- * `'erase'`（issue #70，＝「移除 Pin」）、`'spawn'`／`'removeJelly'`（issue #97）、
- * `'rebuildJelly'`（issue #98）、`'handfulGrab'`（issue #113）、`'pin'`（issue #115；
- * ADR-0015）加進 ADR-0011 選擇器；`'general'` 維持既有 Grab/Tap 手勢。
+ * 工具列上的工具（issue #122 / V4 T1；ADR-0016）。一般操作、大把抓取、編隊抓取合成
+ * `'grab'`（三者變成它的模式，見 `TOOL_MODES`）；Pin、撒 Pin、移除 Pin 合成 `'pin'`
+ * （issue #123，模式為放／拔）；生成、移除、重建 Jelly 合成 `'jelly'`（issue #124，沒有
+ * 模式，移除與重建走右鍵選單）。工具與模式都不存檔、也不是 Track 事件，改名不影響舊片段檔。
  */
-export type ToolId =
-  | 'general'
-  | 'pin'
-  | 'handfulGrab'
-  | 'fan'
-  | 'formation'
-  | 'spray'
-  | 'erase'
-  | 'spawn'
-  | 'removeJelly'
-  | 'rebuildJelly';
+export type ToolId = 'grab' | 'pin' | 'fan' | 'jelly';
+
+/** 工具列的順序（issue #122）——面板照這個順序排按鈕。 */
+export const TOOL_IDS: readonly ToolId[] = ['grab', 'pin', 'fan', 'jelly'];
 
 /**
- * 「點一下就完成」的那幾個工具（issue #97）——`down`→`up` 無拖曳才作用，見
- * `ClickSession`。三個工具共用同一條手勢，所以清單在這裡集中一份：輸入層這邊加新的
- * 點一下工具只要加進這個陣列與 `ToolId`，手勢本身完全不必動；工具真正上線還要在
- * `ControlPanel` 的選項表補一列（含它的鎖法）、在 `JellySandbox.runClickTool` 補一條
- * 分派（issue #98 的「重建 Jelly」就是這樣加的）。
+ * 有模式的工具與它們的模式，依中鍵單擊輪替的順序排（issue #122；CONTEXT.md「模式」）。
+ * 第一個是預設模式。之後的票在這裡加 `fan: [...]`。
  */
-export const CLICK_TOOL_IDS = ['spawn', 'removeJelly', 'rebuildJelly'] as const;
+export const TOOL_MODES = {
+  grab: ['single', 'handful', 'formation'],
+  pin: ['place', 'remove'],
+} as const satisfies Partial<Record<ToolId, readonly string[]>>;
 
-export type ClickToolId = (typeof CLICK_TOOL_IDS)[number];
+/** 有模式的工具。 */
+export type ModalToolId = keyof typeof TOOL_MODES;
+/** 某個工具的模式。 */
+export type ToolModeOf<T extends ModalToolId> = (typeof TOOL_MODES)[T][number];
+/** 任一工具的模式。 */
+export type ToolMode = ToolModeOf<ModalToolId>;
+/** 抓取工具的模式：單點（原一般操作）／大把（原大把抓取）／編隊（原編隊抓取）。 */
+export type GrabMode = ToolModeOf<'grab'>;
+/** Pin 工具的模式：放（單擊放一顆、拖曳撒 Pin）／拔（單擊拔最近一顆、拖曳當橡皮擦）。 */
+export type PinMode = ToolModeOf<'pin'>;
 
-function isClickTool(tool: ToolId): tool is ClickToolId {
-  return (CLICK_TOOL_IDS as readonly ToolId[]).includes(tool);
+export function isModalTool(tool: ToolId): tool is ModalToolId {
+  return tool in TOOL_MODES;
 }
 
-export const DEFAULT_TOOL: ToolId = 'general';
+/** 這個工具的模式清單（輪替順序）；沒有模式的工具回空陣列。 */
+export function modesOf(tool: ToolId): readonly ToolMode[] {
+  return isModalTool(tool) ? TOOL_MODES[tool] : [];
+}
 
-/** 手勢直接交給 `GestureTracker` 的工具——一般操作與 Pin（issue #115，見類別頂端說明）。 */
-function usesGestureTracker(tool: ToolId): boolean {
-  return tool === 'general' || tool === 'pin';
+/**
+ * 按下當下定下的手勢分支（issue #122）——「工具＋模式」推出來的，`ToolRouter` 內既有的
+ * 各分支原樣沿用，只換掉「目前是哪個分支」的來源：抓取工具的三個模式各自對應原本的
+ * 一般操作／大把抓取／編隊抓取，Pin 工具的兩個模式是 `pinPlace`／`pinRemove`（issue #123），
+ * 其餘工具就是它自己。
+ */
+type Behavior =
+  'single' | 'handful' | 'formation' | 'pinPlace' | 'pinRemove' | Exclude<ToolId, 'grab' | 'pin'>;
+
+export const DEFAULT_TOOL: ToolId = 'grab';
+
+/** 手勢直接交給 `GestureTracker` 的分支——只有單點抓取（見類別頂端說明）。 */
+function usesGestureTracker(behavior: Behavior): boolean {
+  return behavior === 'single';
 }
 
 /** 電風扇矩形的初始預設值（issue #66）——`setFanParams`（issue #67）可在執行期間覆寫。 */
@@ -191,19 +221,30 @@ export interface FanParams {
   frequency: number;
 }
 
-/** 撒 Pin 的初始預設值（issue #69）——`setSprayParams` 可在執行期間覆寫。 */
-export const DEFAULT_SPRAY_RADIUS = 140;
+/**
+ * Pin 筆刷半徑的預設值（issue #123；撒 Pin 與橡皮擦共用，CONTEXT.md「Pin 筆刷半徑」），
+ * 世界單位——`setPinBrushParams` 可在執行期間覆寫。先取 120，試手感後再調（spec #121）。
+ */
+export const DEFAULT_PIN_BRUSH_RADIUS = 120;
+/** 撒 Pin 最小間距的預設值（issue #69）——`setPinBrushParams` 可在執行期間覆寫。 */
 export const DEFAULT_SPRAY_SPACING = 36;
 
 /**
- * 一次撒點最多嘗試幾個候選點、最多真的撒幾顆（issue #69）——dart throwing 的
- * 嘗試次數依「半徑 / 間距」的平方估算（範圍內大約塞得下幾顆 × 每顆多試幾次），
- * 兩個上限只是把最壞情況的成本與 Pin 數量框住：間距調到很小、半徑調到很大時，
- * 不會一次撒進幾百顆 Pin 把求解器壓垮，也不會讓這個迴圈跑到掉幀。
+ * 拔模式單擊「點掉最近一顆」的判定半徑，**螢幕像素**（issue #14 的點掉特定 Pin，issue #123
+ * 從 `JellySandbox` 搬進來）——跟 `.jelly-pin-marker` 的 CSS 直徑（16px）同數量級。換算
+ * 回世界座標要看目前相機縮放（見 `worldRadiusAt`），判定範圍才不會隨縮放忽大忽小。
+ */
+export const PIN_REMOVE_RADIUS_PX = 16;
+
+/**
+ * 撒 Pin 每一輪最多嘗試幾個候選點、每一筆最多真的撒幾顆（issue #69；issue #123 從「點一下
+ * 一次」改成「一筆」）——dart throwing 的嘗試次數依「半徑 / 間距」的平方估算（範圍內大約
+ * 塞得下幾顆 × 每顆多試幾次），兩個上限只是把最壞情況的成本與 Pin 數量框住：間距調到很小、
+ * 半徑調到很大時，不會一筆撒進幾百顆 Pin 把求解器壓垮，也不會讓每次 `move` 的迴圈跑到掉幀。
  */
 const SPRAY_ATTEMPTS_PER_SLOT = 12;
 const MAX_SPRAY_ATTEMPTS = 1500;
-const MAX_SPRAY_PINS = 200;
+export const MAX_SPRAY_PINS_PER_STROKE = 200;
 
 /** 半徑拉霸的範圍（issue #114）——面板拉霸與「右鍵＋滾輪調半徑」共用同一份。 */
 export interface RadiusRange {
@@ -213,37 +254,17 @@ export interface RadiusRange {
 }
 
 /**
- * 撒 Pin 半徑拉霸的範圍（issue #69），世界座標單位。上限 400 ≈ 一般匯入果凍的
- * 尺度，一下蓋住整隻。
+ * Pin 筆刷半徑拉霸的範圍（issue #123；沿用原本撒 Pin／移除 Pin 半徑的範圍），世界座標
+ * 單位。上限 400 ≈ 一般匯入果凍的尺度，一下蓋住整隻。
  */
-export const SPRAY_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 };
+export const PIN_BRUSH_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 };
 
-/** `setSprayParams` 接受的部分更新（issue #69）——兩個欄位皆可選。 */
-export interface SprayParams {
-  /** 撒點範圍的世界座標半徑（圓心 = 點擊處）。 */
+/** `setPinBrushParams` 接受的部分更新（issue #123）——兩個欄位皆可選。 */
+export interface PinBrushParams {
+  /** Pin 筆刷半徑：撒 Pin 與橡皮擦的世界座標作用半徑（圓心 = 指標目前位置）。 */
   radius: number;
-  /** 任兩顆 Pin（含場上既有的）之間的最小世界座標距離——越小越密。 */
+  /** 撒 Pin 時任兩顆 Pin（含場上既有的）之間的最小世界座標距離——越小越密。 */
   spacing: number;
-}
-
-/**
- * 移除 Pin 的橡皮擦半徑預設值（issue #70）——`setEraseParams` 可在執行期間覆寫。
- * 刻意跟 `DEFAULT_SPRAY_RADIUS` 是兩個各自獨立的常數（見類別頂端說明）。
- */
-export const DEFAULT_ERASE_RADIUS = 100;
-
-/**
- * 移除 Pin 的橡皮擦半徑範圍（issue #70）——沿用 `SPRAY_RADIUS_RANGE` 的上下限（兩者
- * 都是「以指標為圓心的作用範圍」，尺度一樣由果凍大小決定），但刻意是**另一條**
- * 滑桿、另一個狀態：撒的時候常常想撒一大片，擦的時候多半想擦得精準一點，共用一個
- * 值會逼使用者每次切工具都重調。
- */
-export const ERASE_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 };
-
-/** `setEraseParams` 接受的部分更新（issue #70）——目前只有半徑一個欄位。 */
-export interface EraseParams {
-  /** 橡皮擦的世界座標半徑（圓心 = 指標目前位置）。 */
-  radius: number;
 }
 
 /**
@@ -255,13 +276,22 @@ export const DEFAULT_HANDFUL_RADIUS = 140;
 /** 大把抓取半徑拉霸的範圍（issue #113），世界單位——跟撒 Pin 一致（spec #112）。 */
 export const HANDFUL_RADIUS_RANGE: RadiusRange = { min: 20, max: 400, step: 10 };
 
-/** 有半徑、能用「右鍵＋滾輪」調整的工具（issue #114）。 */
-export type RadiusToolId = 'spray' | 'erase' | 'handfulGrab';
+/**
+ * 「按住右鍵＋滾輪」能調的數值（issue #114 的「工具半徑」由 issue #122 推廣成「目前模式
+ * 的數值」）：抓取／大把的大把抓取半徑、Pin 工具兩個模式共用的 Pin 筆刷半徑（issue #123）。
+ */
+export type ModeValueKey = 'handfulRadius' | 'pinBrushRadius';
 
-/** `adjustActiveRadius` 的回報（issue #114）：調的是哪個工具、新半徑多少。 */
-export interface ToolRadius {
-  tool: RadiusToolId;
-  radius: number;
+/** 各數值的拉霸範圍——面板拉霸與「右鍵＋滾輪」共用同一份。 */
+export const MODE_VALUE_RANGES: Readonly<Record<ModeValueKey, RadiusRange>> = {
+  handfulRadius: HANDFUL_RADIUS_RANGE,
+  pinBrushRadius: PIN_BRUSH_RADIUS_RANGE,
+};
+
+/** 目前模式的數值（issue #122）：哪一個、現在多少。 */
+export interface ModeValue {
+  key: ModeValueKey;
+  value: number;
 }
 
 /** `setHandfulParams` 接受的部分更新（issue #113）——目前只有半徑一個欄位。 */
@@ -281,9 +311,9 @@ export interface ToolRouterOptions extends GestureTrackerOptions {
   /**
    * 場上目前的 Pin 清單（issue #69，接 `SimCore.listPins()`）——撒 Pin 時新的
    * 候選點跟既有 Pin 也要保持 ≥ 間距，不然在已經撒過的地方再撒一次會疊成
-   * 一坨；移除 Pin（issue #70）更是完全靠它——要擦掉哪幾顆，就是從這份清單裡
-   * 挑出落在橡皮擦圓內的。不帶這個選項等同「場上沒有任何 Pin」：撒 Pin 只跟
-   * 這次撒出的候選互斥，移除 Pin 則永遠沒有東西可擦。
+   * 一坨；拔模式（issue #70 / #123）更是完全靠它——要拔掉哪幾顆，就是從這份清單裡
+   * 挑出落在點擊半徑或橡皮擦圓內的。不帶這個選項等同「場上沒有任何 Pin」：撒 Pin 只跟
+   * 這一筆放下的互斥，拔模式則永遠沒有東西可拔。
    */
   listPins?: () => readonly PinInfo[];
   /**
@@ -293,16 +323,19 @@ export interface ToolRouterOptions extends GestureTrackerOptions {
    */
   random?: () => number;
   /**
-   * 「點一下」工具（`CLICK_TOOL_IDS`）完成一次點擊的回呼（issue #97 / V3 T3-4）
-   * ——參數是按下當下選的那個工具，以及**按下當下**的世界座標。刻意不是
-   * `InputEvent`：真正要送進 `World` 的 `spawn` 事件得知道用哪張來源圖、目前兩條
-   * 拉霸的值、`offset` 要減掉網格 bbox 中心，`remove` 得先 `pick` 出 `jellyId`
-   * ——那些是 `JellySandbox` 的狀態，輸入層不該認識（ADR-0005：輸入層只回報
-   * 手勢）。也刻意是**一個**回呼而不是每個工具一個：這條手勢本身沒有分支，
-   * 分派是呼叫端的事，多一個工具不必在輸入層多開一條路。不帶這個選項等同
-   * 「這些工具沒接線」：點下去什麼都不會發生。
+   * Jelly 工具左鍵點一下（生成）的回呼（issue #97 的「點一下」手勢；issue #124 起只剩
+   * Jelly 工具用）——參數是**按下當下**的世界座標。刻意不是 `InputEvent`：真正要送進
+   * `World` 的 `spawn` 事件得知道用哪張來源圖、目前兩條拉霸的值、`offset` 要減掉網格
+   * bbox 中心——那些是 `JellySandbox` 的狀態，輸入層不該認識（ADR-0005：輸入層只回報
+   * 手勢）。不帶這個選項等同「沒接線」：點下去什麼都不會發生。
    */
-  onClickTool?: (tool: ClickToolId, world: Point) => void;
+  onJellyClick?: (world: Point) => void;
+  /**
+   * Jelly 工具右鍵單擊點中某塊 Jelly（issue #124）——`JellySandbox` 在 `screen`（畫布局部
+   * 座標）開「重建／移除」選單，作用在 `world` 點中的那一塊（`pick` 由它做，理由同上）。
+   * 點在空白處（`hitTest` 沒命中）不呼叫。
+   */
+  onJellyContextMenu?: (world: Point, screen: Point) => void;
 }
 
 /** 放置新風扇進行中的狀態：世界座標原點 + 目前（拖曳中或放開時）的終點。 */
@@ -350,31 +383,39 @@ interface FormationSession extends GestureStart {
 }
 
 /**
- * 進行中的一次擦除手勢（issue #70）：`erasedPinIds` 是這次手勢裡已經送過 `unpin`
- * 的 **Pin** id（`PinInfo.id`，跟 `eraseSessions` 那層的鍵——指標 id——是兩回事，
- * 只是在這個專案裡兩者共用 `PointerId` 這個型別），避免同一顆在拖曳途中被重複送
- * （見類別頂端說明）。`up`／`cancel` 連同整個 session 一起丟掉，下一次按下就是
- * 乾淨的一組。
+ * 進行中的一次 Pin 放模式手勢（issue #123）：按下當下的定格（拖曳判定用）、`dragged`
+ * （位移超過 Tap 門檻後設起來、不再放下——之後每次 `move` 都撒一輪），`placed` 是這一筆
+ * 已經放下的 Pin 座標（含按下那一顆，撒 Pin 的間距要跟它們比），`sprayed` 是這一筆撒出
+ * 的數量（上限 `MAX_SPRAY_PINS_PER_STROKE`）。
  */
-interface EraseSession {
+interface PinPlaceSession extends GestureStart {
+  dragged: boolean;
+  placed: Point[];
+  sprayed: number;
+}
+
+/**
+ * 進行中的一次 Pin 拔模式手勢（issue #123；橡皮擦沿用 issue #70）：`dragged` 同放模式，
+ * 設起來後才當橡皮擦。`erasedPinIds` 是這次手勢裡已經送過 `unpin` 的 **Pin** id
+ * （`PinInfo.id`，跟 `pinRemoveSessions` 那層的鍵——指標 id——是兩回事，只是在這個專案
+ * 裡兩者共用 `PointerId` 這個型別），避免同一顆被重複送（見類別頂端說明）。`up`／`cancel`
+ * 連同整個 session 一起丟掉，下一次按下就是乾淨的一組。
+ */
+interface PinRemoveSession extends GestureStart {
+  dragged: boolean;
   erasedPinIds: Set<PointerId>;
 }
 
 /**
- * 進行中的一次「點一下」手勢（issue #97，生成 Jelly／移除 Jelly 共用）：`world` 是
- * **按下當下**的世界座標（回呼拿的就是它，跟輕拍「打在按下點」同一條規則），
- * `dragged` 一旦在 `move` 途中被設起來就不會再放下——拖出去又拖回原點仍然不算
- * 點一下，使用者中途已經看到自己在拖了。
+ * 進行中的一次 Jelly 工具左鍵「點一下」手勢（issue #97）：`startWorld` 是**按下當下**的
+ * 世界座標（回呼拿的就是它，跟輕拍「打在按下點」同一條規則），`dragged` 一旦在 `move`
+ * 途中被設起來就不會再放下——拖出去又拖回原點仍然不算點一下，使用者中途已經看到自己
+ * 在拖了。
  *
- * 刻意**只**看位移、不看按住多久（跟 `isTap` 不同）：這兩個工具是「放在這裡」
- * 而不是「輕拍一下」，瞄準位置多按了一秒再放開仍該生成，不然會變成「按太久
- * 就沒反應」的謎樣失敗。
- *
- * `tool` 是按下當下選的那個工具——按住途中切換選擇器（觸控裝置做得到）時，
- * 這次手勢仍算在按下時那個工具頭上。
+ * 刻意**只**看位移、不看按住多久（跟 `isTap` 不同）：生成是「放在這裡」而不是「輕拍
+ * 一下」，瞄準位置多按了一秒再放開仍該生成，不然會變成「按太久就沒反應」的謎樣失敗。
  */
 interface ClickSession extends GestureStart {
-  tool: ClickToolId;
   dragged: boolean;
 }
 
@@ -394,8 +435,22 @@ export class ToolRouter {
   private readonly getFan: (() => FanState | null) | undefined;
   private readonly listPins: (() => readonly PinInfo[]) | undefined;
   private readonly random: () => number;
-  private readonly onClickTool: ((tool: ClickToolId, world: Point) => void) | undefined;
+  private readonly onJellyClick: ((world: Point) => void) | undefined;
+  private readonly onJellyContextMenu: ((world: Point, screen: Point) => void) | undefined;
   private activeTool: ToolId = DEFAULT_TOOL;
+  /**
+   * 每個有模式的工具各自目前的模式（issue #122）——整個 session 內記住、不存檔；切去
+   * 別的工具再切回來模式不變。初值＝各工具清單裡的第一個。
+   */
+  private readonly modes: { [T in ModalToolId]: ToolModeOf<T> } = {
+    grab: TOOL_MODES.grab[0],
+    pin: TOOL_MODES.pin[0],
+  };
+  /**
+   * 每個進行中的指標在**按下當下**定下的手勢分支（issue #122）——`move`／`up`／`cancel`
+   * 一律照這個分派，拖曳中切工具或切模式只影響下一次按下。`up`／`cancel` 時移除。
+   */
+  private readonly pointerBehaviors = new Map<PointerId, Behavior>();
   /** 進行中的電風扇手勢（放置或拖曳），鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly fanSessions = new Map<PointerId, FanSession>();
   /**
@@ -416,15 +471,17 @@ export class ToolRouter {
   private fanStrength = DEFAULT_FAN_STRENGTH;
   private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
   private fanFrequency = DEFAULT_FAN_FREQUENCY;
-  /** 下一次撒點要用的半徑／最小間距（issue #69）——面板兩個滑桿即時寫入。 */
-  private sprayRadius = DEFAULT_SPRAY_RADIUS;
+  /**
+   * Pin 筆刷半徑（撒 Pin 與橡皮擦共用）與撒 Pin 最小間距（issue #123）——面板兩條拉霸與
+   * 右鍵＋滾輪即時寫入，每一輪撒／擦都讀目前值（拖曳途中調也立刻反映在還沒走到的那段）。
+   */
+  private pinBrushRadius = DEFAULT_PIN_BRUSH_RADIUS;
   private spraySpacing = DEFAULT_SPRAY_SPACING;
-  /** 撒出的 Pin 合成 id 流水號（`spray:<n>`）——跨多次撒點遞增，各顆身分互不相干。 */
+  /** 撒出的 Pin 合成 id 流水號（`spray:<n>`）——跨多筆遞增，各顆身分互不相干。 */
   private nextSprayPin = 1;
-  /** 橡皮擦半徑（issue #70）——面板滑桿即時寫入，跟 `sprayRadius` 各自獨立。 */
-  private eraseRadius = DEFAULT_ERASE_RADIUS;
-  /** 進行中的擦除手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
-  private readonly eraseSessions = new Map<PointerId, EraseSession>();
+  /** 進行中的 Pin 放／拔手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
+  private readonly pinPlaceSessions = new Map<PointerId, PinPlaceSession>();
+  private readonly pinRemoveSessions = new Map<PointerId, PinRemoveSession>();
   /** 大把抓取半徑（issue #113）——面板拉霸即時寫入，按下當下拍進 session。 */
   private handfulRadius = DEFAULT_HANDFUL_RADIUS;
   /** 進行中的大把抓取手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
@@ -447,12 +504,63 @@ export class ToolRouter {
     this.getFan = opts.getFan;
     this.listPins = opts.listPins;
     this.random = opts.random ?? Math.random;
-    this.onClickTool = opts.onClickTool;
+    this.onJellyClick = opts.onJellyClick;
+    this.onJellyContextMenu = opts.onJellyContextMenu;
     this.config = resolveGestureConfig(opts.config);
   }
 
   setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
+  }
+
+  get currentTool(): ToolId {
+    return this.activeTool;
+  }
+
+  /** 某個工具目前的模式（issue #122）；沒有模式的工具回 `null`。 */
+  modeOf<T extends ModalToolId>(tool: T): ToolModeOf<T>;
+  modeOf(tool: ToolId): ToolMode | null;
+  modeOf(tool: ToolId): ToolMode | null {
+    return isModalTool(tool) ? this.modes[tool] : null;
+  }
+
+  /** 目前工具的模式；沒有模式回 `null`。 */
+  get currentMode(): ToolMode | null {
+    return this.modeOf(this.activeTool);
+  }
+
+  /** 設定某個工具的模式（參數卡的模式鈕）——只影響下一次按下。 */
+  setMode<T extends ModalToolId>(tool: T, mode: ToolModeOf<T>): void {
+    this.writeMode(tool, mode);
+  }
+
+  /**
+   * 中鍵單擊（issue #122）：目前工具的模式換成清單裡的下一個（最後一個繞回第一個），
+   * 回報新模式讓呼叫端同步參數卡與游標標籤。目前工具沒有模式就回 `null`、什麼都不做。
+   */
+  cycleMode(): ToolMode | null {
+    const tool = this.activeTool;
+    if (!isModalTool(tool)) return null;
+    const list: readonly ToolMode[] = TOOL_MODES[tool];
+    const next = list[(list.indexOf(this.modes[tool]) + 1) % list.length]!;
+    this.writeMode(tool, next);
+    return next;
+  }
+
+  /**
+   * `modes` 的唯一寫入口。呼叫端（`setMode` 的型別參數、`cycleMode` 從該工具自己的清單
+   * 取值）已保證模式屬於這個工具；TS 對「以聯集鍵寫入對應型別」無法收窄，所以在這裡放寬。
+   */
+  private writeMode(tool: ModalToolId, mode: ToolMode): void {
+    (this.modes as Record<ModalToolId, ToolMode>)[tool] = mode;
+  }
+
+  /** 這一次按下要走的分支：抓取、Pin 工具看模式，其餘工具就是自己。 */
+  private currentBehavior(): Behavior {
+    const tool = this.activeTool;
+    if (tool === 'grab') return this.modes.grab;
+    if (tool === 'pin') return this.modes.pin === 'place' ? 'pinPlace' : 'pinRemove';
+    return tool;
   }
 
   /** 「開始設定形狀」按鈕（issue #68）——之後的 `down` 只記點，不 emit。 */
@@ -535,21 +643,13 @@ export class ToolRouter {
   }
 
   /**
-   * 面板兩個撒 Pin 滑桿的即時寫入口（issue #69）——只覆寫有帶到的欄位，影響
-   * **下一次**撒點（`sprayOnce` 每次讀目前值）。比照 `setFanParams`。
+   * 面板「Pin 筆刷半徑」「撒 Pin 間距」兩條拉霸的即時寫入口（issue #123）——只覆寫有帶到
+   * 的欄位。每一輪撒（`sprayAt`）／擦（`eraseAt`）都讀目前值，所以拖曳途中調也會立刻
+   * 反映在還沒走到的那段路徑上。比照 `setFanParams`。
    */
-  setSprayParams(params: Partial<SprayParams>): void {
-    if (params.radius !== undefined) this.sprayRadius = params.radius;
+  setPinBrushParams(params: Partial<PinBrushParams>): void {
+    if (params.radius !== undefined) this.pinBrushRadius = params.radius;
     if (params.spacing !== undefined) this.spraySpacing = params.spacing;
-  }
-
-  /**
-   * 面板「移除 Pin 範圍半徑」滑桿的即時寫入口（issue #70）——比照
-   * `setSprayParams`，影響**下一次**擦除掃描（`eraseAt` 每次讀目前值），所以
-   * 拖曳途中調滑桿也會立刻反映在還沒擦到的那段路徑上。
-   */
-  setEraseParams(params: Partial<EraseParams>): void {
-    if (params.radius !== undefined) this.eraseRadius = params.radius;
   }
 
   /** 面板「大把抓取半徑」拉霸的即時寫入口（issue #113）——只影響**下一次**按下。 */
@@ -557,39 +657,48 @@ export class ToolRouter {
     if (params.radius !== undefined) this.handfulRadius = params.radius;
   }
 
-  /**
-   * 「右鍵＋滾輪」調整目前工具的半徑（issue #114）：`steps` 格（正 = 放大），每格一個
-   * 拉霸 step，夾在該拉霸範圍內，回報新值讓呼叫端同步面板與圓圈。目前工具沒有半徑
-   * 就回 `null`（「不處理」——呼叫端照舊縮放相機）。跟拉霸一樣只影響**下一次**按下：
-   * 進行中的大把抓取 session 已經在按下時記下自己的半徑。
-   */
-  adjustActiveRadius(steps: number): ToolRadius | null {
-    const tool = this.activeTool;
-    if (tool === 'spray') {
-      this.sprayRadius = stepRadius(this.sprayRadius, steps, SPRAY_RADIUS_RANGE);
-      return { tool, radius: this.sprayRadius };
-    }
-    if (tool === 'erase') {
-      this.eraseRadius = stepRadius(this.eraseRadius, steps, ERASE_RADIUS_RANGE);
-      return { tool, radius: this.eraseRadius };
-    }
-    if (tool === 'handfulGrab') {
-      this.handfulRadius = stepRadius(this.handfulRadius, steps, HANDFUL_RADIUS_RANGE);
-      return { tool, radius: this.handfulRadius };
-    }
+  /** 目前模式（或沒有模式的工具）的數值是哪一個（issue #122）；沒有數值回 `null`。 */
+  private activeValueKey(): ModeValueKey | null {
+    const behavior = this.currentBehavior();
+    if (behavior === 'handful') return 'handfulRadius';
+    if (behavior === 'pinPlace' || behavior === 'pinRemove') return 'pinBrushRadius';
     return null;
   }
 
-  get currentTool(): ToolId {
-    return this.activeTool;
+  /** 目前模式的數值與它現在的值（游標標籤用）；沒有數值回 `null`。 */
+  get activeValue(): ModeValue | null {
+    const key = this.activeValueKey();
+    return key === null ? null : { key, value: this.valueOf(key) };
+  }
+
+  /**
+   * 「右鍵＋滾輪」調整目前模式的數值（issue #114 的調半徑，issue #122 推廣）：`steps` 格
+   * （正 = 放大），每格一個拉霸 step，夾在該拉霸範圍內，回報新值讓呼叫端同步面板與
+   * 圓圈。沒有數值的模式回 `null`（「不處理」——呼叫端照舊縮放相機）。跟拉霸一樣只影響
+   * **下一次**按下：進行中的大把抓取 session 已經在按下時記下自己的半徑。
+   */
+  adjustActiveValue(steps: number): ModeValue | null {
+    const key = this.activeValueKey();
+    if (key === null) return null;
+    const value = stepRadius(this.valueOf(key), steps, MODE_VALUE_RANGES[key]);
+    if (key === 'handfulRadius') this.handfulRadius = value;
+    else this.pinBrushRadius = value;
+    return { key, value };
+  }
+
+  private valueOf(key: ModeValueKey): number {
+    return key === 'handfulRadius' ? this.handfulRadius : this.pinBrushRadius;
   }
 
   down(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
-    if (usesGestureTracker(this.activeTool)) {
+    // 按下當下就定下這次手勢的分支（issue #122），之後切工具／切模式都不影響它。
+    const behavior = this.currentBehavior();
+    this.pointerBehaviors.set(id, behavior);
+    if (usesGestureTracker(behavior)) {
       this.gestureTracker.down(id, screenX, screenY, timeMs);
       return;
     }
-    if (this.activeTool === 'handfulGrab') {
+    if (behavior === 'handful') {
       const world = this.screenToWorld(screenX, screenY);
       if (this.hitTest && !this.hitTest(world)) return; // 背景拖曳 → 不歸求解器
       const radius = this.handfulRadius;
@@ -603,7 +712,7 @@ export class ToolRouter {
       this.emit({ type: 'grab', id, x: world.x, y: world.y, handfulRadius: radius });
       return;
     }
-    if (this.activeTool === 'fan') {
+    if (behavior === 'fan') {
       const world = this.screenToWorld(screenX, screenY);
       const fan = this.getFan?.() ?? null;
       if (fan && isPointInFanRect(fan, world)) {
@@ -626,12 +735,13 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'formation') {
+    if (behavior === 'formation') {
       const world = this.screenToWorld(screenX, screenY);
       if (this.formationDefinePoints) {
         this.formationDefinePoints.push(world);
         return;
       }
+      // 還沒定義形狀：編隊模式下的左鍵拖曳不做任何事（spec #121）。
       if (!this.formationOffsets || this.formationOffsets.length === 0) return;
       const session = this.nextFormationSession++;
       const attached: { offset: Point; id: string }[] = [];
@@ -654,24 +764,50 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'spray') {
-      // 撒 Pin 只有 `down` 有事做——點一下就完成，`move`/`up`/`cancel` 那三個
-      // 方法因此沒有對應的分支（見類別頂端說明）。
-      this.sprayOnce(this.screenToWorld(screenX, screenY));
+    if (behavior === 'pinPlace') {
+      // 按下當下就放一顆（落在 Jelly 上才算）；點在既有 Pin 附近也照樣放（issue #123）。
+      // 按在 Jelly 外仍開 session：從果凍外拖進來一樣能撒。
+      const world = this.screenToWorld(screenX, screenY);
+      const session: PinPlaceSession = {
+        startX: screenX,
+        startY: screenY,
+        startT: timeMs,
+        startWorld: world,
+        dragged: false,
+        placed: [],
+        sprayed: 0,
+      };
+      this.pinPlaceSessions.set(id, session);
+      if (!this.hitTest || this.hitTest(world)) {
+        session.placed.push(world);
+        this.emit({ type: 'pin', id, x: world.x, y: world.y });
+      }
       return;
     }
-    if (this.activeTool === 'erase') {
-      // 按下當下就擦一次——不必等到 move，點一下也該能清掉腳下那幾顆。
-      const session: EraseSession = { erasedPinIds: new Set() };
-      this.eraseSessions.set(id, session);
-      this.eraseAt(this.screenToWorld(screenX, screenY), session);
+    if (behavior === 'pinRemove') {
+      // 按下當下只拔點擊半徑（螢幕像素）內最近的一顆；拖曳開始後才當橡皮擦（issue #123）。
+      const world = this.screenToWorld(screenX, screenY);
+      const session: PinRemoveSession = {
+        startX: screenX,
+        startY: screenY,
+        startT: timeMs,
+        startWorld: world,
+        dragged: false,
+        erasedPinIds: new Set(),
+      };
+      this.pinRemoveSessions.set(id, session);
+      const radius = this.worldRadiusAt(screenX, screenY, PIN_REMOVE_RADIUS_PX);
+      const hit = nearestPinWithin(this.listPins?.() ?? [], world, radius);
+      if (hit) {
+        session.erasedPinIds.add(hit.id);
+        this.emit({ type: 'unpin', id: hit.id });
+      }
       return;
     }
-    if (isClickTool(this.activeTool)) {
-      // 生成／移除都要等 `up` 才算數（issue #97）——按下當下先記位置，拖曳與否
-      // 由 `move` 判定。刻意不在 `down` 就動手：按錯地方時還能拖開取消。
+    if (behavior === 'jelly') {
+      // 生成要等 `up` 才算數（issue #97）——按下當下先記位置，拖曳與否由 `move` 判定。
+      // 刻意不在 `down` 就動手：按錯地方時還能拖開取消。
       this.clickSessions.set(id, {
-        tool: this.activeTool,
         startX: screenX,
         startY: screenY,
         startT: timeMs,
@@ -681,28 +817,24 @@ export class ToolRouter {
     }
   }
 
+  // `move`／`up`／`cancel` 一律照 `down` 當下定下的分支（`pointerBehaviors`）分派，不看
+  // 現在選的工具與模式（issue #122）：按住途中切走工具或按中鍵切模式，這次手勢仍屬於
+  // 按下時那個分支、照常跟隨與放開（issue #97 的點一下、#113 的大把抓取原本就是這條規則，
+  // 現在所有分支一體適用）。
   move(id: PointerId, screenX: number, screenY: number): void {
-    // 「點一下」的進行中手勢先攔（issue #97）：session 只有那幾個工具建得出來，
-    // 但按住途中可能被切到別的工具——照 `activeTool` 分支會把它漏掉，見 `up`。
-    const click = this.clickSessions.get(id);
-    if (click) {
-      // 超過輕拍的位移門檻（跟一般操作同一把尺）就不再是「點一下」。
-      if (!click.dragged && movedFromStart(click, screenX, screenY) > this.config.tapMaxDist) {
-        click.dragged = true;
-      }
+    const behavior = this.pointerBehaviors.get(id);
+    if (behavior === undefined) return;
+    if (usesGestureTracker(behavior)) {
+      this.gestureTracker.move(id, screenX, screenY);
       return;
     }
-    // 大把抓取同理：這一把屬於按下當下的工具（issue #113）。
-    if (this.handfulSessions.has(id)) {
+    if (behavior === 'handful') {
+      if (!this.handfulSessions.has(id)) return;
       const world = this.screenToWorld(screenX, screenY);
       this.emit({ type: 'moveGrab', id, x: world.x, y: world.y });
       return;
     }
-    if (usesGestureTracker(this.activeTool)) {
-      this.gestureTracker.move(id, screenX, screenY);
-      return;
-    }
-    if (this.activeTool === 'fan') {
+    if (behavior === 'fan') {
       const session = this.fanSessions.get(id);
       if (!session) return;
       const world = this.screenToWorld(screenX, screenY);
@@ -713,7 +845,7 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'formation') {
+    if (behavior === 'formation') {
       if (this.formationDefinePoints) return; // 定義中：只有 down 記點，move 不理會
       const session = this.formationSessions.get(id);
       if (!session) return;
@@ -729,26 +861,43 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'erase') {
+    if (behavior === 'pinPlace') {
+      const session = this.pinPlaceSessions.get(id);
+      if (!session || !this.passedDragThreshold(session, screenX, screenY)) return;
+      this.sprayAt(this.screenToWorld(screenX, screenY), session);
+      return;
+    }
+    if (behavior === 'pinRemove') {
       // 沒有進行中的手勢就不作用——橡皮擦是「按住拖過去才擦」，不是滑過就擦。
-      const session = this.eraseSessions.get(id);
-      if (!session) return;
+      const session = this.pinRemoveSessions.get(id);
+      if (!session || !this.passedDragThreshold(session, screenX, screenY)) return;
       this.eraseAt(this.screenToWorld(screenX, screenY), session);
+      return;
+    }
+    if (behavior === 'jelly') {
+      const click = this.clickSessions.get(id);
+      // 超過輕拍的位移門檻（跟一般操作同一把尺）就不再是「點一下」。
+      if (
+        click &&
+        !click.dragged &&
+        movedFromStart(click, screenX, screenY) > this.config.tapMaxDist
+      ) {
+        click.dragged = true;
+      }
     }
   }
 
   up(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
-    // 「點一下」的進行中手勢先結（issue #97）：按住途中切走工具（觸控裝置做得
-    // 到）時，照 `activeTool` 分支會在別的工具那裡先 `return`，這次點擊就永遠
-    // 不會完成、session 也留在表上。手勢屬於按下當下那個工具，跟現在選什麼無關。
-    const click = this.clickSessions.get(id);
-    if (click) {
-      this.clickSessions.delete(id);
-      if (!click.dragged) this.onClickTool?.(click.tool, click.startWorld);
+    const behavior = this.pointerBehaviors.get(id);
+    if (behavior === undefined) return;
+    this.pointerBehaviors.delete(id);
+    if (usesGestureTracker(behavior)) {
+      this.gestureTracker.up(id, screenX, screenY, timeMs);
       return;
     }
-    const handful = this.handfulSessions.get(id);
-    if (handful) {
+    if (behavior === 'handful') {
+      const handful = this.handfulSessions.get(id);
+      if (!handful) return;
       this.handfulSessions.delete(id);
       // 快速按放＝以同一個半徑對按下點 Tap（ADR-0014），跟一般操作的 grab → tap → release 同形。
       if (isTap(handful, screenX, screenY, timeMs, this.config)) {
@@ -762,11 +911,7 @@ export class ToolRouter {
       this.emit({ type: 'release', id });
       return;
     }
-    if (usesGestureTracker(this.activeTool)) {
-      this.gestureTracker.up(id, screenX, screenY, timeMs);
-      return;
-    }
-    if (this.activeTool === 'fan') {
+    if (behavior === 'fan') {
       const session = this.fanSessions.get(id);
       if (!session) return;
       this.fanSessions.delete(id);
@@ -778,82 +923,140 @@ export class ToolRouter {
       }
       return;
     }
-    if (this.activeTool === 'formation') {
+    if (behavior === 'formation') {
       if (this.formationDefinePoints) return; // 定義中：down 才算數
       this.emitFormationTapIfAny(id, screenX, screenY, timeMs);
       this.releaseFormationSession(id);
       return;
     }
-    if (this.activeTool === 'erase') {
-      // `up` 跟 `cancel` 在這裡是同一件事：結束這次擦除、丟掉已處理集合。刻意
-      // **不**在放開當下再補擦一次——放開前瀏覽器一定送過同座標的 `move`，補的
-      // 那一次只會在 Track 上多錄一筆一模一樣的 `unpin`，還會讓 `up` 與 `cancel`
+    if (behavior === 'pinPlace' || behavior === 'pinRemove') {
+      // `up` 跟 `cancel` 在這裡是同一件事：結束這一筆、丟掉 session。不送 `tap`（Pin 工具
+      // 快速按放不觸發 Tap），也刻意**不**在放開當下再補撒／補擦一次——放開前瀏覽器一定
+      // 送過同座標的 `move`，補的那一次只會在 Track 上多錄幾筆，還會讓 `up` 與 `cancel`
       // 無謂地不對稱。
-      this.eraseSessions.delete(id);
+      this.endPinSession(id);
+      return;
+    }
+    if (behavior === 'jelly') {
+      const click = this.clickSessions.get(id);
+      if (!click) return;
+      this.clickSessions.delete(id);
+      if (!click.dragged) this.onJellyClick?.(click.startWorld);
+    }
+  }
+
+  /**
+   * 畫布上的右鍵單擊（issue #124；判定在 `CameraInput`：按下到放開沒拖曳、也沒滾過滾輪），
+   * 帶放開位置的世界座標與畫布局部座標，交給**目前**工具（右鍵單擊是一瞬間的事，沒有
+   * 「按下當下定下分支」的問題）：
+   *
+   * - Jelly：點中某塊（`hitTest`）→ `onJellyContextMenu` 開選單；點空白不開。
+   * - 其他工具目前忽略（#125 的電風扇會在這裡接「點在風扇上＝移除」）。
+   */
+  rightClick(world: Point, screenX: number, screenY: number): void {
+    if (this.activeTool === 'jelly') {
+      if (this.hitTest && !this.hitTest(world)) return;
+      this.onJellyContextMenu?.(world, { x: screenX, y: screenY });
     }
   }
 
   cancel(id: PointerId): void {
-    // 生成／移除都還沒發生（要等 `up`），中斷就是整個作廢，不留痕跡（issue #97）。
-    // 先攔的理由同 `up`：手勢屬於按下當下那個工具。
-    if (this.clickSessions.delete(id)) return;
-    // 大把抓取已經是活著的約束：中斷要真的放開（同一般 Grab），不送 tap。
-    if (this.handfulSessions.delete(id)) {
-      this.emit({ type: 'release', id });
-      return;
-    }
-    if (usesGestureTracker(this.activeTool)) {
+    const behavior = this.pointerBehaviors.get(id);
+    if (behavior === undefined) return;
+    this.pointerBehaviors.delete(id);
+    if (usesGestureTracker(behavior)) {
       this.gestureTracker.cancel(id);
       return;
     }
-    if (this.activeTool === 'fan') {
+    if (behavior === 'handful') {
+      // 大把抓取已經是活著的約束：中斷要真的放開（同一般 Grab），不送 tap。
+      if (this.handfulSessions.delete(id)) this.emit({ type: 'release', id });
+      return;
+    }
+    if (behavior === 'fan') {
       // 放置中：放棄這次放置，不 emit 任何事件。拖曳中：`move` 已經即時把風扇挪
       // 過去了，這裡只是停止跟隨指標，風扇留在目前位置（見類別頂端說明）。
       this.fanSessions.delete(id);
       return;
     }
-    if (this.activeTool === 'formation') {
+    if (behavior === 'formation') {
       // 已經是活著的約束（`down` 就 emit 過 grab），跟一般 Grab 的 cancel 同一個
       // 道理：真的要放開，不能悄悄留著（見類別頂端說明）。
       this.releaseFormationSession(id);
       return;
     }
-    if (this.activeTool === 'erase') {
-      // 已經擦掉的 Pin 是既成事實，取消不會把它們變回來（比照拖曳風扇的 cancel
-      // 不回捲）——這裡只是停止繼續跟著指標擦。
-      this.eraseSessions.delete(id);
+    if (behavior === 'pinPlace' || behavior === 'pinRemove') {
+      // 已經放下／拔掉的 Pin 是既成事實，取消不會把它們變回來（比照拖曳風扇的 cancel
+      // 不回捲）——這裡只是停止繼續跟著指標撒／擦。
+      this.endPinSession(id);
+      return;
     }
+    // 生成還沒發生（要等 `up`），中斷就是整個作廢，不留痕跡（issue #97）。
+    this.clickSessions.delete(id);
   }
 
   /**
-   * 撒一次 Pin（issue #69）——`down` 唯一的呼叫處，點一下就完成（`move`／`up`／
-   * `cancel` 對撒 Pin 都不作用）。Dart throwing：在以 `center` 為圓心、`sprayRadius`
-   * 為半徑的圓內均勻取候選點（`sqrt(u)` 才是圓內均勻，直接用 `u` 會擠在圓心），
-   * 跟這次已接受的候選 + 既有 Pin（`listPins`）都要 ≥ `spraySpacing`，再用
-   * `hitTest` 濾掉落在果凍外的，存活的當場送 `pin` 事件。
+   * 這一筆是否已經拖曳超過 Tap 的位移門檻（跟一般操作同一把尺）——一旦超過就記在
+   * `session.dragged`、不再放下（拖出去又拖回原點仍算在拖）。
+   */
+  private passedDragThreshold(
+    session: GestureStart & { dragged: boolean },
+    screenX: number,
+    screenY: number,
+  ): boolean {
+    if (!session.dragged && movedFromStart(session, screenX, screenY) > this.config.tapMaxDist) {
+      session.dragged = true;
+    }
+    return session.dragged;
+  }
+
+  /**
+   * 螢幕上 `px` 像素在 `(screenX, screenY)` 這裡等於多少世界單位（issue #123：拔模式的點擊
+   * 半徑是螢幕像素）。相機只有平移＋等比縮放，所以量水平方向一段就夠了；這樣不必另外注入
+   * 相機縮放，`screenToWorld` 本身就帶著它。
+   */
+  private worldRadiusAt(screenX: number, screenY: number, px: number): number {
+    const a = this.screenToWorld(screenX, screenY);
+    const b = this.screenToWorld(screenX + px, screenY);
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+
+  /** `up`／`cancel` 共用：結束這一筆 Pin 放／拔手勢。 */
+  private endPinSession(id: PointerId): void {
+    this.pinPlaceSessions.delete(id);
+    this.pinRemoveSessions.delete(id);
+  }
+
+  /**
+   * 撒一輪 Pin（issue #69 的撒點規則；issue #123 起是放模式拖曳中每次 `move` 撒一輪）。
+   * Dart throwing：在以 `center` 為圓心、Pin 筆刷半徑為半徑的圓內均勻取候選點（`sqrt(u)`
+   * 才是圓內均勻，直接用 `u` 會擠在圓心），跟這一筆已放下的（`session.placed`，含按下那
+   * 一顆）+ 既有 Pin（`listPins`）都要 ≥ `spraySpacing`，再用 `hitTest` 濾掉落在果凍外的，
+   * 存活的當場送 `pin` 事件。這一筆撒滿 `MAX_SPRAY_PINS_PER_STROKE` 顆就不再撒。
    *
    * 順序刻意是「先比距離、後 `hitTest`」：距離比對只是幾個平方和，`hitTest` 要
    * 真的走一次 picking，先用便宜的條件淘汰掉大多數候選。被 `hitTest` 濾掉的候選
-   * **不**進 `accepted`——它沒有變成 Pin，不該佔著位置擋住後續候選（果凍邊緣外
+   * **不**進 `placed`——它沒有變成 Pin，不該佔著位置擋住後續候選（果凍邊緣外
    * 的空白區不會在圓內留下一塊莫名其妙的空洞）。
    */
-  private sprayOnce(center: Point): void {
-    const radius = Math.max(0, this.sprayRadius);
+  private sprayAt(center: Point, session: PinPlaceSession): void {
+    if (session.sprayed >= MAX_SPRAY_PINS_PER_STROKE) return;
+    const radius = Math.max(0, this.pinBrushRadius);
     // 間距 0（或負）會讓「還能塞幾顆」變成無限大，用一個極小正值收斂成「幾乎不限」。
     const spacing = Math.max(this.spraySpacing, 1e-6);
     const existing = (this.listPins?.() ?? []).map((pin) => pin.point);
-    const accepted: Point[] = [];
     const slots = (radius / spacing) ** 2;
     const attempts = Math.min(MAX_SPRAY_ATTEMPTS, Math.ceil(SPRAY_ATTEMPTS_PER_SLOT * slots));
 
-    for (let i = 0; i < attempts && accepted.length < MAX_SPRAY_PINS; i++) {
+    for (let i = 0; i < attempts && session.sprayed < MAX_SPRAY_PINS_PER_STROKE; i++) {
       const r = radius * Math.sqrt(this.random());
       const theta = 2 * Math.PI * this.random();
       const candidate = { x: center.x + r * Math.cos(theta), y: center.y + r * Math.sin(theta) };
-      if (isWithin(candidate, accepted, spacing) || isWithin(candidate, existing, spacing))
+      if (isWithin(candidate, session.placed, spacing) || isWithin(candidate, existing, spacing))
         continue;
       if (this.hitTest && !this.hitTest(candidate)) continue; // 落在果凍外——這個候選作廢
-      accepted.push(candidate);
+      session.placed.push(candidate);
+      session.sprayed++;
       this.emit({
         type: 'pin',
         id: `spray:${this.nextSprayPin++}`,
@@ -864,9 +1067,9 @@ export class ToolRouter {
   }
 
   /**
-   * 擦一次（issue #70）——`down`／`move` 共用。掃一遍 `listPins()`，凡是
-   * 落在以 `center` 為圓心、`eraseRadius` 為半徑的圓內、且本次手勢還沒處理過的
-   * Pin，就送一次 `unpin` 並記進 `session.erasedPinIds`。
+   * 擦一次（issue #70 的橡皮擦；issue #123 起是拔模式拖曳中每次 `move` 擦一次）。掃一遍
+   * `listPins()`，凡是落在以 `center` 為圓心、Pin 筆刷半徑為半徑的圓內、且本次手勢還沒
+   * 處理過的 Pin，就送一次 `unpin` 並記進 `session.erasedPinIds`。
    *
    * 邊界用 `<=`：半徑滑桿上的數字就是「這一圈裡面的都會被擦掉」，剛好壓在圈上
    * 的那顆算在裡面才符合圓圈視覺提示給人的預期。
@@ -876,8 +1079,8 @@ export class ToolRouter {
    * 變了。邊走邊 emit 的話，如果 `listPins()` 回傳的是內部那份清單本身（而不是
    * 每次都新配的快照），迴圈就會邊跑邊被抽掉元素、漏掉後面幾顆。
    */
-  private eraseAt(center: Point, session: EraseSession): void {
-    const radius = Math.max(0, this.eraseRadius);
+  private eraseAt(center: Point, session: PinRemoveSession): void {
+    const radius = Math.max(0, this.pinBrushRadius);
     const hitPinIds: PointerId[] = [];
     for (const pin of this.listPins?.() ?? []) {
       if (session.erasedPinIds.has(pin.id)) continue;
@@ -978,6 +1181,27 @@ export class ToolRouter {
 /** `point` 是否距離 `others` 裡任何一點不到 `minDistance`（撒 Pin 的間距判定）。 */
 function isWithin(point: Point, others: readonly Point[], minDistance: number): boolean {
   return others.some((o) => Math.hypot(o.x - point.x, o.y - point.y) < minDistance);
+}
+
+/**
+ * `pins` 裡距離 `point` 最近、且落在 `radius` 內（含邊界）的那一個；沒有就回 `undefined`
+ * （拔模式單擊，issue #123；原本在 `routeForPinTool`）。
+ */
+function nearestPinWithin(
+  pins: readonly PinInfo[],
+  point: Point,
+  radius: number,
+): PinInfo | undefined {
+  let best: PinInfo | undefined;
+  let bestDist = radius;
+  for (const pin of pins) {
+    const d = Math.hypot(pin.point.x - point.x, pin.point.y - point.y);
+    if (d <= bestDist) {
+      best = pin;
+      bestDist = d;
+    }
+  }
+  return best;
 }
 
 /** 半徑往上／下走 `steps` 格拉霸 step，夾在範圍內（issue #114）。 */

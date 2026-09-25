@@ -1,5 +1,5 @@
 /**
- * `BrushCursor`（issue #69 / V2 T3-5）——撒 Pin 工具的筆刷圓圈游標：一個跟著
+ * `BrushCursor`（issue #69 / V2 T3-5；issue #123 起是 Pin 工具的筆刷）——筆刷圓圈游標：一個跟著
  * 指標走、半徑等於目前撒點範圍的圓圈，讓使用者按下去之前就知道「這一下會撒
  * 在多大一圈裡」。issue #70 / V2 T3-6 的移除 Pin 共用同一顆圓圈（那邊同樣是
  * 「以指標為圓心、半徑為範圍」的操作，視覺需求一模一樣），只用 `setVariant`
@@ -13,7 +13,7 @@
  * `CanvasHover`（issue #79 從本檔抽出的共用懸停追蹤，見該檔說明：`PointerInput`
  * 只追按下之後的移動，單純懸停時輸入層是靜默的，所以得另外監聽）。
  *
- * 顯示條件：`setActive(true)`（目前工具是撒 Pin 或移除 Pin）＋ `setPosition`
+ * 顯示條件：`setActive(true)`（目前工具是 Pin，放／拔兩種模式都算）＋ `setPosition`
  * 拿到非 `null` 的位置（指標確實落在畫布上，由 `CanvasHover` 判定）。兩個條件
  * 任一不成立就整個藏起來——工具切走後不該留一圈鬼影，指標離開畫布（移到面板
  * 上、或離開視窗）時圓圈也不該黏在最後一個位置。半徑由呼叫端每幀換算成螢幕
@@ -70,14 +70,14 @@ export class BrushCursor {
   }
 
   /**
-   * 圓圈的顏色用途（issue #70）——`JellySandbox` 在切到撒 Pin／移除 Pin 時設定。
+   * 圓圈的顏色用途（issue #70）——`JellySandbox` 在切到 Pin 工具或切換放／拔模式時設定。
    * 只加／移 CSS class，不碰顯示與否（那是 `setActive` 的事）。
    */
   setVariant(variant: BrushVariant): void {
     for (const v of VARIANTS) this.circle.classList.toggle(`is-${v}`, v === variant);
   }
 
-  /** 「目前工具」切到／切離撒 Pin 或移除 Pin 時呼叫。 */
+  /** 「目前工具」切到／切離 Pin 工具時呼叫。 */
   setActive(active: boolean): void {
     if (this.active === active) return;
     this.active = active;

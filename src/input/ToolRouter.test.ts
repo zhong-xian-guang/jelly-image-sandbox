@@ -1,21 +1,30 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { mulberry32 } from '../mesh';
 import type { FanState, InputEvent, Point } from '../sim';
 import {
-  CLICK_TOOL_IDS,
   DEFAULT_FAN_FALLOFF_EXPONENT,
   DEFAULT_FAN_FREQUENCY,
   DEFAULT_FAN_STRENGTH,
   DEFAULT_FAN_WIDTH,
   DEFAULT_HANDFUL_RADIUS,
   DEFAULT_TOOL,
-  ERASE_RADIUS_RANGE,
   HANDFUL_RADIUS_RANGE,
-  SPRAY_RADIUS_RANGE,
+  PIN_BRUSH_RADIUS_RANGE,
+  TOOL_IDS,
   ToolRouter,
+  modesOf,
+  type GrabMode,
   type ToolRouterOptions,
 } from './ToolRouter';
+
+/**
+ * 切到抓取工具的某個模式（issue #122）：單點＝原本的「一般操作」、大把＝原本的「大把
+ * 抓取」、編隊＝原本的「編隊抓取」——既有的各分支測試照原樣沿用，只換掉選分支的方式。
+ */
+function selectGrab(router: ToolRouter, mode: GrabMode): void {
+  router.setActiveTool('grab');
+  router.setMode('grab', mode);
+}
 
 /** 同 `GestureTracker.test.ts` 的黑盒手法：`screenToWorld` 把螢幕座標 +1000 好分辨已換算。 */
 function makeRouter(
@@ -36,10 +45,11 @@ function makeRouter(
 }
 
 describe('ToolRouter — 「一般操作」委派給內部 GestureTracker，行為分毫不差', () => {
-  it('預設就是一般操作', () => {
+  it('預設就是抓取工具的單點模式（＝原本的一般操作）', () => {
     const { router } = makeRouter();
     expect(router.currentTool).toBe(DEFAULT_TOOL);
-    expect(router.currentTool).toBe('general');
+    expect(router.currentTool).toBe('grab');
+    expect(router.currentMode).toBe('single');
   });
 
   it('down → grab（世界座標，經 screenToWorld）', () => {
@@ -134,45 +144,6 @@ describe('ToolRouter — 「一般操作」委派給內部 GestureTracker，行�
     expect(router.currentTool).toBe('fan');
     router.down(1, 0, 0, 0);
     expect(events).toEqual([]); // 電風扇的 down 只記原點，放開才 emit（見下方 fan 區塊）
-  });
-});
-
-describe('ToolRouter — Pin 工具（issue #115；ADR-0015）', () => {
-  // Pin 工具的手勢跟一般操作同一套（GestureTracker）；把 grab 換成 pin/unpin、丟掉 tap
-  // 是 `routeForPinTool` 的事（見 pinToolRouting.test.ts）。
-  it('拖曳 → grab, moveGrab, release（同一般操作）', () => {
-    const { router, events } = makeRouter();
-    router.setActiveTool('pin');
-    router.down(1, 0, 0, 0);
-    router.move(1, 40, 5);
-    router.up(1, 40, 5, 400);
-    expect(events.map((e) => e.type)).toEqual(['grab', 'moveGrab', 'release']);
-  });
-
-  it('快速按放 → grab, tap, release（同一般操作的門檻）', () => {
-    const { router, events } = makeRouter();
-    router.setActiveTool('pin');
-    router.down(1, 50, 60, 100);
-    router.up(1, 51, 60, 200);
-    expect(events).toEqual([
-      { type: 'grab', id: 1, x: 1050, y: 1060 },
-      { type: 'tap', x: 1050, y: 1060 },
-      { type: 'release', id: 1 },
-    ]);
-  });
-
-  it('cancel → release', () => {
-    const { router, events } = makeRouter();
-    router.setActiveTool('pin');
-    router.down(1, 0, 0, 0);
-    router.cancel(1);
-    expect(events.map((e) => e.type)).toEqual(['grab', 'release']);
-  });
-
-  it('沒有半徑可調 → adjustActiveRadius 回 null', () => {
-    const { router } = makeRouter();
-    router.setActiveTool('pin');
-    expect(router.adjustActiveRadius(1)).toBeNull();
   });
 });
 
@@ -295,7 +266,7 @@ describe('ToolRouter — 電風扇（issue #66 / V2 T3-2；ADR-0010）', () => {
     const { router, events } = makeRouter();
     router.setActiveTool('fan');
     router.down(1, 0, 0, 0);
-    router.setActiveTool('general'); // 切換過程中沒有殘留任何一般操作的追蹤
+    selectGrab(router, 'single'); // 切換過程中沒有殘留任何一般操作的追蹤
     router.down(2, 0, 0, 0);
     expect(events).toEqual([{ type: 'grab', id: 2, x: 1000, y: 1000 }]);
   });
@@ -514,14 +485,14 @@ describe('ToolRouter — 拖曳既有風扇（issue #67 事後追加）', () => 
 describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
   it('切到編隊抓取但還沒定義形狀 → down 不 emit 任何事件', () => {
     const { router, events } = makeRouter();
-    router.setActiveTool('formation');
+    selectGrab(router, 'formation');
     router.down(1, 0, 0, 0);
     expect(events).toEqual([]);
   });
 
   it('定義兩點後在果凍上拖曳 → 兩個 grab（id 相異）+ 同步的 moveGrab + 兩個 release', () => {
     const { router, events } = makeRouter();
-    router.setActiveTool('formation');
+    selectGrab(router, 'formation');
     router.beginFormationDefine();
     router.down(1, 0, 0, 0); // 世界座標 (1000, 1000)：主點，偏移 (0,0)
     router.down(1, 10, 0, 0); // 世界座標 (1010, 1000)：偏移 (10, 0)
@@ -543,7 +514,7 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
 
   it('定義中的 down 不 emit 任何事件（只記點）', () => {
     const { router, events } = makeRouter();
-    router.setActiveTool('formation');
+    selectGrab(router, 'formation');
     router.beginFormationDefine();
     router.down(1, 0, 0, 0);
     router.down(1, 10, 0, 0);
@@ -560,7 +531,7 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
       emit: (e) => events.push(e),
       hitTest: (w) => w.x < 1110,
     });
-    router.setActiveTool('formation');
+    selectGrab(router, 'formation');
     router.beginFormationDefine();
     router.down(1, 0, 0, 0); // (1000, 1000)
     router.down(1, 10, 0, 0); // (1010, 1000) → 偏移 (10, 0)
@@ -579,7 +550,7 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
 
   it('偏移量在拖曳中固定、不隨方向旋轉——不管往哪個方向拖，兩點的相對位移都一致', () => {
     const { router, events } = makeRouter();
-    router.setActiveTool('formation');
+    selectGrab(router, 'formation');
     router.beginFormationDefine();
     router.down(1, 0, 0, 0);
     router.down(1, 10, 0, 0); // 偏移 (10, 0)
@@ -598,7 +569,7 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
 
   it('cancel → 對已附著的每個點送 release（跟一般 Grab 的 cancel 一樣，是活著的約束要真的放開）', () => {
     const { router, events } = makeRouter();
-    router.setActiveTool('formation');
+    selectGrab(router, 'formation');
     router.beginFormationDefine();
     router.down(1, 0, 0, 0);
     router.down(1, 10, 0, 0);
@@ -613,7 +584,7 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
 
   it('重新設定形狀（再呼叫一次 begin/end）→ 覆蓋掉舊形狀', () => {
     const { router, events } = makeRouter();
-    router.setActiveTool('formation');
+    selectGrab(router, 'formation');
     router.beginFormationDefine();
     router.down(1, 0, 0, 0);
     router.down(1, 10, 0, 0);
@@ -652,16 +623,16 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
 
   it('切回一般操作 → 編隊抓取的 down 不再作用；切回編隊抓取後形狀仍在，恢復正常', () => {
     const { router, events } = makeRouter();
-    router.setActiveTool('formation');
+    selectGrab(router, 'formation');
     router.beginFormationDefine();
     router.down(1, 0, 0, 0);
     router.endFormationDefine();
 
-    router.setActiveTool('general');
+    selectGrab(router, 'single');
     router.down(2, 0, 0, 0); // 一般操作的 grab
     router.up(2, 0, 0, 500);
 
-    router.setActiveTool('formation');
+    selectGrab(router, 'formation');
     // 同上：按久一點避開編隊輕拍（issue #81），這一則只管工具切換後 down 有沒有恢復作用。
     router.down(3, 50, 50, 0);
     router.up(3, 50, 50, 300);
@@ -679,7 +650,7 @@ describe('ToolRouter — 編隊形狀的懸停預覽（issue #79 / V2 T3-8）', 
   /** 定義一個「主點 + 右 10 + 下 20」的形狀，之後拿它試預覽。 */
   function withShape() {
     const made = makeRouter();
-    made.router.setActiveTool('formation');
+    selectGrab(made.router, 'formation');
     made.router.beginFormationDefine();
     made.router.down(1, 0, 0, 0);
     made.router.down(1, 10, 0, 0);
@@ -737,7 +708,7 @@ describe('ToolRouter — 編隊抓取的輕拍（issue #81 / V2 T3-9）', () => 
   /** 定義一個「主點 + 右 10」的兩點形狀，之後拿它試輕拍。 */
   function withShape(extra?: Partial<ToolRouterOptions>) {
     const made = makeRouter(undefined, undefined, extra);
-    made.router.setActiveTool('formation');
+    selectGrab(made.router, 'formation');
     made.router.beginFormationDefine();
     made.router.down(1, 0, 0, 0);
     made.router.down(1, 10, 0, 0);
@@ -800,7 +771,7 @@ describe('ToolRouter — 編隊抓取的輕拍（issue #81 / V2 T3-9）', () => 
   // 按放」不一致的話，手感會前後矛盾。
   it('沿用注入的 GestureConfig 門檻（與一般操作同一組）', () => {
     const made = makeRouter({ tapMaxMs: 50 });
-    made.router.setActiveTool('formation');
+    selectGrab(made.router, 'formation');
     made.router.beginFormationDefine();
     made.router.down(1, 0, 0, 0);
     made.router.endFormationDefine();
@@ -849,421 +820,54 @@ describe('ToolRouter — 編隊抓取的輕拍（issue #81 / V2 T3-9）', () => 
   });
 });
 
-describe('ToolRouter — 撒 Pin（issue #69 / V2 T3-5）', () => {
-  /** 撒點用的隨機數注入固定種子，測試才逐次一致（預設是 `Math.random`）。 */
-  const seeded = () => mulberry32(0x5eed);
-
-  /** 這批 `pin` 事件的座標（撒 Pin 只會送 `pin`，這裡順便當成型別收窄）。 */
-  function pinPoints(events: readonly InputEvent[]): Point[] {
-    return events.flatMap((e) =>
-      e.type === 'pin' && e.x !== undefined && e.y !== undefined ? [{ x: e.x, y: e.y }] : [],
-    );
-  }
-
-  /** 點集合裡任兩點的最小距離（少於兩點時回 `Infinity`）。 */
-  function minPairDistance(points: readonly Point[]): number {
-    let min = Infinity;
-    for (let i = 0; i < points.length; i++) {
-      for (let j = i + 1; j < points.length; j++) {
-        min = Math.min(min, Math.hypot(points[i]!.x - points[j]!.x, points[i]!.y - points[j]!.y));
-      }
-    }
-    return min;
-  }
-
-  it('點一下 → 一批 pin 事件，id 各自相異、都帶 spray: 前綴', () => {
-    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
-    router.setActiveTool('spray');
-    router.down(1, 0, 0, 0);
-
-    expect(events.length).toBeGreaterThan(1);
-    expect(events.every((e) => e.type === 'pin')).toBe(true);
-    const ids = events.map((e) => (e.type === 'pin' ? e.id : null));
-    expect(ids.every((id) => typeof id === 'string' && id.startsWith('spray:'))).toBe(true);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it('撒出的任兩顆 Pin 距離 ≥ 設定的間距', () => {
-    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
-    router.setActiveTool('spray');
-    router.setSprayParams({ radius: 200, spacing: 40 });
-    router.down(1, 0, 0, 0);
-
-    const points = pinPoints(events);
-    expect(points.length).toBeGreaterThan(1);
-    expect(minPairDistance(points)).toBeGreaterThanOrEqual(40);
-  });
-
-  it('跟注入的既有 Pin（listPins）也保持 ≥ 間距——不會撒在已經有 Pin 的地方', () => {
-    const existing = [
-      { id: 'a', point: { x: 1000, y: 1000 } },
-      { id: 'b', point: { x: 1060, y: 1020 } },
-    ];
-    const { router, events } = makeRouter(undefined, undefined, {
-      random: seeded(),
-      listPins: () => existing,
-    });
-    router.setActiveTool('spray');
-    router.setSprayParams({ radius: 200, spacing: 40 });
-    router.down(1, 0, 0, 0); // 圓心 (1000, 1000)，正好蓋住兩顆既有 Pin
-
-    const points = pinPoints(events);
-    expect(points.length).toBeGreaterThan(0);
-    for (const p of points) {
-      for (const pin of existing) {
-        expect(Math.hypot(p.x - pin.point.x, p.y - pin.point.y)).toBeGreaterThanOrEqual(40);
-      }
-    }
-  });
-
-  it('密度調高（間距調小）→ 同樣半徑撒出的 Pin 數量變多', () => {
-    const sparse = makeRouter(undefined, undefined, { random: seeded() });
-    sparse.router.setActiveTool('spray');
-    sparse.router.setSprayParams({ radius: 200, spacing: 80 });
-    sparse.router.down(1, 0, 0, 0);
-
-    const dense = makeRouter(undefined, undefined, { random: seeded() });
-    dense.router.setActiveTool('spray');
-    dense.router.setSprayParams({ radius: 200, spacing: 25 });
-    dense.router.down(1, 0, 0, 0);
-
-    expect(dense.events.length).toBeGreaterThan(sparse.events.length);
-  });
-
-  it('撒出的 Pin 都落在以點擊處為圓心、設定半徑內', () => {
-    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
-    router.setActiveTool('spray');
-    router.setSprayParams({ radius: 120, spacing: 30 });
-    router.down(1, 50, 70, 0); // 世界座標圓心 (1050, 1070)
-
-    const points = pinPoints(events);
-    expect(points.length).toBeGreaterThan(0);
-    for (const p of points) {
-      expect(Math.hypot(p.x - 1050, p.y - 1070)).toBeLessThanOrEqual(120);
-    }
-  });
-
-  it('候選點落在果凍外（hitTest 回 false）→ 不送出對應的 pin', () => {
-    const { router, events } = makeRouter(undefined, undefined, {
-      random: seeded(),
-      hitTest: (w) => w.x < 1000, // 圓心右半邊一律判定為落在果凍外
-    });
-    router.setActiveTool('spray');
-    router.setSprayParams({ radius: 200, spacing: 30 });
-    router.down(1, 0, 0, 0); // 圓心 (1000, 1000)
-
-    const points = pinPoints(events);
-    expect(points.length).toBeGreaterThan(0);
-    expect(points.every((p) => p.x < 1000)).toBe(true);
-  });
-
-  it('整個範圍都在果凍外 → 一顆都不送', () => {
-    const { router, events } = makeRouter(undefined, undefined, {
-      random: seeded(),
-      hitTest: () => false,
-    });
-    router.setActiveTool('spray');
-    router.down(1, 0, 0, 0);
-    expect(events).toEqual([]);
-  });
-
-  it('點一下就完成的單次動作——後續 move／up／cancel 不再送出任何事件', () => {
-    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
-    router.setActiveTool('spray');
-    router.down(1, 0, 0, 0);
-    const afterDown = events.length;
-
-    router.move(1, 30, 30);
-    router.up(1, 30, 30, 50);
-    router.cancel(1);
-    expect(events).toHaveLength(afterDown);
-  });
-
-  it('連撒兩次 → 第二批的 id 不跟第一批重複（每顆 Pin 之後才能各自獨立操作）', () => {
-    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
-    router.setActiveTool('spray');
-    router.down(1, 0, 0, 0);
-    router.down(2, 400, 400, 0);
-
-    const ids = events.map((e) => (e.type === 'pin' ? e.id : null));
-    expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  // 間距被調到極小、半徑極大時，dart throwing 的嘗試次數與撒出的顆數都必須有
-  // 上限——否則一下撒進上千顆硬約束，求解器當場被壓垮、這個迴圈本身也會掉幀。
-  it('半徑極大 + 間距極小 → 仍有上限，不會一次撒進無限多顆，也會在有限次嘗試內結束', () => {
-    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
-    router.setActiveTool('spray');
-    router.setSprayParams({ radius: 100000, spacing: 0.0001 });
-    router.down(1, 0, 0, 0);
-    expect(events.length).toBeLessThanOrEqual(200);
-  });
-
-  it('間距為 0（極端輸入）→ 不會無窮迴圈，仍在上限內收斂', () => {
-    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
-    router.setActiveTool('spray');
-    router.setSprayParams({ radius: 200, spacing: 0 });
-    router.down(1, 0, 0, 0);
-    expect(events.length).toBeLessThanOrEqual(200);
-  });
-
-  it('撒 Pin 不影響一般操作——切回去仍是既有的 Grab 手勢', () => {
-    const { router, events } = makeRouter(undefined, undefined, { random: seeded() });
-    router.setActiveTool('spray');
-    router.setActiveTool('general');
-    router.down(1, 0, 0, 0);
-    router.up(1, 0, 0, 500);
-    expect(events).toEqual([
-      { type: 'grab', id: 1, x: 1000, y: 1000 },
-      { type: 'release', id: 1 },
-    ]);
-  });
-});
-
-describe('ToolRouter — 移除 Pin（issue #70 / V2 T3-6）', () => {
-  /**
-   * 這個工具唯一的資料來源是注入的 `listPins`，所以測試這一端要模擬真實路徑上
-   * `SimCore` 的行為：`emit` 收到 `unpin` 就把那顆從清單裡拿掉（真實路徑上 emit
-   * 是同步進 `sim.applyInput` 的）。用一個永遠不變的靜態清單測不到「清掉之後
-   * 它就不在清單裡了」這件事。`live: false` 則刻意保留靜態清單，用來單獨驗證
-   * 「同一次拖曳內不重送」這件事真的由本次手勢的已處理集合擋下，而不是碰巧
-   * 靠清單變短。
-   */
-  function makeEraser(
-    pins: readonly { id: string; point: Point }[],
-    opts?: { live?: boolean; radius?: number },
-  ) {
-    const store = [...pins];
-    const events: InputEvent[] = [];
-    const router = new ToolRouter({
-      screenToWorld: (x, y) => ({ x: x + 1000, y: y + 1000 }),
-      emit: (e) => {
-        events.push(e);
-        if ((opts?.live ?? true) && e.type === 'unpin') {
-          const index = store.findIndex((p) => p.id === e.id);
-          if (index >= 0) store.splice(index, 1);
-        }
-      },
-      listPins: () => store,
-    });
-    router.setActiveTool('erase');
-    if (opts?.radius !== undefined) router.setEraseParams({ radius: opts.radius });
-    const unpinnedIds = () => events.flatMap((e) => (e.type === 'unpin' ? [e.id] : []));
-    return { router, events, store, unpinnedIds };
-  }
-
-  it('按下當下就把圓心半徑內的既有 Pin 清掉（不必等到 move）', () => {
-    const { router, unpinnedIds } = makeEraser(
-      [
-        { id: 'a', point: { x: 1000, y: 1000 } },
-        { id: 'far', point: { x: 1500, y: 1500 } },
-      ],
-      { radius: 60 },
-    );
-    router.down(1, 0, 0, 0); // 世界座標 (1000, 1000)
-    expect(unpinnedIds()).toEqual(['a']);
-  });
-
-  it('拖曳經過 → 進到半徑內的 Pin 依序被清掉；始終在半徑外的不受影響', () => {
-    const { router, unpinnedIds, store } = makeEraser(
-      [
-        { id: 'a', point: { x: 1000, y: 1000 } },
-        { id: 'b', point: { x: 1100, y: 1000 } },
-        { id: 'c', point: { x: 1200, y: 1000 } },
-        { id: 'away', point: { x: 1100, y: 1900 } },
-      ],
-      { radius: 40 },
-    );
-    router.down(1, 0, 0, 0);
-    expect(unpinnedIds()).toEqual(['a']);
-    router.move(1, 100, 0);
-    expect(unpinnedIds()).toEqual(['a', 'b']);
-    router.move(1, 200, 0);
-    expect(unpinnedIds()).toEqual(['a', 'b', 'c']);
-    router.up(1, 200, 0, 300);
-    expect(store.map((p) => p.id)).toEqual(['away']);
-  });
-
-  it('同一顆 Pin 在同一次拖曳中只送一次 unpin（即使它一直待在半徑內）', () => {
-    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
-      live: false, // 清單刻意不變短，逼「已處理集合」自己擋下重送
-      radius: 200,
-    });
-    router.down(1, 0, 0, 0);
-    router.move(1, 10, 10);
-    router.move(1, 20, 20);
-    router.move(1, 5, 5);
-    expect(unpinnedIds()).toEqual(['a']);
-  });
-
-  it('放開後再次拖過同一個位置 → 已經清掉的 id 不會被重送', () => {
-    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
-      radius: 80,
-    });
-    router.down(1, 0, 0, 0);
-    router.up(1, 0, 0, 100);
-    router.down(2, 0, 0, 200);
-    router.move(2, 10, 10);
-    router.up(2, 10, 10, 300);
-    expect(unpinnedIds()).toEqual(['a']);
-  });
-
-  it('放開後重新按下 → 新一次手勢的集合是乾淨的（同一顆若還在，照樣會被清）', () => {
-    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
-      live: false, // 模擬「第一次的 unpin 沒有真的生效」，驗證集合確實有被清掉
-      radius: 80,
-    });
-    router.down(1, 0, 0, 0);
-    router.up(1, 0, 0, 100);
-    router.down(2, 0, 0, 200);
-    expect(unpinnedIds()).toEqual(['a', 'a']);
-  });
-
-  // 規格：「up/cancel 清掉那個集合、結束」——放開本身不是一次擦除。瀏覽器在
-  // `up` 前一定送過同座標的 `move`，補擦只會在 Track 上多錄一筆重複的 unpin。
-  it('up 只是結束，不在放開當下多擦一次', () => {
-    const { router, unpinnedIds } = makeEraser(
-      [
-        { id: 'a', point: { x: 1000, y: 1000 } },
-        { id: 'b', point: { x: 1300, y: 1000 } },
-      ],
-      { radius: 60 },
-    );
-    router.down(1, 0, 0, 0); // 擦掉 a
-    router.up(1, 300, 0, 200); // 放開處剛好壓在 b 上，但沒有 move 走過
-    expect(unpinnedIds()).toEqual(['a']);
-  });
-
-  it('cancel 同樣結束這次擦除（集合清掉，之後的 move 不再作用）', () => {
-    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
-      live: false,
-      radius: 80,
-    });
-    router.down(1, 500, 500, 0); // 離 Pin 很遠，什麼都沒清到
-    router.cancel(1);
-    router.move(1, 0, 0); // 沒有進行中的手勢 → 不作用
-    expect(unpinnedIds()).toEqual([]);
-  });
-
-  it('沒按下就 move → 不作用（不是「滑過去就擦掉」）', () => {
-    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
-      radius: 80,
-    });
-    router.move(1, 0, 0);
-    expect(unpinnedIds()).toEqual([]);
-  });
-
-  it('半徑滑桿調大 → 同一個位置能擦到更遠的 Pin', () => {
-    const pins = [{ id: 'a', point: { x: 1100, y: 1000 } }];
-    const small = makeEraser(pins, { radius: 50 });
-    small.router.down(1, 0, 0, 0);
-    expect(small.unpinnedIds()).toEqual([]);
-
-    const large = makeEraser(pins, { radius: 150 });
-    large.router.down(1, 0, 0, 0);
-    expect(large.unpinnedIds()).toEqual(['a']);
-  });
-
-  // 兩個工具的半徑是各自獨立的欄位（issue #70 驗收條件）：把撒 Pin 的半徑調到
-  // 極小，橡皮擦的作用範圍不該跟著縮水。
-  it('跟撒 Pin 的半徑各自獨立——調撒 Pin 的半徑不影響擦除範圍', () => {
-    const { router, unpinnedIds } = makeEraser([{ id: 'a', point: { x: 1100, y: 1000 } }], {
-      radius: 150,
-    });
-    router.setSprayParams({ radius: 1 });
-    router.down(1, 0, 0, 0); // 世界座標 (1000, 1000)，距離 Pin 100
-    expect(unpinnedIds()).toEqual(['a']);
-  });
-
-  it('只作用於 Pin——不送 release，也不動到一般 Grab；切回一般操作仍是既有手勢', () => {
-    const { router, events } = makeEraser([{ id: 'a', point: { x: 1000, y: 1000 } }], {
-      radius: 80,
-    });
-    router.down(1, 0, 0, 0);
-    router.move(1, 5, 5);
-    router.up(1, 5, 5, 300);
-    expect(events.every((e) => e.type === 'unpin')).toBe(true);
-
-    router.setActiveTool('general');
-    const before = events.length;
-    router.down(2, 0, 0, 400);
-    router.up(2, 0, 0, 900);
-    expect(events.slice(before)).toEqual([
-      { type: 'grab', id: 2, x: 1000, y: 1000 },
-      { type: 'release', id: 2 },
-    ]);
-  });
-
-  it('沒有注入 listPins（場上沒有 Pin 可讀）→ 什麼都不送，不爆炸', () => {
-    const { router, events } = makeRouter();
-    router.setActiveTool('erase');
-    router.down(1, 0, 0, 0);
-    router.move(1, 10, 10);
-    router.up(1, 10, 10, 300);
-    expect(events).toEqual([]);
-  });
-});
-
-describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', () => {
-  /** 三個工具都只有「點一下」一種手勢，回呼依工具各自收集起來比對。 */
-  function makeClickTools() {
+describe('ToolRouter — Jelly 工具（issue #97 的點一下手勢；issue #124 合併＋右鍵選單）', () => {
+  /** 左鍵單擊（生成）與右鍵單擊（開選單）各自收集起來比對。 */
+  function makeJellyTool(hitTest?: (world: Point) => boolean) {
     const spawned: Point[] = [];
-    const removed: Point[] = [];
-    const rebuilt: Point[] = [];
-    const buckets = { spawn: spawned, removeJelly: removed, rebuildJelly: rebuilt };
+    const menus: { world: Point; screen: Point }[] = [];
     const { router, events } = makeRouter(undefined, undefined, {
-      onClickTool: (tool, world) => buckets[tool].push(world),
+      hitTest,
+      onJellyClick: (world) => spawned.push(world),
+      onJellyContextMenu: (world, screen) => menus.push({ world, screen }),
     });
-    return { router, events, spawned, removed, rebuilt };
+    router.setActiveTool('jelly');
+    return { router, events, spawned, menus };
   }
 
-  it('生成 Jelly：點一下 → onSpawn 收到按下處的世界座標，不 emit 任何 InputEvent', () => {
-    const { router, events, spawned, removed } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('左鍵點一下 → onJellyClick 收到按下處的世界座標，不 emit 任何 InputEvent', () => {
+    const { router, events, spawned } = makeJellyTool();
     router.down(1, 30, 40, 0);
     router.up(1, 30, 40, 120);
     expect(spawned).toEqual([{ x: 1030, y: 1040 }]);
-    expect(removed).toEqual([]);
     expect(events).toEqual([]);
   });
 
-  it('移除 Jelly：點一下 → onRemoveJelly 收到世界座標', () => {
-    const { router, spawned, removed } = makeClickTools();
-    router.setActiveTool('removeJelly');
+  it('點在既有 Jelly 上也照樣生成（不因命中 Jelly 改成別的動作）', () => {
+    const { router, spawned, menus } = makeJellyTool(() => true);
     router.down(1, 5, 7, 0);
     router.up(1, 5, 7, 80);
-    expect(removed).toEqual([{ x: 1005, y: 1007 }]);
-    expect(spawned).toEqual([]);
+    expect(spawned).toEqual([{ x: 1005, y: 1007 }]);
+    expect(menus).toEqual([]);
   });
 
   it('按住一陣子再放開（沒拖曳）仍算點一下——只要位置沒動就生成', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+    const { router, spawned } = makeJellyTool();
     router.down(1, 10, 10, 0);
     router.move(1, 12, 11);
     router.up(1, 12, 11, 3000);
     expect(spawned).toEqual([{ x: 1010, y: 1010 }]);
   });
 
-  it('拖曳（位移超過門檻）→ 不觸發回呼', () => {
-    const { router, spawned, removed } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('拖曳（位移超過門檻）→ 不生成', () => {
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.move(1, 40, 0);
     router.up(1, 40, 0, 100);
-
-    router.setActiveTool('removeJelly');
-    router.down(2, 0, 0, 200);
-    router.move(2, 0, 30);
-    router.up(2, 0, 30, 300);
-
     expect(spawned).toEqual([]);
-    expect(removed).toEqual([]);
   });
 
   it('拖出去又回到原點 → 仍不算點一下（中途已經判定為拖曳）', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.move(1, 50, 50);
     router.move(1, 0, 0);
@@ -1271,18 +875,16 @@ describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', (
     expect(spawned).toEqual([]);
   });
 
-  it('cancel → 不觸發回呼；之後再 up 也不會補送', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('cancel → 不生成；之後再 up 也不會補送', () => {
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.cancel(1);
     router.up(1, 0, 0, 100);
     expect(spawned).toEqual([]);
   });
 
-  it('沒有 down 過的 up 不觸發回呼；同一次 up 不會重送兩次', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('沒有 down 過的 up 不生成；同一次 up 不會重送兩次', () => {
+    const { router, spawned } = makeJellyTool();
     router.up(9, 0, 0, 100);
     expect(spawned).toEqual([]);
 
@@ -1293,8 +895,7 @@ describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', (
   });
 
   it('多指各自獨立：其中一指拖曳不影響另一指的點一下', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.down(2, 100, 100, 0);
     router.move(1, 60, 0); // 第一指拖曳
@@ -1303,99 +904,54 @@ describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', (
     expect(spawned).toEqual([{ x: 1100, y: 1100 }]);
   });
 
-  it('按下與放開之間切換工具 → 送到按下當下那個工具的回呼', () => {
-    const { router, spawned, removed } = makeClickTools();
-    router.setActiveTool('spawn');
-    router.down(1, 0, 0, 0);
-    router.setActiveTool('removeJelly');
-    router.up(1, 0, 0, 100);
-    expect(spawned).toEqual([{ x: 1000, y: 1000 }]);
-    expect(removed).toEqual([]);
-  });
-
-  // 按住途中切到「一般操作」這類完全不同的工具也一樣：進行中的點一下手勢在
-  // `move`／`up`／`cancel` 都先於 `activeTool` 分支處理，不會被別的工具吃掉。
-  it('按住途中切到一般操作 → 放開時仍完成這次點一下，且不留殘餘 session', () => {
-    const { router, spawned, events } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('按住途中切到抓取工具 → 放開時仍完成這次點一下，且不留殘餘 session', () => {
+    const { router, spawned, events } = makeJellyTool();
     router.down(1, 20, 30, 0);
-    router.setActiveTool('general');
+    selectGrab(router, 'single');
     router.up(1, 20, 30, 100);
     expect(spawned).toEqual([{ x: 1020, y: 1030 }]);
     expect(events).toEqual([]); // 沒有被當成一般操作的 Grab/Tap
 
-    // session 已清掉：接下來的一般操作是乾淨的一次 Grab。
+    // session 已清掉：接下來的單點抓取是乾淨的一次 Grab。
     router.down(2, 0, 0, 200);
     router.up(2, 0, 0, 1000);
     expect(events.map((e) => e.type)).toEqual(['grab', 'release']);
     expect(spawned).toHaveLength(1);
   });
 
-  it('按住途中切到一般操作、期間拖曳 → 仍判定為拖曳，不生成', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('按住途中切到抓取工具、期間拖曳 → 仍判定為拖曳，不生成', () => {
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
-    router.setActiveTool('general');
+    selectGrab(router, 'single');
     router.move(1, 50, 0);
     router.up(1, 50, 0, 200);
     expect(spawned).toEqual([]);
   });
 
-  it('按住途中切走工具後 cancel → 不觸發回呼', () => {
-    const { router, spawned } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('按住途中切走工具後 cancel → 不生成', () => {
+    const { router, spawned } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.setActiveTool('fan');
     router.cancel(1);
     expect(spawned).toEqual([]);
   });
 
-  it('重建 Jelly：點一下 → 回呼帶按下處的世界座標，不 emit 任何 InputEvent（issue #98）', () => {
-    const { router, events, spawned, removed, rebuilt } = makeClickTools();
-    router.setActiveTool('rebuildJelly');
-    router.down(1, 12, 34, 0);
-    router.up(1, 12, 34, 90);
-    expect(rebuilt).toEqual([{ x: 1012, y: 1034 }]);
-    expect(spawned).toEqual([]);
-    expect(removed).toEqual([]);
-    expect(events).toEqual([]);
-  });
-
-  it('重建 Jelly：拖曳（位移超過門檻）→ 不觸發回呼（issue #98）', () => {
-    const { router, rebuilt } = makeClickTools();
-    router.setActiveTool('rebuildJelly');
-    router.down(1, 0, 0, 0);
-    router.move(1, 40, 0);
-    router.up(1, 40, 0, 120);
-    expect(rebuilt).toEqual([]);
-  });
-
-  it('CLICK_TOOL_IDS 就是會走這條手勢的工具清單', () => {
-    expect([...CLICK_TOOL_IDS]).toEqual(['spawn', 'removeJelly', 'rebuildJelly']);
-  });
-
-  it('沒有注入回呼（未接線）→ 點一下什麼都不做，不爆炸', () => {
-    const { router, events } = makeRouter();
-    router.setActiveTool('spawn');
+  it('沒有注入回呼（未接線）→ 點一下、右鍵單擊什麼都不做，不爆炸', () => {
+    const { router, events } = makeRouter(undefined, undefined, { hitTest: () => true });
+    router.setActiveTool('jelly');
     router.down(1, 0, 0, 0);
     router.up(1, 0, 0, 100);
-    router.setActiveTool('removeJelly');
-    router.down(2, 0, 0, 200);
-    router.up(2, 0, 0, 300);
+    router.rightClick({ x: 0, y: 0 }, 0, 0);
     expect(events).toEqual([]);
   });
 
-  it('兩個工具下，一般操作的 Grab／Tap 完全不觸發；切回一般操作後恢復', () => {
-    const { router, events } = makeClickTools();
-    router.setActiveTool('spawn');
+  it('Jelly 工具下，單點抓取的 Grab／Tap 完全不觸發；切回抓取工具後恢復', () => {
+    const { router, events } = makeJellyTool();
     router.down(1, 0, 0, 0);
     router.up(1, 0, 0, 100);
-    router.setActiveTool('removeJelly');
-    router.down(2, 0, 0, 200);
-    router.up(2, 0, 0, 300);
     expect(events).toEqual([]);
 
-    router.setActiveTool('general');
+    selectGrab(router, 'single');
     router.down(3, 0, 0, 400);
     router.up(3, 0, 0, 500);
     expect(events).toEqual([
@@ -1404,12 +960,38 @@ describe('ToolRouter — 生成／移除／重建 Jelly（issue #97 / #98）', (
       { type: 'release', id: 3 },
     ]);
   });
+
+  it('右鍵單擊點中 Jelly → onJellyContextMenu 收到世界座標與畫布局部座標，不 emit、不生成', () => {
+    const { router, events, spawned, menus } = makeJellyTool(() => true);
+    router.rightClick({ x: 1012, y: 1034 }, 12, 34);
+    expect(menus).toEqual([{ world: { x: 1012, y: 1034 }, screen: { x: 12, y: 34 } }]);
+    expect(spawned).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('右鍵單擊點在空白處（沒命中 Jelly）→ 不開選單', () => {
+    const { router, menus } = makeJellyTool((w) => w.x > 1500);
+    router.rightClick({ x: 1012, y: 1034 }, 12, 34);
+    expect(menus).toEqual([]);
+    router.rightClick({ x: 1600, y: 1034 }, 600, 34);
+    expect(menus).toHaveLength(1);
+  });
+
+  it('其他工具下的右鍵單擊 → 不開 Jelly 選單、不 emit', () => {
+    const { router, events, menus } = makeJellyTool(() => true);
+    for (const tool of ['grab', 'pin', 'fan'] as const) {
+      router.setActiveTool(tool);
+      router.rightClick({ x: 1000, y: 1000 }, 0, 0);
+    }
+    expect(menus).toEqual([]);
+    expect(events).toEqual([]);
+  });
 });
 
 describe('ToolRouter — 大把抓取（issue #113 / V3 T4-1；ADR-0014）', () => {
   function makeHandful(extra?: Partial<ToolRouterOptions>) {
     const made = makeRouter(undefined, undefined, extra);
-    made.router.setActiveTool('handfulGrab');
+    selectGrab(made.router, 'handful');
     return made;
   }
 
@@ -1490,7 +1072,7 @@ describe('ToolRouter — 大把抓取（issue #113 / V3 T4-1；ADR-0014）', () 
   it('按住途中切走工具，這一把仍照常跟隨並放開', () => {
     const { router, events } = makeHandful();
     router.down(1, 0, 0, 0);
-    router.setActiveTool('general');
+    selectGrab(router, 'single');
     router.move(1, 30, 0);
     router.up(1, 30, 0, 500);
     expect(events.map((e) => e.type)).toEqual(['grab', 'moveGrab', 'release']);
@@ -1509,65 +1091,85 @@ describe('ToolRouter — 大把抓取（issue #113 / V3 T4-1；ADR-0014）', () 
   });
 });
 
-describe('ToolRouter — 調整目前工具半徑（issue #114 / V3 T4-2）', () => {
-  it('撒 Pin：每一格照拉霸 step 增減，回報新值', () => {
+describe('ToolRouter — 調整目前模式的數值（issue #114 調半徑；issue #122 推廣）', () => {
+  it('Pin 工具（兩種模式）：每一格照拉霸 step 增減，夾在拉霸的最小／最大值之間', () => {
     const { router } = makeRouter();
-    router.setActiveTool('spray');
-    router.setSprayParams({ radius: 140 });
-    expect(router.adjustActiveRadius(1)).toEqual({
-      tool: 'spray',
-      radius: 140 + SPRAY_RADIUS_RANGE.step,
+    router.setActiveTool('pin');
+    router.setPinBrushParams({ radius: 140 });
+    expect(router.adjustActiveValue(1)).toEqual({
+      key: 'pinBrushRadius',
+      value: 140 + PIN_BRUSH_RADIUS_RANGE.step,
     });
-    expect(router.adjustActiveRadius(-3)).toEqual({
-      tool: 'spray',
-      radius: 140 - 2 * SPRAY_RADIUS_RANGE.step,
+    router.setMode('pin', 'remove');
+    expect(router.adjustActiveValue(-3)).toEqual({
+      key: 'pinBrushRadius',
+      value: 140 - 2 * PIN_BRUSH_RADIUS_RANGE.step,
     });
-  });
-
-  it('夾在拉霸的最小／最大值之間', () => {
-    const { router } = makeRouter();
-    router.setActiveTool('erase');
-    router.setEraseParams({ radius: ERASE_RADIUS_RANGE.max });
-    expect(router.adjustActiveRadius(5)).toEqual({ tool: 'erase', radius: ERASE_RADIUS_RANGE.max });
-    router.setEraseParams({ radius: ERASE_RADIUS_RANGE.min + ERASE_RADIUS_RANGE.step });
-    expect(router.adjustActiveRadius(-10)).toEqual({
-      tool: 'erase',
-      radius: ERASE_RADIUS_RANGE.min,
+    expect(router.adjustActiveValue(100)).toEqual({
+      key: 'pinBrushRadius',
+      value: PIN_BRUSH_RADIUS_RANGE.max,
+    });
+    expect(router.adjustActiveValue(-100)).toEqual({
+      key: 'pinBrushRadius',
+      value: PIN_BRUSH_RADIUS_RANGE.min,
     });
   });
 
-  it('三個工具的半徑各自獨立', () => {
+  it('大把抓取半徑與 Pin 筆刷半徑各自獨立', () => {
     const { router } = makeRouter();
-    router.setSprayParams({ radius: 100 });
-    router.setEraseParams({ radius: 100 });
+    router.setPinBrushParams({ radius: 100 });
     router.setHandfulParams({ radius: 100 });
-    router.setActiveTool('erase');
-    router.adjustActiveRadius(2);
-    router.setActiveTool('spray');
-    expect(router.adjustActiveRadius(0)).toEqual({ tool: 'spray', radius: 100 });
-    router.setActiveTool('handfulGrab');
-    expect(router.adjustActiveRadius(0)).toEqual({ tool: 'handfulGrab', radius: 100 });
-    router.setActiveTool('erase');
-    expect(router.adjustActiveRadius(0)).toEqual({
-      tool: 'erase',
-      radius: 100 + 2 * ERASE_RADIUS_RANGE.step,
+    router.setActiveTool('pin');
+    router.adjustActiveValue(2);
+    selectGrab(router, 'handful');
+    expect(router.adjustActiveValue(0)).toEqual({ key: 'handfulRadius', value: 100 });
+    router.setActiveTool('pin');
+    expect(router.adjustActiveValue(0)).toEqual({
+      key: 'pinBrushRadius',
+      value: 100 + 2 * PIN_BRUSH_RADIUS_RANGE.step,
     });
   });
 
-  it('沒有半徑的工具回報「不處理」', () => {
+  it('抓取工具：大把模式調大把抓取半徑；單點、編隊模式回報「不處理」（照舊縮放）', () => {
     const { router } = makeRouter();
-    for (const tool of ['general', 'fan', 'formation', ...CLICK_TOOL_IDS] as const) {
+    router.setHandfulParams({ radius: 140 });
+    expect(router.adjustActiveValue(1)).toBeNull(); // 預設單點
+    router.setMode('grab', 'formation');
+    expect(router.adjustActiveValue(1)).toBeNull();
+    router.setMode('grab', 'handful');
+    expect(router.adjustActiveValue(1)).toEqual({
+      key: 'handfulRadius',
+      value: 140 + HANDFUL_RADIUS_RANGE.step,
+    });
+  });
+
+  it('沒有數值的工具回報「不處理」', () => {
+    const { router } = makeRouter();
+    for (const tool of ['fan', 'jelly'] as const) {
       router.setActiveTool(tool);
-      expect(router.adjustActiveRadius(1)).toBeNull();
+      expect(router.adjustActiveValue(1)).toBeNull();
+      expect(router.activeValue).toBeNull();
     }
+  });
+
+  it('activeValue 回報目前模式的數值但不改它（游標標籤用）', () => {
+    const { router } = makeRouter();
+    expect(router.activeValue).toBeNull(); // 單點
+    router.setHandfulParams({ radius: 180 });
+    router.setMode('grab', 'handful');
+    expect(router.activeValue).toEqual({ key: 'handfulRadius', value: 180 });
+    expect(router.activeValue).toEqual({ key: 'handfulRadius', value: 180 });
+    router.setActiveTool('pin');
+    router.setPinBrushParams({ radius: 60 });
+    expect(router.activeValue).toEqual({ key: 'pinBrushRadius', value: 60 });
   });
 
   it('大把抓取：只影響下一次按下，抓住中的那一把不受影響', () => {
     const { router, events } = makeRouter();
-    router.setActiveTool('handfulGrab');
+    selectGrab(router, 'handful');
     router.setHandfulParams({ radius: 140 });
     router.down(1, 0, 0, 0);
-    router.adjustActiveRadius(4);
+    router.adjustActiveValue(4);
     router.up(1, 0, 0, 50);
     expect(events).toEqual([
       { type: 'grab', id: 1, x: 1000, y: 1000, handfulRadius: 140 },
@@ -1583,5 +1185,171 @@ describe('ToolRouter — 調整目前工具半徑（issue #114 / V3 T4-2）', ()
       y: 1000,
       handfulRadius: 140 + 4 * HANDFUL_RADIUS_RANGE.step,
     });
+  });
+});
+
+describe('ToolRouter — 工具與模式（issue #122 / V4 T1；ADR-0016）', () => {
+  it('工具列的四個工具：抓取在最前（預設）、Pin、電風扇、Jelly（合併了生成／移除／重建）', () => {
+    expect([...TOOL_IDS]).toEqual(['grab', 'pin', 'fan', 'jelly']);
+  });
+
+  it('有模式的工具：抓取（單點／大把／編隊）、Pin（放／拔）', () => {
+    expect(modesOf('grab')).toEqual(['single', 'handful', 'formation']);
+    expect(modesOf('pin')).toEqual(['place', 'remove']);
+    for (const tool of TOOL_IDS.filter((t) => t !== 'grab' && t !== 'pin')) {
+      expect(modesOf(tool)).toEqual([]);
+    }
+  });
+
+  it('cycleMode 依序輪替目前工具的模式，最後一個繞回第一個', () => {
+    const { router } = makeRouter();
+    expect(router.cycleMode()).toBe('handful');
+    expect(router.currentMode).toBe('handful');
+    expect(router.cycleMode()).toBe('formation');
+    expect(router.cycleMode()).toBe('single');
+    expect(router.modeOf('grab')).toBe('single');
+  });
+
+  it('沒有模式的工具：cycleMode 回 null、currentMode 為 null，抓取工具的模式不受影響', () => {
+    const { router } = makeRouter();
+    router.setMode('grab', 'handful');
+    router.setActiveTool('fan');
+    expect(router.currentMode).toBeNull();
+    expect(router.cycleMode()).toBeNull();
+    expect(router.modeOf('grab')).toBe('handful');
+  });
+
+  it('每個工具各自記住模式：切走再切回，模式保留', () => {
+    const { router, events } = makeRouter();
+    router.setMode('grab', 'handful');
+    router.setMode('pin', 'remove');
+    router.setActiveTool('pin');
+    router.setActiveTool('grab');
+    expect(router.modeOf('pin')).toBe('remove');
+    expect(router.currentMode).toBe('handful');
+    router.down(1, 0, 0, 0);
+    expect(events[0]).toMatchObject({ type: 'grab', handfulRadius: DEFAULT_HANDFUL_RADIUS });
+  });
+
+  it('單點模式 = 原本的一般操作：grab → moveGrab → release，快速按放多一個 tap', () => {
+    const { router, events } = makeRouter();
+    router.down(1, 0, 0, 0);
+    router.move(1, 30, 0);
+    router.up(1, 30, 0, 500);
+    router.down(2, 5, 5, 600);
+    router.up(2, 5, 5, 650);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1000, y: 1000 },
+      { type: 'moveGrab', id: 1, x: 1030, y: 1000 },
+      { type: 'release', id: 1 },
+      { type: 'grab', id: 2, x: 1005, y: 1005 },
+      { type: 'tap', x: 1005, y: 1005 },
+      { type: 'release', id: 2 },
+    ]);
+  });
+
+  it('大把模式 = 原本的大把抓取：grab 帶 handfulRadius，快速按放是範圍 Tap', () => {
+    const { router, events } = makeRouter();
+    router.setMode('grab', 'handful');
+    router.down(1, 0, 0, 0);
+    router.up(1, 0, 0, 50);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1000, y: 1000, handfulRadius: DEFAULT_HANDFUL_RADIUS },
+      { type: 'tap', x: 1000, y: 1000, radius: DEFAULT_HANDFUL_RADIUS },
+      { type: 'release', id: 1 },
+    ]);
+  });
+
+  it('編隊模式 = 原本的編隊抓取：每個偏移點各一個 grab，放開各自 release', () => {
+    const { router, events } = makeRouter();
+    router.setMode('grab', 'formation');
+    router.beginFormationDefine();
+    router.down(9, 0, 0, 0);
+    router.down(10, 10, 0, 0);
+    router.endFormationDefine();
+    router.down(1, 100, 100, 0);
+    router.up(1, 100, 100, 500);
+    expect(events).toEqual([
+      { type: 'grab', id: 'formation:1:0', x: 1100, y: 1100 },
+      { type: 'grab', id: 'formation:1:1', x: 1110, y: 1100 },
+      { type: 'release', id: 'formation:1:0' },
+      { type: 'release', id: 'formation:1:1' },
+    ]);
+  });
+
+  it('編隊模式、還沒定義形狀 → 左鍵拖曳不做任何事', () => {
+    const { router, events } = makeRouter();
+    router.setMode('grab', 'formation');
+    router.down(1, 0, 0, 0);
+    router.move(1, 40, 0);
+    router.up(1, 40, 0, 500);
+    expect(events).toEqual([]);
+  });
+
+  it('拖曳中切模式（單點 → 大把）：進行中的手勢照舊跟隨、放開，新模式只套用到下一次按下', () => {
+    const { router, events } = makeRouter();
+    router.down(1, 0, 0, 0);
+    router.cycleMode(); // → 大把
+    router.move(1, 20, 0);
+    router.up(1, 20, 0, 500);
+    expect(events).toEqual([
+      { type: 'grab', id: 1, x: 1000, y: 1000 },
+      { type: 'moveGrab', id: 1, x: 1020, y: 1000 },
+      { type: 'release', id: 1 },
+    ]);
+    events.length = 0;
+    router.down(2, 0, 0, 600);
+    expect(events).toEqual([
+      { type: 'grab', id: 2, x: 1000, y: 1000, handfulRadius: DEFAULT_HANDFUL_RADIUS },
+    ]);
+  });
+
+  it('拖曳中切模式（大把 → 編隊）：這一把的快速按放仍是範圍 Tap', () => {
+    const { router, events } = makeRouter();
+    router.setMode('grab', 'handful');
+    router.down(1, 0, 0, 0);
+    router.setMode('grab', 'formation');
+    router.up(1, 0, 0, 50);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'tap', 'release']);
+    expect(events[1]).toEqual({ type: 'tap', x: 1000, y: 1000, radius: DEFAULT_HANDFUL_RADIUS });
+  });
+
+  it('拖曳中切模式（編隊 → 單點）：這一組照舊整組跟隨、整組放開', () => {
+    const { router, events } = makeRouter();
+    router.setMode('grab', 'formation');
+    router.beginFormationDefine();
+    router.down(9, 0, 0, 0);
+    router.down(10, 10, 0, 0);
+    router.endFormationDefine();
+    router.down(1, 0, 0, 0);
+    router.cycleMode(); // → 單點
+    router.move(1, 5, 0);
+    router.up(1, 5, 0, 500);
+    expect(events.map((e) => [e.type, 'id' in e ? e.id : null])).toEqual([
+      ['grab', 'formation:1:0'],
+      ['grab', 'formation:1:1'],
+      ['moveGrab', 'formation:1:0'],
+      ['moveGrab', 'formation:1:1'],
+      ['release', 'formation:1:0'],
+      ['release', 'formation:1:1'],
+    ]);
+  });
+
+  it('拖曳中切工具（抓取 → 電風扇）：進行中的抓取照舊放開，不被當成風扇放置', () => {
+    const { router, events } = makeRouter();
+    router.down(1, 0, 0, 0);
+    router.setActiveTool('fan');
+    router.move(1, 30, 0);
+    router.up(1, 30, 0, 500);
+    expect(events.map((e) => e.type)).toEqual(['grab', 'moveGrab', 'release']);
+  });
+
+  it('拖曳中切工具（電風扇 → 抓取）：這次仍完成風扇放置', () => {
+    const { router, events } = makeRouter();
+    router.setActiveTool('fan');
+    router.down(1, 0, 0, 0);
+    router.setActiveTool('grab');
+    router.up(1, 40, 0, 500);
+    expect(events.map((e) => e.type)).toEqual(['setFan']);
   });
 });
