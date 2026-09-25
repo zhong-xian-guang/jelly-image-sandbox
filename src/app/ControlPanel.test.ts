@@ -23,7 +23,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
   return {
     initial: {
       activeTool: 'grab',
-      toolModes: { grab: 'single', pin: 'place' },
+      toolModes: { grab: 'single', pin: 'place', fan: 'width' },
       showCursorLabel: true,
       boundary: 'infinite',
       softness: 0.5,
@@ -749,10 +749,11 @@ describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () =
     expect(card.children[1]!.classList.contains('jelly-mode-row')).toBe(true);
   });
 
-  it('電風扇的參數卡內容跟原本相同：兩個顯示開關、四條拉霸、移除風扇', () => {
+  it('電風扇的參數卡：模式鈕在最上方，其餘保留兩個顯示開關、四條拉霸、移除風扇', () => {
     const panel = new ControlPanel(makeOptions());
     clickTool(panel, 'fan');
-    const text = visibleCards(panel)[0]!.textContent!;
+    const card = visibleCards(panel)[0]!;
+    const text = card.textContent!;
     for (const part of [
       '顯示風扇範圍',
       '顯示風扇圖示',
@@ -764,6 +765,42 @@ describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () =
     ]) {
       expect(text).toContain(part);
     }
+    // 順序照 spec #121「側欄」：模式鈕最上方（children[0] 是卡片標題）。
+    expect(card.children[1]!.classList.contains('jelly-mode-row')).toBe(true);
+  });
+});
+
+describe('ControlPanel — 電風扇的模式鈕（issue #125）', () => {
+  it('四顆模式鈕：寬度／強度／衰減／頻率，initial.toolModes.fan 決定高亮；點了回呼 onModeChange("fan", 模式)', () => {
+    const opts = makeOptions({
+      initial: {
+        ...makeOptions().initial,
+        toolModes: { grab: 'single', pin: 'place', fan: 'strength' },
+      },
+    });
+    const panel = new ControlPanel(opts);
+    const buttons = [
+      ...panel.element.querySelectorAll('.jelly-mode-row[data-tool="fan"] button'),
+    ] as HTMLButtonElement[];
+    expect(buttons.map((b) => [b.dataset.mode, b.textContent])).toEqual([
+      ['width', '寬度'],
+      ['strength', '強度'],
+      ['falloff', '衰減'],
+      ['frequency', '頻率'],
+    ]);
+    expect(highlightedModes(panel, 'fan')).toEqual(['strength']);
+    modeButton(panel, 'frequency').click();
+    expect(opts.onModeChange).toHaveBeenCalledWith('fan', 'frequency');
+    expect(highlightedModes(panel, 'fan')).toEqual(['frequency']);
+    expect(highlightedModes(panel, 'grab')).toEqual(['single']);
+  });
+
+  it('setToolMode("fan", …)（中鍵輪替灌回來）→ 高亮同步、不回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    panel.setToolMode('fan', 'falloff');
+    expect(highlightedModes(panel, 'fan')).toEqual(['falloff']);
+    expect(opts.onModeChange).not.toHaveBeenCalled();
   });
 });
 
@@ -771,7 +808,10 @@ describe('ControlPanel — 抓取工具的模式鈕（issue #122）', () => {
   it('三顆模式鈕：單點／大把／編隊，initial.toolModes 決定一開始的高亮', () => {
     const panel = new ControlPanel(
       makeOptions({
-        initial: { ...makeOptions().initial, toolModes: { grab: 'handful', pin: 'place' } },
+        initial: {
+          ...makeOptions().initial,
+          toolModes: { grab: 'handful', pin: 'place', fan: 'width' },
+        },
       }),
     );
     const buttons = [
@@ -1069,7 +1109,10 @@ describe('ControlPanel — Pin 工具（issue #123 / V4 T2）', () => {
 
   it('模式鈕：放／拔，initial.toolModes.pin 決定高亮；點了回呼 onModeChange("pin", 模式)', () => {
     const opts = makeOptions({
-      initial: { ...makeOptions().initial, toolModes: { grab: 'single', pin: 'remove' } },
+      initial: {
+        ...makeOptions().initial,
+        toolModes: { grab: 'single', pin: 'remove', fan: 'width' },
+      },
     });
     const panel = new ControlPanel(opts);
     const buttons = [
@@ -1428,5 +1471,24 @@ describe('ControlPanel — 右鍵＋滾輪調數值的拉霸同步（issue #114�
 
     expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
     expect(opts.onHandfulRadiusChange).not.toHaveBeenCalled();
+  });
+
+  it('電風扇四個參數（issue #125）：setModeValue 各自灌回對應的拉霸，不觸發回呼', () => {
+    const opts = makeOptions();
+    const panel = new ControlPanel(opts);
+    const cases = [
+      ['fanWidth', '風扇寬度', 185],
+      ['fanStrength', '風扇強度', 4200],
+      ['fanFalloffExponent', '風扇衰減程度', 2.3],
+      ['fanFrequency', '風扇頻率', 0.7],
+    ] as const;
+    for (const [key, label, value] of cases) {
+      panel.setModeValue(key, value);
+      expect(findRangeInputByLabel(panel, label).value).toBe(String(value));
+    }
+    expect(opts.onFanWidthChange).not.toHaveBeenCalled();
+    expect(opts.onFanStrengthChange).not.toHaveBeenCalled();
+    expect(opts.onFanFalloffChange).not.toHaveBeenCalled();
+    expect(opts.onFanFrequencyChange).not.toHaveBeenCalled();
   });
 });
