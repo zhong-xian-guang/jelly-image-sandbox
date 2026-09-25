@@ -774,6 +774,20 @@ describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () =
     }
   });
 
+  it('操作說明一段一個不斷行的區塊，只在「｜」之後換行（issue #141）', () => {
+    const panel = new ControlPanel(makeOptions());
+    for (const tool of ['grab', 'pin', 'fan', 'jelly'] as const) {
+      clickTool(panel, tool);
+      const help = visibleCards(panel)[0]!.querySelector('.jelly-tool-help')!;
+      const parts = [...help.children].map((el) => el.textContent);
+      const segments = TOOL_HELP_LINES[tool].split('｜');
+      expect(parts).toEqual(segments.map((seg, i) => (i < segments.length - 1 ? `${seg}｜` : seg)));
+      for (const el of help.children) {
+        expect(el.classList.contains('jelly-tool-help-part')).toBe(true);
+      }
+    }
+  });
+
   it('抓取的參數卡：模式鈕、大把抓取半徑、顯示大把抓取範圍、顯示編隊抓取提示、設定形狀按鈕', () => {
     const panel = new ControlPanel(makeOptions());
     const card = visibleCards(panel)[0]!;
