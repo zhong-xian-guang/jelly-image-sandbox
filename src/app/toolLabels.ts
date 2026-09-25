@@ -20,4 +20,9 @@ export const MODE_LABELS: Readonly<Record<ToolMode, string>> = {
   formation: '編隊',
   place: '放',
   remove: '拔',
+  // 電風扇的模式＝右鍵＋滾輪調的參數（issue #125）。
+  width: '寬度',
+  strength: '強度',
+  falloff: '衰減',
+  frequency: '頻率',
 };
