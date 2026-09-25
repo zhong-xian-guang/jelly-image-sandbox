@@ -209,6 +209,7 @@ import { CanvasHover } from './CanvasHover';
 import { ContextMenu, jellyMenuItems, type JellyMenuItemId } from './ContextMenu';
 import { ControlPanel } from './ControlPanel';
 import { CursorLabel, cursorLabelText, type FormationShapeState } from './CursorLabel';
+import { KeyboardShortcuts } from './KeyboardShortcuts';
 import { canvasToPng, drawDefaultTexture } from './defaultJelly';
 import {
   DEMOS,
@@ -416,6 +417,8 @@ export class JellySandbox {
    * 作用在點中的那一塊（見 `openJellyMenu`）。切換工具時關掉。
    */
   private readonly jellyMenu: ContextMenu;
+  /** 鍵盤快捷鍵（issue #126）：1–4 切工具、播放中空白鍵暫停／繼續。在 window 上聽，`destroy` 要解掉。 */
+  private readonly keyboardShortcuts: KeyboardShortcuts;
   private readonly demoRunner = new DemoRunner();
   private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
@@ -760,6 +763,11 @@ export class JellySandbox {
     root.appendChild(this.cursorLabel.element);
     this.jellyMenu = new ContextMenu({ dismissBlockTarget: this.renderer.canvas });
     root.appendChild(this.jellyMenu.element);
+    this.keyboardShortcuts = new KeyboardShortcuts({
+      selectTool: (tool) => this.setActiveTool(tool),
+      isPlaying: () => this.demoRunner.isRunning,
+      togglePause: () => this.togglePause(),
+    });
     this.applyToolVisuals();
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
@@ -810,6 +818,7 @@ export class JellySandbox {
     this.handfulRange.destroy();
     this.cursorLabel.destroy();
     this.jellyMenu.destroy(); // 開著時在 window 上掛了監聽
+    this.keyboardShortcuts.destroy(); // 在 window 上掛了鍵盤監聽
     this.input.destroy();
     this.cameraInput.destroy();
     this.renderer.destroy();
@@ -1403,13 +1412,16 @@ export class JellySandbox {
   }
 
   /**
-   * 目前工具變更（issue #65；issue #122 起由側欄工具列觸發，ADR-0016）——轉發給
-   * `PointerInput.setActiveTool`；`activeTool` 另外存一份，因為 `PointerInput` 沒有 getter，
-   * 游標、筆刷、Pin 標記等視覺回饋靠它判定。切工具會改變游標／標記／圓圈的視覺回饋，所以要跟著重算。
+   * 目前工具變更（issue #65 / V2 T3-1）——側欄工具列（`onToolChange`，issue #122 起，ADR-0016）
+   * 與數字鍵 1–4（issue #126）都走這裡。轉發給 `PointerInput.setActiveTool`（只影響下一次按下）；
+   * `activeTool` 另外存一份，因為 `PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠它
+   * 判定。工具列高亮與參數卡也在這裡同步（從工具列按下時面板自己已經切過，重設一次無妨）。切工具
+   * 會改變游標／標記／圓圈的視覺回饋，所以要跟著重算。
    */
   private setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
     this.input.setActiveTool(tool);
+    this.controlPanel.setActiveTool(tool);
     this.jellyMenu.close(); // Jelly 右鍵選單在切換工具時關閉（issue #124）
     this.applyToolVisuals();
   }
