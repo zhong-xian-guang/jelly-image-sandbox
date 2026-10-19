@@ -130,7 +130,7 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
       {
         keys: '電風扇照片',
         action:
-          'Info-farmer（தகவலுழவன்）攝，Wikimedia Commons〈Fa, table,Tamil Nadu.450.jpeg〉，CC BY-SA 3.0；本作去背並移除電線後的修改版同樣以 CC BY-SA 3.0 釋出',
+          'Info-farmer（தகவலுழவன்）攝，Wikimedia Commons〈Fa, table,Tamil Nadu.450.jpeg〉，CC BY-SA 3.0（creativecommons.org/licenses/by-sa/3.0）；本作去背並移除電線與插頭後的修改版同樣以 CC BY-SA 3.0 釋出',
       },
     ],
   },

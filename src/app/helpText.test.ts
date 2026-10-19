@@ -30,7 +30,13 @@ describe('素材來源（issue #143）', () => {
     const credits = HELP_GROUPS.at(-1)!;
     expect(credits.title).toContain('素材來源');
     const photo = credits.entries.find((e) => e.keys === '電風扇照片')!;
-    for (const text of ['Info-farmer', 'Wikimedia Commons', 'CC BY-SA 3.0', '修改']) {
+    for (const text of [
+      'Info-farmer',
+      'Wikimedia Commons',
+      'CC BY-SA 3.0',
+      'creativecommons.org/licenses/by-sa/3.0',
+      '修改',
+    ]) {
       expect(photo.action).toContain(text);
     }
   });
