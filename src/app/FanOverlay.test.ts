@@ -73,7 +73,7 @@ describe('FanOverlay 圖示外觀（issue #143）', () => {
     expect(parts(overlay).vector.getAttribute('transform')).toBe('translate(50 60) rotate(180)');
   });
 
-  it('照片的網罩中心對齊圖示錨點、網罩縱向半徑＝radiusPx', () => {
+  it('照片的網罩外框圓環中心對齊圖示錨點、圓環縱向半長＝radiusPx', () => {
     const overlay = new FanOverlay();
     const { image } = parts(overlay);
     for (const r of [100, 37]) {
