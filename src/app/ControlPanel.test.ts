@@ -46,6 +46,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
       showPins: true,
       followLocked: false,
       showWireframe: false,
+      fanIconStyle: 'vector',
       recordTarget: 'action',
       showFanRange: true,
       showFanIcon: true,
@@ -113,6 +114,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onRunDemo: vi.fn(),
     onReset: vi.fn(),
     onWireframeChange: vi.fn(),
+    onFanIconStyleChange: vi.fn(),
     onRecordTargetChange: vi.fn(),
     onToggleRecording: vi.fn(),
     onPlayAll: vi.fn(),
@@ -550,6 +552,35 @@ describe('ControlPanel — 邊界下拉（issue #92 / V3 T2-2；ADR-0012）', ()
     panel.setBoundary('floor');
     expect(boundarySelect(panel).value).toBe('floor');
     expect(opts.onBoundaryChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('ControlPanel — 風扇圖示外觀下拉（issue #143）', () => {
+  const fanIconSelect = (panel: ControlPanel): HTMLSelectElement =>
+    labelByText(panel, '風扇圖示外觀').querySelector('select')!;
+
+  it('兩個選項：向量／照片，初始值來自 initial.fanIconStyle', () => {
+    const panel = new ControlPanel(makeOptions());
+    const options = [...fanIconSelect(panel).options].map((o) => [o.value, o.textContent]);
+    expect(options).toEqual([
+      ['vector', '向量'],
+      ['photo', '照片'],
+    ]);
+    expect(fanIconSelect(panel).value).toBe('vector');
+    const base = makeOptions();
+    const photoPanel = new ControlPanel({
+      ...base,
+      initial: { ...base.initial, fanIconStyle: 'photo' },
+    });
+    expect(fanIconSelect(photoPanel).value).toBe('photo');
+  });
+
+  it("選「照片」→ onFanIconStyleChange 收到 'photo'", () => {
+    const opts = makeOptions();
+    const select = fanIconSelect(new ControlPanel(opts));
+    select.value = 'photo';
+    select.dispatchEvent(new Event('change'));
+    expect(opts.onFanIconStyleChange).toHaveBeenCalledWith('photo');
   });
 });
 
@@ -1651,6 +1682,7 @@ describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () =>
       [buttonByText(panel, '＋ 新增群組'), 'record'],
       [panel.element.querySelector('.jelly-perf-status')!, 'dev'],
       [labelByText(panel, '顯示網格'), 'dev'],
+      [labelByText(panel, '風扇圖示外觀'), 'dev'],
     ];
     for (const [el, section] of expected) {
       expect([el.textContent, sectionOf(el)]).toEqual([el.textContent, section]);

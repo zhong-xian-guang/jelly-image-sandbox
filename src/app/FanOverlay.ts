@@ -33,7 +33,20 @@
  * 矩形線框太干擾，兩種情境值得分開控制。實作上兩者都是疊在 `update` 的
  * `is-present`（有沒有風扇）之上的獨立開關，用 `!important` 的
  * `.jelly-fan-overlay-part-hidden` 蓋掉，不依賴 CSS 規則的宣告順序。
+ *
+ * **照片外觀**（issue #143）：開發者分區可以把圖示換成一張去背的真實桌扇照片
+ * （`setIconStyle('photo')`，離線錄製素材用）。照片是跟向量 `<g>` 並排的另一個
+ * `<g>`，同樣以圖示錨點為原點、面向 +x，網罩中心對齊錨點、網罩縱向半徑＝
+ * `radiusPx`（跟向量護罩的 `ry` 一樣），寬度滑桿照樣控制大小。差別在往左吹
+ * （`cos(angle) < 0`）時多一個 `scale(1 -1)`：先上下翻再旋轉，在畫面上等於
+ * 水平翻轉，照片裡的風扇才不會倒立——照片的底座是寫實的，倒過來比向量圖示的
+ * 風格化支架突兀得多，所以只有照片這樣做，向量圖示維持整組旋轉。「顯示風扇
+ * 圖示」跟外觀選擇是兩個獨立理由，藏哪一個由 `applyIconVisibility` 一起算，
+ * 不讓兩個開關搶同一個 class。
  */
+
+import fanPhotoUrl from '../assets/fan-photo.webp';
+import type { FanIconStyle } from './fanIconStyle';
 
 /**
  * 護罩半徑（螢幕像素，＝橢圓縱向半徑 `ry`）的可視下限／上限——只防兩個極端：
@@ -44,6 +57,18 @@
  */
 const MIN_RADIUS_PX = 6;
 const MAX_RADIUS_PX = 400;
+
+/**
+ * 照片裡網罩的位置（issue #143），都是對整張圖的比例：`centerX`/`centerY`＝網罩中心
+ * 佔圖寬／圖高的比例，`radius`＝網罩縱向半徑佔圖高的比例，`aspect`＝圖寬／圖高。
+ * 在去背原圖（808×1423）上量的：網罩中心約 (580, 617)、上下緣約 y = 65／1170。
+ */
+export const FAN_PHOTO_GUARD = {
+  centerX: 580 / 808,
+  centerY: 617 / 1423,
+  radius: 552 / 1423,
+  aspect: 808 / 1423,
+} as const;
 
 export interface FanOverlayCorner {
   /** 畫布局部座標（左上為原點），即 `worldToScreen` 的輸出。 */
@@ -81,6 +106,11 @@ export class FanOverlay {
   private readonly curve: SVGPathElement;
   private readonly base: SVGRectElement;
   private readonly wind: SVGPathElement;
+  /** 照片外觀（issue #143）：外層 `<g>` 管位置／朝向，裡面的 `<image>` 依半徑改大小。 */
+  private readonly photoGroup: SVGGElement;
+  private readonly photo: SVGImageElement;
+  private iconStyle: FanIconStyle = 'vector';
+  private showIcon = true;
   /** 上一次畫的護罩半徑——值沒變就不重算各部件的座標／path 字串。 */
   private lastRadiusPx: number | null = null;
 
@@ -106,7 +136,16 @@ export class FanOverlay {
     this.centerline = icon.centerline;
     this.wind = icon.wind;
     svg.appendChild(this.iconGroup);
+
+    const ns = 'http://www.w3.org/2000/svg';
+    this.photoGroup = document.createElementNS(ns, 'g');
+    this.photoGroup.setAttribute('class', 'jelly-fan-overlay-photo');
+    this.photo = document.createElementNS(ns, 'image');
+    this.photo.setAttribute('href', fanPhotoUrl);
+    this.photoGroup.appendChild(this.photo);
+    svg.appendChild(this.photoGroup);
     this.element.appendChild(svg);
+    this.applyIconVisibility();
   }
 
   /**
@@ -125,6 +164,8 @@ export class FanOverlay {
     const { x, y, angleRad, radiusPx } = state.icon;
     const deg = (angleRad * 180) / Math.PI;
     this.iconGroup.setAttribute('transform', `translate(${x} ${y}) rotate(${deg})`);
+    const mirror = Math.cos(angleRad) < 0 ? ' scale(1 -1)' : '';
+    this.photoGroup.setAttribute('transform', `translate(${x} ${y}) rotate(${deg})${mirror}`);
 
     if (radiusPx !== this.lastRadiusPx) {
       this.lastRadiusPx = radiusPx;
@@ -188,6 +229,13 @@ export class FanOverlay {
     );
 
     this.wind.setAttribute('d', windPath(guardRx, guardRy));
+
+    const photoH = R / FAN_PHOTO_GUARD.radius;
+    const photoW = photoH * FAN_PHOTO_GUARD.aspect;
+    this.photo.setAttribute('x', String(-photoW * FAN_PHOTO_GUARD.centerX));
+    this.photo.setAttribute('y', String(-photoH * FAN_PHOTO_GUARD.centerY));
+    this.photo.setAttribute('width', String(photoW));
+    this.photo.setAttribute('height', String(photoH));
   }
 
   /**
@@ -202,7 +250,20 @@ export class FanOverlay {
 
   /** 「顯示風扇圖示」開關（issue #67 事後檢視追加）——只管圖示，同 `setShowRange` 的獨立性說明。 */
   setShowIcon(visible: boolean): void {
-    this.iconGroup.classList.toggle('jelly-fan-overlay-part-hidden', !visible);
+    this.showIcon = visible;
+    this.applyIconVisibility();
+  }
+
+  /** 開發者分區的「風扇圖示外觀」選擇（issue #143）：向量圖示或照片，見類別頂端「照片外觀」。 */
+  setIconStyle(style: FanIconStyle): void {
+    this.iconStyle = style;
+    this.applyIconVisibility();
+  }
+
+  private applyIconVisibility(): void {
+    const hidden = 'jelly-fan-overlay-part-hidden';
+    this.iconGroup.classList.toggle(hidden, !this.showIcon || this.iconStyle !== 'vector');
+    this.photoGroup.classList.toggle(hidden, !this.showIcon || this.iconStyle !== 'photo');
   }
 
   destroy(): void {

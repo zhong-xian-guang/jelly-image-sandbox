@@ -880,6 +880,15 @@ body {
   display: block;
 }
 
+/** 照片外觀（issue #143）——同上：沒有風扇時藏起來；位置／大小全由 `FanOverlay` 的 JS 算。 */
+.jelly-fan-overlay-photo {
+  display: none;
+}
+
+.jelly-fan-overlay.is-present .jelly-fan-overlay-photo {
+  display: block;
+}
+
 /** 底座／弧形支架／頸關節——比馬達殼更暗一階，暗示是「桌面下方的結構」。 */
 .jelly-fan-overlay-icon-base,
 .jelly-fan-overlay-icon-tilt {

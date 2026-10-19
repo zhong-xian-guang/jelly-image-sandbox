@@ -84,6 +84,7 @@ import {
   type PanelSectionId,
 } from './panelLayout';
 import { CameraControls, PlaybackBar } from './CanvasControls';
+import type { FanIconStyle } from './fanIconStyle';
 import {
   confirmOnSecondClick,
   createRangeSlider,
@@ -205,6 +206,8 @@ export interface ControlPanelInitial {
   followLocked: boolean;
   /** 網格線框開關（debug 用）。 */
   showWireframe: boolean;
+  /** 開發者分區「風扇圖示外觀」下拉的初始值（issue #143）——向量圖示或去背照片。 */
+  fanIconStyle: FanIconStyle;
   /** 「錄製目標」選擇器的初始值（issue #33）。 */
   recordTarget: RecordTarget;
   /**
@@ -412,6 +415,8 @@ export interface ControlPanelOptions {
   onRunDemo: (id: string) => void;
   onReset: () => void;
   onWireframeChange: (visible: boolean) => void;
+  /** 開發者分區「風扇圖示外觀」下拉變更（issue #143）。 */
+  onFanIconStyleChange: (style: FanIconStyle) => void;
   /** 「錄製目標」選擇器變更（issue #33）——只錄動作／只錄運鏡／兩者同時。 */
   onRecordTargetChange: (target: RecordTarget) => void;
   /** 「● 錄製」／「■ 停止錄製」切換鈕（issue #29）。 */
@@ -594,7 +599,16 @@ export class ControlPanel {
 
     const pinRows = this.pinRows(opts.initial.showPins, opts.onClearPins, opts.onShowPinsChange);
 
-    const boundary = this.boundaryRow(opts.initial.boundary, opts.onBoundaryChange);
+    const boundary = this.selectRow(
+      '邊界',
+      [
+        ['infinite', '無限'],
+        ['walled', '有牆'],
+        ['floor', '僅地板'],
+      ],
+      opts.initial.boundary,
+      opts.onBoundaryChange,
+    );
     this.boundarySelect = boundary.select;
     const softness = createRangeSlider(
       '軟硬度',
@@ -764,7 +778,17 @@ export class ControlPanel {
       clearAllButton,
     );
 
-    const target = this.recordTargetRow(opts.initial.recordTarget, opts.onRecordTargetChange);
+    // 「錄製目標」選擇器（issue #33）：只錄動作／只錄運鏡／兩者同時。按下錄製前選定。
+    const target = this.selectRow(
+      '錄製目標',
+      [
+        ['action', '只錄動作'],
+        ['camera', '只錄運鏡'],
+        ['both', '兩者同時'],
+      ],
+      opts.initial.recordTarget,
+      opts.onRecordTargetChange,
+    );
     this.recordTargetSelect = target.select;
     const setupPins = this.setupPinsRow(opts.onSnapshotSetupPins, opts.onClearSetupPins);
     this.setupPinsCountEl = setupPins.countEl;
@@ -809,6 +833,16 @@ export class ControlPanel {
       dev: [
         this.perfStatus,
         this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
+        // 風扇圖示外觀（issue #143）：向量圖示或去背照片。
+        this.selectRow(
+          '風扇圖示外觀',
+          [
+            ['vector', '向量'],
+            ['photo', '照片'],
+          ],
+          opts.initial.fanIconStyle,
+          opts.onFanIconStyleChange,
+        ).row,
       ],
     };
 
@@ -1370,28 +1404,30 @@ export class ControlPanel {
     return row;
   }
 
-  private boundaryRow(
-    initial: BoundaryMode,
-    onChange: (mode: BoundaryMode) => void,
+  /**
+   * 下拉選單列（邊界、錄製目標、風扇圖示外觀共用）：`options` 是 `[值, 顯示文字]`，
+   * 依序變成 `<option>`。回傳 `select` 讓需要從外部同步顯示的（如 `setBoundary`）記起來。
+   */
+  private selectRow<T extends string>(
+    label: string,
+    options: readonly (readonly [T, string])[],
+    initial: T,
+    onChange: (value: T) => void,
   ): { row: HTMLElement; select: HTMLSelectElement } {
     const row = document.createElement('label');
     row.className = 'jelly-control-row';
 
     const select = document.createElement('select');
-    for (const [value, text] of [
-      ['infinite', '無限'],
-      ['walled', '有牆'],
-      ['floor', '僅地板'],
-    ] as const) {
+    for (const [value, text] of options) {
       const option = document.createElement('option');
       option.value = value;
       option.textContent = text;
       option.selected = value === initial;
       select.appendChild(option);
     }
-    select.addEventListener('change', () => onChange(select.value as BoundaryMode));
+    select.addEventListener('change', () => onChange(select.value as T));
 
-    row.append('邊界', select);
+    row.append(label, select);
     return { row, select };
   }
 
@@ -1529,32 +1565,6 @@ export class ControlPanel {
     }
 
     return el;
-  }
-
-  /** 「錄製目標」選擇器（issue #33）：只錄動作／只錄運鏡／兩者同時。按下錄製前選定。 */
-  private recordTargetRow(
-    initial: RecordTarget,
-    onChange: (target: RecordTarget) => void,
-  ): { row: HTMLElement; select: HTMLSelectElement } {
-    const row = document.createElement('label');
-    row.className = 'jelly-control-row';
-
-    const select = document.createElement('select');
-    for (const [value, text] of [
-      ['action', '只錄動作'],
-      ['camera', '只錄運鏡'],
-      ['both', '兩者同時'],
-    ] as const) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = text;
-      option.selected = value === initial;
-      select.appendChild(option);
-    }
-    select.addEventListener('change', () => onChange(select.value as RecordTarget));
-
-    row.append('錄製目標', select);
-    return { row, select };
   }
 
   /**
