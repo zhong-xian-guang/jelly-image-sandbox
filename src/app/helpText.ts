@@ -122,6 +122,18 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
       { keys: 'Esc', action: '關閉選單或這個說明；離開乾淨畫面' },
     ],
   },
+  // 電風扇照片（issue #143；開發者分區「風扇圖示外觀」選「照片」時用）是 CC BY-SA 3.0，
+  // 發佈包裡要標作者、出處、授權，並說明這份去背修改版同樣以 CC BY-SA 3.0 釋出。
+  {
+    title: '📷 素材來源',
+    entries: [
+      {
+        keys: '電風扇照片',
+        action:
+          'Info-farmer（தகவலுழவன்）攝，Wikimedia Commons〈Fa, table,Tamil Nadu.450.jpeg〉，CC BY-SA 3.0；本作去背並移除電線後的修改版同樣以 CC BY-SA 3.0 釋出',
+      },
+    ],
+  },
 ];
 
 /** 編隊形狀定義中，畫布上方那一行說明（spec #127；它是提示，見 `FormationDefineHint`）。 */

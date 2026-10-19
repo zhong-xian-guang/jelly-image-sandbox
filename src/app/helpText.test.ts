@@ -23,3 +23,15 @@ describe('抓取的右鍵＋滾輪說明跟實際行為一致（issue #138）', 
     );
   });
 });
+
+/** 電風扇照片是 CC BY-SA 3.0（issue #143）：發佈包裡要標出作者、授權，並說明修改版同授權釋出。 */
+describe('素材來源（issue #143）', () => {
+  it('「?」浮層最後一組標出電風扇照片的作者、出處與授權', () => {
+    const credits = HELP_GROUPS.at(-1)!;
+    expect(credits.title).toContain('素材來源');
+    const photo = credits.entries.find((e) => e.keys === '電風扇照片')!;
+    for (const text of ['Info-farmer', 'Wikimedia Commons', 'CC BY-SA 3.0', '修改']) {
+      expect(photo.action).toContain(text);
+    }
+  });
+});

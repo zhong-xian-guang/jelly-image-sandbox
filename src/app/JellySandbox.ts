@@ -226,6 +226,7 @@ import {
   stepToSeconds,
 } from './demos';
 import { DropImportInput } from './DropImportInput';
+import { loadFanIconStyle, saveFanIconStyle } from './fanIconStyle';
 import { clampFanIconRadiusPx, FanOverlay } from './FanOverlay';
 import { FileImportInput } from './FileImportInput';
 import { FixedStepAccumulator } from './FixedStepAccumulator';
@@ -645,6 +646,8 @@ export class JellySandbox {
       onReject: (message) => this.showNotice(message),
     });
 
+    // 風扇圖示外觀（issue #143）：開發者設定，上次的選擇存在 localStorage。
+    const fanIconStyle = loadFanIconStyle(browserStorage());
     this.controlPanel = new ControlPanel({
       initial: {
         activeTool: this.activeTool,
@@ -661,6 +664,7 @@ export class JellySandbox {
         showPins: this.hintIntent.pins,
         followLocked: !this.cameraState.followEnabled,
         showWireframe: this.hintIntent.wireframe,
+        fanIconStyle,
         recordTarget: this.recordTarget,
         showFanRange: this.hintIntent.fanRange,
         showFanIcon: this.hintIntent.fanIcon,
@@ -729,6 +733,10 @@ export class JellySandbox {
       onRunDemo: (id) => this.runDemo(id),
       onReset: () => this.resetSim(),
       onWireframeChange: (visible) => this.setHintVisible('wireframe', visible),
+      onFanIconStyleChange: (style) => {
+        this.fanOverlay.setIconStyle(style);
+        saveFanIconStyle(browserStorage(), style);
+      },
       onRecordTargetChange: (target) => {
         this.recordTarget = target;
       },
@@ -757,6 +765,7 @@ export class JellySandbox {
     this.pinMarkers = new PinMarkers();
     root.appendChild(this.pinMarkers.element);
     this.fanOverlay = new FanOverlay();
+    this.fanOverlay.setIconStyle(fanIconStyle);
     root.appendChild(this.fanOverlay.element);
     this.formationOverlay = new FormationOverlay();
     root.appendChild(this.formationOverlay.element);

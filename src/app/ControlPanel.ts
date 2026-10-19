@@ -84,6 +84,7 @@ import {
   type PanelSectionId,
 } from './panelLayout';
 import { CameraControls, PlaybackBar } from './CanvasControls';
+import type { FanIconStyle } from './fanIconStyle';
 import {
   confirmOnSecondClick,
   createRangeSlider,
@@ -205,6 +206,8 @@ export interface ControlPanelInitial {
   followLocked: boolean;
   /** 網格線框開關（debug 用）。 */
   showWireframe: boolean;
+  /** 開發者分區「風扇圖示外觀」下拉的初始值（issue #143）——向量圖示或去背照片。 */
+  fanIconStyle: FanIconStyle;
   /** 「錄製目標」選擇器的初始值（issue #33）。 */
   recordTarget: RecordTarget;
   /**
@@ -412,6 +415,8 @@ export interface ControlPanelOptions {
   onRunDemo: (id: string) => void;
   onReset: () => void;
   onWireframeChange: (visible: boolean) => void;
+  /** 開發者分區「風扇圖示外觀」下拉變更（issue #143）。 */
+  onFanIconStyleChange: (style: FanIconStyle) => void;
   /** 「錄製目標」選擇器變更（issue #33）——只錄動作／只錄運鏡／兩者同時。 */
   onRecordTargetChange: (target: RecordTarget) => void;
   /** 「● 錄製」／「■ 停止錄製」切換鈕（issue #29）。 */
@@ -809,6 +814,7 @@ export class ControlPanel {
       dev: [
         this.perfStatus,
         this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
+        this.fanIconStyleRow(opts.initial.fanIconStyle, opts.onFanIconStyleChange),
       ],
     };
 
@@ -1367,6 +1373,31 @@ export class ControlPanel {
     });
 
     row.append(button);
+    return row;
+  }
+
+  /** 開發者分區的「風扇圖示外觀」下拉（issue #143）——寫法同 `boundaryRow`。 */
+  private fanIconStyleRow(
+    initial: FanIconStyle,
+    onChange: (style: FanIconStyle) => void,
+  ): HTMLElement {
+    const row = document.createElement('label');
+    row.className = 'jelly-control-row';
+
+    const select = document.createElement('select');
+    for (const [value, text] of [
+      ['vector', '向量'],
+      ['photo', '照片'],
+    ] as const) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      option.selected = value === initial;
+      select.appendChild(option);
+    }
+    select.addEventListener('change', () => onChange(select.value as FanIconStyle));
+
+    row.append('風扇圖示外觀', select);
     return row;
   }
 
