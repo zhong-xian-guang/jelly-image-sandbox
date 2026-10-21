@@ -34,6 +34,10 @@
  * Jelly、線框、邊界線都畫在它上面，世界→螢幕轉換跟 Jelly 共用同一個相機。只在清單變了時呼叫，
  * 不必每幀。貼圖來源由呼叫端解碼好給（`ImageBitmap` 等），Renderer 依 id 快取 `Sprite`，
  * 清單裡消失的那張連同貼圖一起釋放。它不是提示，乾淨畫面與播放中照常顯示。
+ *
+ * **Backdrop 選取外框**（issue #149）：`setBackdropOutline(rect)` 在選中那張的範圍畫一圈外框，
+ * 疊在最上層（果凍壓在圖上也看得到圖的邊）。它是游標回饋：顯示與否由呼叫端決定（只在
+ * 「背景圖」工具作用、不在乾淨畫面時給），`null` 藏起來。線寬同邊框，固定螢幕像素粗。
  */
 
 import {
@@ -81,6 +85,14 @@ export interface BackdropSprite {
   visible: boolean;
 }
 
+/** Backdrop 選取外框的範圍（issue #149）：世界座標中心與寬高。 */
+export interface BackdropOutline {
+  centerX: number;
+  centerY: number;
+  width: number;
+  height: number;
+}
+
 /** 地板線往可視範圍外多畫的倍數——平移一格內不會先看到線的盡頭才等重畫。 */
 const FLOOR_LINE_OVERSCAN = 2;
 
@@ -115,6 +127,9 @@ export class JellyRenderer {
   private readonly jellies = new Map<string, JellyEntry>();
   private readonly wireframe: Graphics;
   private readonly frameGraphics: Graphics;
+  /** 選中 Backdrop 的外框（issue #149）；`null` = 不畫。 */
+  private readonly outlineGraphics: Graphics;
+  private outline: BackdropOutline | null = null;
   /** 目前邊界外框的幾何；`null` = Infinite（`frameGraphics` 隱藏）。 */
   private frame: BoundaryFrame | null = null;
   /**
@@ -140,11 +155,15 @@ export class JellyRenderer {
     this.frameGraphics = new Graphics();
     this.frameGraphics.visible = false;
 
+    this.outlineGraphics = new Graphics();
+    this.outlineGraphics.visible = false;
+
     this.world = new Container();
     this.world.addChild(this.backdropLayer); // 最底層——Backdrop 在所有 Jelly、線框、邊框之下
     this.world.addChild(this.jellyLayer);
     this.world.addChild(this.wireframe); // 疊在所有貼圖之上
-    this.world.addChild(this.frameGraphics); // 最上層——邊框不該被網格線蓋住
+    this.world.addChild(this.frameGraphics); // 邊框不該被網格線蓋住
+    this.world.addChild(this.outlineGraphics); // 最上層——選取外框是游標回饋
     this.app.stage.addChild(this.world);
 
     this.applyCamera();
@@ -285,6 +304,13 @@ export class JellyRenderer {
     });
   }
 
+  /** 選中 Backdrop 的外框（issue #149）；`null` 藏起來。 */
+  setBackdropOutline(outline: BackdropOutline | null): void {
+    this.outline = outline && { ...outline };
+    this.outlineGraphics.visible = outline !== null;
+    if (outline) this.redrawOutline();
+  }
+
   /** 目前有哪些 Backdrop（依疊放順序，先畫的在前）。 */
   backdropIds(): string[] {
     return this.backdropLayer.children.map((child) => child.label);
@@ -301,6 +327,7 @@ export class JellyRenderer {
     // setBoundaryFrame 才會用新的 scale；地板線的長度也跟著相機平移／縮放走。
     this.wireframeDirty = true;
     if (this.frameGraphics.visible) this.redrawBoundaryFrame();
+    if (this.outlineGraphics.visible) this.redrawOutline();
   }
 
   /** 背景色（0xRRGGBB，issue #147）——下一次 `render()` 起生效。 */
@@ -370,6 +397,15 @@ export class JellyRenderer {
       }
     }
     this.wireframe.stroke({ width: 1 / (this.camera.scale || 1), color: 0xff00ff, alpha: 0.85 });
+  }
+
+  /** 選取外框：線寬除以 `camera.scale`，固定約 2 個螢幕像素粗。 */
+  private redrawOutline(): void {
+    const o = this.outline;
+    if (!o) return;
+    this.outlineGraphics.clear();
+    this.outlineGraphics.rect(o.centerX - o.width / 2, o.centerY - o.height / 2, o.width, o.height);
+    this.outlineGraphics.stroke({ width: 2 / (this.camera.scale || 1), color: 0xffcc33, alpha: 1 });
   }
 
   /**

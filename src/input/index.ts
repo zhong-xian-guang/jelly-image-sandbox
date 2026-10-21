@@ -25,6 +25,7 @@ export {
   modesOf,
 } from './ToolRouter';
 export type {
+  BackdropCommand,
   ToolId,
   ToolRouterOptions,
   FanParams,

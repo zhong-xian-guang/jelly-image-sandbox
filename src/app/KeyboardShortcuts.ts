@@ -2,7 +2,7 @@
  * `KeyboardShortcuts`（issue #126 / V4 T5；spec #121「快捷鍵」、ADR-0016）——可有可無的
  * 鍵盤快捷鍵。操作設計以滑鼠為主（ADR-0016），這裡只補兩組：
  *
- * - 數字 1–4：切到工具列上對應順序的工具（`TOOL_IDS`：抓取、Pin、電風扇、Jelly）。
+ * - 數字 1–5：切到工具列上對應順序的工具（`TOOL_IDS`：抓取、Pin、電風扇、Jelly、背景圖）。
  * - 空白鍵：只在 Track／Demo 播放中切換暫停／繼續。
  *
  * 獨立的小模組，只在 window 上聽鍵盤、再呼叫注入的回呼——不碰 `ToolRouter`／`ControlPanel`
@@ -64,7 +64,7 @@ export class KeyboardShortcuts {
   };
 }
 
-/** 數字鍵 1–4 對應的工具（照工具列順序）；其他鍵回 `null`。 */
+/** 數字鍵 1–5 對應的工具（照工具列順序）；其他鍵回 `null`。 */
 function toolForKey(key: string): ToolId | null {
   const index = Number.parseInt(key, 10) - 1;
   if (key.length !== 1 || !(index >= 0)) return null;

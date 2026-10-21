@@ -753,9 +753,18 @@ export class ControlPanel {
     // 重建藏在畫布上的右鍵選單，不寫出來沒人會發現。
     const jellyParams = this.toolParams('Jelly', []);
 
+    // 背景圖工具的參數卡（issue #149）：操作 Backdrop；匯入與清單在「背景」分區。
+    const backdropParams = this.toolParams('背景圖', []);
+
     const toolbarSection = this.toolbarSection(
       opts.initial.activeTool,
-      { grab: grabParams, pin: pinParams, fan: fanParams, jelly: jellyParams },
+      {
+        grab: grabParams,
+        pin: pinParams,
+        fan: fanParams,
+        jelly: jellyParams,
+        backdrop: backdropParams,
+      },
       opts.onToolChange,
     );
 

@@ -151,3 +151,74 @@ describe('BackdropBoard：經記憶體儲存的來回', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('BackdropBoard：hit test、選取、移動（issue #149）', () => {
+  /** 兩張重疊：a 在下（中心 0,0、200×100）、b 在上（中心 50,0、100×100）。 */
+  function twoBoards() {
+    const made = memoryBoard();
+    const view = (cx: number, w: number, h: number) => ({
+      centerX: cx,
+      centerY: 0,
+      width: w,
+      height: h,
+    });
+    const a = made.board.add(image(200, 100), view(0, 200, 100));
+    const b = made.board.add(image(100, 100), view(50, 100, 100));
+    return { ...made, a, b };
+  }
+
+  it('只回最上層那張；點到外面回 null', () => {
+    const { board, a, b } = twoBoards();
+    expect(board.hitTest({ x: 60, y: 10 })).toBe(b.id);
+    expect(board.hitTest({ x: -80, y: 10 })).toBe(a.id);
+    expect(board.hitTest({ x: 0, y: 200 })).toBeNull();
+    expect(board.hitTest({ x: 101, y: 0 })).toBeNull();
+  });
+
+  it('矩形邊界上也算點中', () => {
+    const { board, a } = twoBoards();
+    expect(board.hitTest({ x: -100, y: 50 })).toBe(a.id);
+  });
+
+  it('被隱藏的那張點不到，會點到底下那張', () => {
+    const { board, a, b } = twoBoards();
+    board.setVisible(b.id, false);
+    expect(board.hitTest({ x: 60, y: 10 })).toBe(a.id);
+  });
+
+  it('移動改中心、hit test 跟著走', () => {
+    const { board, b } = twoBoards();
+    board.move(b.id, 1000, -20);
+    expect(board.get(b.id)).toMatchObject({ centerX: 1050, centerY: -20 });
+    expect(board.hitTest({ x: 1050, y: -20 })).toBe(b.id);
+  });
+
+  it('選取與取消選取；選不存在的 id 視為取消', () => {
+    const { board, a } = twoBoards();
+    expect(board.selectedId).toBeNull();
+    board.select(a.id);
+    expect(board.selectedId).toBe(a.id);
+    board.select(null);
+    expect(board.selectedId).toBeNull();
+    board.select('nope');
+    expect(board.selectedId).toBeNull();
+  });
+
+  it('刪除選中那張後選取被清掉；刪別張不影響', () => {
+    const { board, a, b } = twoBoards();
+    board.select(a.id);
+    board.remove(b.id);
+    expect(board.selectedId).toBe(a.id);
+    board.remove(a.id);
+    expect(board.selectedId).toBeNull();
+  });
+
+  it('移動後的位置存起來', async () => {
+    const { board, store, memory, b } = twoBoards();
+    board.move(b.id, 5, 6);
+    board.move(b.id, 5, 6);
+    await store.flush();
+    const restored = await BackdropBoard.restore(new BackgroundStore(memory, () => {}));
+    expect(restored.get(b.id)).toMatchObject({ centerX: 60, centerY: 12 });
+  });
+});

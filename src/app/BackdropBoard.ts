@@ -12,6 +12,12 @@
  * 寫不進去時由 `BackgroundStore` 退回成只在本次有效並提示一次，這裡照常運作。`restore`
  * 從儲存還原。
  *
+ * **選取**（issue #149）：至多一張選中（`selectedId`），畫布上的「背景圖」工具與側欄清單共用
+ * 這一份。選取不存檔；刪掉選中那張時一併清掉。
+ *
+ * **Hit test**（issue #149）：只看矩形範圍（圖片透明處也算點中，spec #146 US19），回最上層、
+ * 目前顯示中的那張——被隱藏的點不到。
+ *
  * Backdrop 不是 Scene、不是 Track 事件，也不進片段檔：停止、重設、清空全部、載入片段的程式
  * 路徑都不碰這裡。
  */
@@ -65,6 +71,7 @@ export class BackdropBoard {
   /** 依疊放順序（先畫→後畫）。 */
   private items: Backdrop[];
   private nextId: number;
+  private selected: string | null = null;
   private readonly listeners = new Set<() => void>();
 
   constructor(store: BackgroundStore, restored: readonly Backdrop[] = []) {
@@ -86,6 +93,48 @@ export class BackdropBoard {
 
   get(id: string): Readonly<Backdrop> | undefined {
     return this.items.find((b) => b.id === id);
+  }
+
+  /** 目前選中的那張；沒有為 `null`。 */
+  get selectedId(): string | null {
+    return this.selected;
+  }
+
+  /** 選取（`null`＝取消選取；不存在的 id 也當成取消）。只通知、不存檔。 */
+  select(id: string | null): void {
+    const next = id !== null && this.get(id) ? id : null;
+    if (next === this.selected) return;
+    this.selected = next;
+    this.notify();
+  }
+
+  /** 世界座標點上最上層、顯示中的那張（只看矩形範圍）；沒有回 `null`。 */
+  hitTest(point: { x: number; y: number }): string | null {
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      const b = this.items[i]!;
+      if (!b.visible) continue;
+      const halfW = (b.image.width * b.scale) / 2;
+      const halfH = (b.image.height * b.scale) / 2;
+      if (Math.abs(point.x - b.centerX) <= halfW && Math.abs(point.y - b.centerY) <= halfH) {
+        return b.id;
+      }
+    }
+    return null;
+  }
+
+  /** 移動一張（世界座標移動量）；不存在不動作。 */
+  move(id: string, dx: number, dy: number): void {
+    this.update(id, (b) => {
+      b.centerX += dx;
+      b.centerY += dy;
+    });
+  }
+
+  /** 顯示／隱藏一張；被隱藏的不畫、也點不到。 */
+  setVisible(id: string, visible: boolean): void {
+    this.update(id, (b) => {
+      b.visible = visible;
+    });
   }
 
   /** 變動通知（任何指令改了狀態之後）；回傳取消訂閱。 */
@@ -114,13 +163,26 @@ export class BackdropBoard {
     const index = this.items.findIndex((b) => b.id === id);
     if (index < 0) return;
     this.items.splice(index, 1);
+    if (this.selected === id) this.selected = null;
     this.changed();
     this.store.deleteBackdropImage(id);
+  }
+
+  /** 改某一張（不存在不動作），改完寫回並通知。 */
+  private update(id: string, mutate: (b: Backdrop) => void): void {
+    const backdrop = this.items.find((b) => b.id === id);
+    if (!backdrop) return;
+    mutate(backdrop);
+    this.changed();
   }
 
   /** 狀態改了：寫回清單、通知訂閱者。 */
   private changed(): void {
     this.store.saveBackdropList(this.items.map(toMeta));
+    this.notify();
+  }
+
+  private notify(): void {
     for (const listener of this.listeners) listener();
   }
 }

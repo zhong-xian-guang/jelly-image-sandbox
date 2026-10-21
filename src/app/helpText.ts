@@ -20,6 +20,7 @@ export const TOOL_HELP_LINES: Readonly<Record<ToolId, string>> = {
   pin: '左鍵：點一下放／拔、拖曳撒／擦｜中鍵點：切放／拔｜右鍵＋滾輪：筆刷半徑',
   fan: '左鍵：拖曳放置／搬移｜右鍵點風扇：移除｜中鍵點：切參數｜右鍵＋滾輪：調參數',
   jelly: '左鍵：生成｜右鍵點果凍：重建／移除',
+  backdrop: '左鍵：點選、拖曳移動背景圖，點空白處取消選取',
 };
 
 /** 說明浮層裡的一列：左邊是怎麼按，右邊是會發生什麼。 */
@@ -52,8 +53,8 @@ function toolTitle(tool: ToolId): string {
 }
 
 /**
- * 「?」說明浮層的內容（spec #127）：四個工具在各模式下的滑鼠操作，再加相機操作與快捷鍵。
- * 工具順序跟工具列一樣（也就是 1–4 快捷鍵的順序）。
+ * 「?」說明浮層的內容（spec #127）：五個工具在各模式下的滑鼠操作，再加相機操作與快捷鍵。
+ * 工具順序跟工具列一樣（也就是 1–5 快捷鍵的順序）。
  */
 export const HELP_GROUPS: readonly HelpGroup[] = [
   {
@@ -108,6 +109,16 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
     ],
   },
   {
+    title: toolTitle('backdrop'),
+    entries: [
+      {
+        keys: '左鍵',
+        action:
+          '點選游標下最上層的背景圖（果凍不擋、透明處也算），拖曳移動；點空白處取消選取。背景圖從側欄「背景」區匯入',
+      },
+    ],
+  },
+  {
     title: '🎥 相機',
     entries: [
       { keys: '中鍵拖曳', action: '平移畫面' },
@@ -117,7 +128,7 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
   {
     title: '⌨️ 快捷鍵',
     entries: [
-      { keys: '1–4', action: '切換工具：抓取、Pin、電風扇、Jelly' },
+      { keys: '1–5', action: '切換工具：抓取、Pin、電風扇、Jelly、背景圖' },
       { keys: '空白鍵', action: '播放中暫停／繼續' },
       { keys: 'Esc', action: '關閉選單或這個說明；離開乾淨畫面' },
     ],

@@ -11,6 +11,7 @@ export const TOOL_LABELS: Readonly<Record<ToolId, { icon: string; text: string }
   pin: { icon: '📌', text: 'Pin' },
   fan: { icon: '🌀', text: '電風扇' },
   jelly: { icon: '🍮', text: 'Jelly' },
+  backdrop: { icon: '🖼️', text: '背景圖' },
 };
 
 /** 模式名稱（CONTEXT.md「模式」）。 */

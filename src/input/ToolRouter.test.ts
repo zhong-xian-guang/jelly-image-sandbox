@@ -17,6 +17,7 @@ import {
   TOOL_IDS,
   ToolRouter,
   modesOf,
+  type BackdropCommand,
   type GrabMode,
   type ToolRouterOptions,
 } from './ToolRouter';
@@ -1191,8 +1192,8 @@ describe('ToolRouter — 調整目前模式的數值（issue #114 調半徑；is
 });
 
 describe('ToolRouter — 工具與模式（issue #122 / V4 T1；ADR-0016）', () => {
-  it('工具列的四個工具：抓取在最前（預設）、Pin、電風扇、Jelly（合併了生成／移除／重建）', () => {
-    expect([...TOOL_IDS]).toEqual(['grab', 'pin', 'fan', 'jelly']);
+  it('工具列的五個工具：抓取在最前（預設）、Pin、電風扇、Jelly（合併了生成／移除／重建）、背景圖', () => {
+    expect([...TOOL_IDS]).toEqual(['grab', 'pin', 'fan', 'jelly', 'backdrop']);
   });
 
   it('有模式的工具：抓取（單點／大把／編隊）、Pin（放／拔）、電風扇（寬度／強度／衰減／頻率）', () => {
@@ -1675,5 +1676,93 @@ describe('ToolRouter — 定義編隊形狀途中鎖住抓取工具的模式（i
     expect(router.cycleMode()).toBe('remove');
     router.setMode('pin', 'place');
     expect(router.modeOf('pin')).toBe('place');
+  });
+});
+
+describe('ToolRouter — 背景圖工具：選取與拖曳（issue #149 / 背景 T3）', () => {
+  /** 世界座標 x < 1100 的地方有一張 Backdrop「bd」（螢幕 x < 100）。 */
+  function makeBackdropRouter() {
+    const commands: BackdropCommand[] = [];
+    const hitTest = vi.fn(() => true); // Jelly 到處都在——背景圖工具不該理它
+    const backdropHitTest = vi.fn((world: Point) => (world.x < 1100 ? 'bd' : null));
+    const made = makeRouter(undefined, undefined, {
+      hitTest,
+      backdropHitTest,
+      onBackdropCommand: (cmd) => commands.push(cmd),
+    });
+    made.router.setActiveTool('backdrop');
+    return { ...made, commands, hitTest, backdropHitTest };
+  }
+
+  it('左鍵按在 Backdrop 上：選中它（Jelly 不擋）', () => {
+    const { router, commands, events } = makeBackdropRouter();
+    router.down(1, 50, 50, 0);
+    router.up(1, 50, 50, 100);
+    expect(commands).toEqual([{ type: 'select', id: 'bd' }]);
+    expect(events).toEqual([]);
+  });
+
+  it('按在空白處：取消選取，拖曳不送移動', () => {
+    const { router, commands } = makeBackdropRouter();
+    router.down(1, 500, 50, 0);
+    router.move(1, 520, 60);
+    router.up(1, 520, 60, 300);
+    expect(commands).toEqual([{ type: 'select', id: null }]);
+  });
+
+  it('拖曳：每次 move 送世界座標的移動量', () => {
+    const { router, commands } = makeBackdropRouter();
+    router.down(1, 10, 10, 0);
+    router.move(1, 30, 15);
+    router.move(1, 25, 40);
+    router.up(1, 25, 40, 500);
+    expect(commands).toEqual([
+      { type: 'select', id: 'bd' },
+      { type: 'move', id: 'bd', dx: 20, dy: 5 },
+      { type: 'move', id: 'bd', dx: -5, dy: 25 },
+    ]);
+  });
+
+  it('cancel 之後不再跟著指標', () => {
+    const { router, commands } = makeBackdropRouter();
+    router.down(1, 10, 10, 0);
+    router.cancel(1);
+    router.move(1, 30, 15);
+    expect(commands).toEqual([{ type: 'select', id: 'bd' }]);
+  });
+
+  it('完全不送模擬用的 InputEvent', () => {
+    const { router, events } = makeBackdropRouter();
+    router.down(1, 10, 10, 0);
+    router.move(1, 30, 15);
+    router.up(1, 30, 15, 50);
+    router.down(2, 500, 10, 100);
+    router.up(2, 500, 10, 150);
+    router.rightClick({ x: 1010, y: 1010 }, 10, 10);
+    expect(events).toEqual([]);
+  });
+
+  it('拖曳中切換工具只影響下一次按下', () => {
+    const { router, commands, events } = makeBackdropRouter();
+    router.down(1, 10, 10, 0);
+    router.setActiveTool('grab');
+    router.move(1, 20, 10);
+    router.up(1, 20, 10, 500);
+    expect(commands).toEqual([
+      { type: 'select', id: 'bd' },
+      { type: 'move', id: 'bd', dx: 10, dy: 0 },
+    ]);
+    expect(events).toEqual([]);
+    router.down(2, 10, 10, 600);
+    expect(events[0]).toMatchObject({ type: 'grab' });
+    expect(commands).toHaveLength(2);
+  });
+
+  it('別的工具下按 Backdrop 不送任何 Backdrop 指令', () => {
+    const { router, commands } = makeBackdropRouter();
+    router.setActiveTool('grab');
+    router.down(1, 10, 10, 0);
+    router.up(1, 10, 10, 500);
+    expect(commands).toEqual([]);
   });
 });

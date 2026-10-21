@@ -694,12 +694,13 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
     const buttons = [
       ...panel.element.querySelectorAll('.jelly-toolbar button'),
     ] as HTMLButtonElement[];
-    expect(buttons.map((b) => b.dataset.tool)).toEqual(['grab', 'pin', 'fan', 'jelly']);
+    expect(buttons.map((b) => b.dataset.tool)).toEqual(['grab', 'pin', 'fan', 'jelly', 'backdrop']);
     expect(buttons.map((b) => b.querySelector('.jelly-tool-button-text')!.textContent)).toEqual([
       '抓取',
       'Pin',
       '電風扇',
       'Jelly',
+      '背景圖',
     ]);
     for (const b of buttons) {
       expect(b.querySelector('.jelly-tool-button-icon')!.textContent).not.toBe('');
@@ -766,7 +767,7 @@ describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () =
     const titles = [...panel.element.querySelectorAll('.jelly-tool-card .jelly-tool-params')].map(
       (el) => el.querySelector('.jelly-tool-params-title')?.textContent,
     );
-    expect(titles).toEqual(['抓取', 'Pin', '電風扇', 'Jelly']);
+    expect(titles).toEqual(['抓取', 'Pin', '電風扇', 'Jelly', '背景圖']);
   });
 
   it('任一時刻只有一組參數卡顯示，跟著目前工具換', () => {

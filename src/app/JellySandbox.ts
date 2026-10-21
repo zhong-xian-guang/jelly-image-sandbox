@@ -148,6 +148,7 @@ import {
   worldToScreen,
 } from '../camera';
 import {
+  type BackdropCommand,
   DEFAULT_TOOL,
   type FanParams,
   type GrabMode,
@@ -451,7 +452,7 @@ export class JellySandbox {
    * 都設起來，`frame()` 每幀最多同步一次——拖曳中一格多次移動只重畫一次。
    */
   private backdropsDirty = true;
-  /** 鍵盤快捷鍵（issue #126）：1–4 切工具、播放中空白鍵暫停／繼續。在 window 上聽，`destroy` 要解掉。 */
+  /** 鍵盤快捷鍵（issue #126）：1–5 切工具、播放中空白鍵暫停／繼續。在 window 上聽，`destroy` 要解掉。 */
   private readonly keyboardShortcuts: KeyboardShortcuts;
   private readonly demoRunner = new DemoRunner();
   private readonly trackRecorder = new TrackRecorder();
@@ -486,7 +487,7 @@ export class JellySandbox {
   /** 目前邊界的外框幾何（給 `JellyRenderer.setBoundaryFrame` 畫）：`walled` 是 AABB、`floor` 是地板 y、`infinite` 為 `null`。 */
   private boundaryFrame: BoundaryFrame | null = null;
   /**
-   * 目前工具（issue #65；issue #122 起是側欄工具列的四個工具 grab／pin／fan／jelly，ADR-0016）
+   * 目前工具（issue #65；issue #122 起是側欄工具列的五個工具 grab／pin／fan／jelly／backdrop，ADR-0016）
    * ——`PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠這個判定。
    */
   private activeTool: ToolId = DEFAULT_TOOL;
@@ -1481,6 +1482,34 @@ export class JellySandbox {
     // 乾淨畫面（issue #130）連游標回饋都藏，工具與模式不動。
     this.brushCursor.setActive(brush !== null && !this.cleanView.isActive);
     this.applyHandfulRangeVisibility();
+    this.applyBackdropOutline();
+  }
+
+  /**
+   * 選中 Backdrop 的外框（issue #149）：游標回饋，只在「背景圖」工具作用、不在乾淨畫面時畫；
+   * 選取本身不受切工具影響，切回來外框就回來。選中那張被隱藏時也不畫。
+   */
+  private applyBackdropOutline(): void {
+    const id = this.backdrops.selectedId;
+    const b = id === null ? undefined : this.backdrops.get(id);
+    const show =
+      b !== undefined && b.visible && this.activeTool === 'backdrop' && !this.cleanView.isActive;
+    this.renderer.setBackdropOutline(
+      show
+        ? {
+            centerX: b.centerX,
+            centerY: b.centerY,
+            width: b.image.width * b.scale,
+            height: b.image.height * b.scale,
+          }
+        : null,
+    );
+  }
+
+  /** 背景圖工具的指令（issue #149）——直接改 `BackdropBoard`，不經 `World`、不錄進 Track。 */
+  private runBackdropCommand(cmd: BackdropCommand): void {
+    if (cmd.type === 'select') this.backdrops.select(cmd.id);
+    else this.backdrops.move(cmd.id, cmd.dx, cmd.dy);
   }
 
   /**
@@ -1524,7 +1553,7 @@ export class JellySandbox {
 
   /**
    * 目前工具變更（issue #65 / V2 T3-1）——側欄工具列（`onToolChange`，issue #122 起，ADR-0016）
-   * 與數字鍵 1–4（issue #126）都走這裡。轉發給 `PointerInput.setActiveTool`（只影響下一次按下）；
+   * 與數字鍵 1–5（issue #126）都走這裡。轉發給 `PointerInput.setActiveTool`（只影響下一次按下）；
    * `activeTool` 另外存一份，因為 `PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠它
    * 判定。工具列高亮與參數卡也在這裡同步（從工具列按下時面板自己已經切過，重設一次無妨）。切工具
    * 會改變游標／標記／圓圈的視覺回饋，所以要跟著重算。
@@ -1785,6 +1814,7 @@ export class JellySandbox {
         thumbnailUrl: this.backdropThumbs.get(b.id) ?? '',
       })),
     );
+    this.applyBackdropOutline();
   }
 
   /** 「匯入尺寸」拉霸（issue #88）——只記下意圖，下一次匯入才套用；場上的果凍不動。 */
@@ -2543,13 +2573,19 @@ export class JellySandbox {
       // 選單作用在哪一塊由沙盒自己決定（見 `spawnAt`／`openJellyMenu`）。
       onJellyClick: (world) => this.onJellyClick(world),
       onJellyContextMenu: (world, screen) => this.openJellyMenu(world, screen),
+      // 背景圖工具（issue #149）：判定與指令都是 `BackdropBoard` 的事，不經 `World`，也不錄進 Track。
+      backdropHitTest: (world) => this.backdrops.hitTest(world),
+      onBackdropCommand: (cmd) => this.runBackdropCommand(cmd),
       // 進 World + no-op 除非正在錄製（issue #29）。Pin 工具直接送 pin／unpin（issue #123），
       // 不再經 `routeForPinTool` 轉換。
       applyInput: (event) => this.dispatchInput(event),
     });
     const cameraInput = new CameraInput(canvas, {
       screenToWorld: project,
-      hitTest,
+      // 觸控在背景上拖曳＝平移相機；背景圖工具下按在 Backdrop 上是拖那張圖，不算背景（issue #149）。
+      hitTest: (world) =>
+        hitTest(world) ||
+        (this.activeTool === 'backdrop' && this.backdrops.hitTest(world) !== null),
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
       adjustModeValue: (steps) => this.adjustModeValue(steps),
       onMiddleClick: () => this.cycleMode(), // 中鍵單擊輪替模式（issue #122）

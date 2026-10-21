@@ -39,6 +39,7 @@ import {
   type PinBrushParams,
   type ToolId,
   ToolRouter,
+  type ToolRouterOptions,
 } from './ToolRouter';
 
 export interface PointerInputOptions {
@@ -54,6 +55,10 @@ export interface PointerInputOptions {
   onJellyClick?: (world: Point) => void;
   /** 轉發給 `ToolRouter`（issue #124）——Jelly 工具右鍵單擊點中某塊 Jelly（開選單）。 */
   onJellyContextMenu?: (world: Point, screen: Point) => void;
+  /** 轉發給 `ToolRouter`（issue #149）——背景圖工具的點選判定。 */
+  backdropHitTest?: ToolRouterOptions['backdropHitTest'];
+  /** 轉發給 `ToolRouter`（issue #149）——背景圖工具的指令出口（不是 `applyInput`）。 */
+  onBackdropCommand?: ToolRouterOptions['onBackdropCommand'];
   config?: Partial<GestureConfig>;
   /** 時鐘來源（測試可注入）。預設 `performance.now`。 */
   now?: () => number;
@@ -78,6 +83,8 @@ export class PointerInput {
       listPins: opts.listPins,
       onJellyClick: opts.onJellyClick,
       onJellyContextMenu: opts.onJellyContextMenu,
+      backdropHitTest: opts.backdropHitTest,
+      onBackdropCommand: opts.onBackdropCommand,
       config: opts.config,
     });
 
