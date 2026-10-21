@@ -1620,7 +1620,7 @@ function expandedSections(panel: ControlPanel): string[] {
 }
 
 describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () => {
-  it('七個分區，照順序：匯入、片段、物理、檢視、Demo、錄製、開發者', () => {
+  it('八個分區，照順序：匯入、片段、物理、檢視、背景、Demo、錄製、開發者', () => {
     const panel = new ControlPanel(makeOptions());
     const sections = [...panel.element.querySelectorAll('.jelly-panel-section')] as HTMLElement[];
     expect(sections.map((s) => s.dataset.section)).toEqual([
@@ -1628,6 +1628,7 @@ describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () =>
       'clip',
       'physics',
       'view',
+      'background',
       'demo',
       'record',
       'dev',
@@ -1637,7 +1638,7 @@ describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () =>
         (s) =>
           s.querySelector('.jelly-panel-section-header .jelly-panel-section-title')!.textContent,
       ),
-    ).toEqual(['匯入', '片段', '物理', '檢視', 'Demo', '錄製', '開發者']);
+    ).toEqual(['匯入', '片段', '物理', '檢視', '背景', 'Demo', '錄製', '開發者']);
   });
 
   it('工具列＋工具卡在所有分區之上、不在任何分區裡', () => {

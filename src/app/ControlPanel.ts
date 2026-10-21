@@ -47,7 +47,7 @@
  * **分區與收起**（issue #128 / V4 U1；spec #127「側欄」）：最上方是側欄標題列（右側由左到右
  * 是「乾淨畫面」「?」「收起側欄」三顆鈕；前兩顆由 `JellySandbox` 塞進 `titleBarActions`，
  * issue #130、#132），底下工具列＋參數卡常駐，再往下
- * 是七個可收合的分區（`PANEL_SECTION_IDS`：匯入、片段、物理、檢視、Demo、錄製、開發者），
+ * 是八個可收合的分區（`PANEL_SECTION_IDS`：匯入、片段、物理、檢視、背景、Demo、錄製、開發者），
  * 點標題展開／收起。預設只有物理展開；各區展開狀態與側欄收起狀態存在 `localStorage`
  * （`./panelLayout`，讀不到就用預設）。收起側欄時整塊縮成畫面左緣的小把手，點把手再展開。
  * 分區只是換位置：每顆控制的鎖定規則（播放中、錄製中變灰）跟分區前一樣。
@@ -103,6 +103,7 @@ const SECTION_TITLES: Record<PanelSectionId, string> = {
   clip: '片段',
   physics: '物理',
   view: '檢視',
+  background: '背景',
   demo: 'Demo',
   record: '錄製',
   dev: '開發者',
@@ -827,6 +828,9 @@ export class ControlPanel {
           opts.onShowCursorLabelChange,
         ),
       ],
+      // 背景色與 Backdrop（issue #147；spec #146）：內容由 `BackgroundPanel` 建好後經
+      // `sectionBody('background')` 掛進來——它有自己的狀態（Backdrop 清單），不塞進這裡。
+      background: [],
       demo: opts.demos.map((demo) => this.demoButtonRow(demo.label, () => opts.onRunDemo(demo.id))),
       // 錄製、播放、暫停、停止／重設在畫布上的播放控制條（issue #129），這裡只留設定與清單。
       record: [target.row, setupPins.row, this.groupedTracksEl, addGroup.row],
@@ -853,6 +857,7 @@ export class ControlPanel {
       clip: this.sectionEl('clip', sectionRows.clip),
       physics: this.sectionEl('physics', sectionRows.physics),
       view: this.sectionEl('view', sectionRows.view),
+      background: this.sectionEl('background', sectionRows.background),
       demo: this.sectionEl('demo', sectionRows.demo),
       record: this.sectionEl('record', sectionRows.record),
       dev: this.sectionEl('dev', sectionRows.dev),

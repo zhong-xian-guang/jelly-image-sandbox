@@ -43,12 +43,13 @@ describe('panelLayout', () => {
     expect(DEFAULT_PANEL_LAYOUT.sidebarCollapsed).toBe(false);
   });
 
-  it('分區順序：匯入、片段、物理、檢視、Demo、錄製、開發者', () => {
+  it('分區順序：匯入、片段、物理、檢視、背景、Demo、錄製、開發者', () => {
     expect(PANEL_SECTION_IDS).toEqual([
       'import',
       'clip',
       'physics',
       'view',
+      'background',
       'demo',
       'record',
       'dev',

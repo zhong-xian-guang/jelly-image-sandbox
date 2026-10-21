@@ -206,6 +206,8 @@ import {
   type ClipState,
   type ClipTrack,
 } from './clipFile';
+import { BackgroundPanel } from './BackgroundPanel';
+import { BackgroundStore, DEFAULT_BACKGROUND_COLOR, openIndexedDbStore } from './backgroundStore';
 import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { CanvasHover } from './CanvasHover';
 import { CleanView } from './CleanView';
@@ -308,6 +310,11 @@ const DEFAULT_SOURCE_ID = 'src/1';
  */
 function needsHintProjection(hints: Readonly<HintVisibility>): boolean {
   return hints.pins || hints.fanRange || hints.fanIcon || hints.formation;
+}
+
+/** `#rrggbb` → `0xRRGGBB`（Renderer 吃數字）。 */
+function colorToNumber(color: string): number {
+  return Number.parseInt(color.slice(1), 16);
 }
 
 /**
@@ -418,6 +425,10 @@ export class JellySandbox {
    * 由各自的出口多看一個 `cleanView.isActive`（見 `applyCleanView`）。不存檔。
    */
   private readonly cleanView: CleanView;
+  /** 側欄「背景」分區的內容（issue #147）。 */
+  private readonly backgroundPanel: BackgroundPanel;
+  /** 背景色與 Backdrop 的儲存（issue #147；IndexedDB，不能用時只在本次有效）。 */
+  private readonly backgroundStore: BackgroundStore;
   /** 鍵盤快捷鍵（issue #126）：1–4 切工具、播放中空白鍵暫停／繼續。在 window 上聽，`destroy` 要解掉。 */
   private readonly keyboardShortcuts: KeyboardShortcuts;
   private readonly demoRunner = new DemoRunner();
@@ -594,9 +605,13 @@ export class JellySandbox {
     renderer: JellyRenderer,
     /** 內建預設果凍的貼圖畫布——啟動與「清空全部」時註冊成來源 `src/1`（issue #57 / #95）。 */
     private readonly defaultTexture: HTMLCanvasElement,
+    /** 背景設定的儲存與啟動時從它還原的值（issue #147；`create` 先讀好再建，開頁第一格就對）。 */
+    background: { store: BackgroundStore; color: string },
   ) {
     this.root = root;
     this.renderer = renderer;
+    this.backgroundStore = background.store;
+    this.renderer.setBackgroundColor(colorToNumber(background.color));
     // `World` 的 `meshProvider` 綁到沙盒的 `meshFor`（來源圖庫 + memo），所以在這裡建。
     // 跨塊碰撞的摩擦係數沿用牆／地板的 app 層常數（issue #96；其餘碰撞參數用求解器預設）。
     this.world = new World(
@@ -758,6 +773,12 @@ export class JellySandbox {
       onTrackGroupsChange: (trackId, groupIds) => this.setTrackGroups(trackId, groupIds),
     });
     root.appendChild(this.controlPanel.element);
+    // 「背景」分區（issue #147）：背景色。
+    this.backgroundPanel = new BackgroundPanel({
+      initialColor: background.color,
+      onColorChange: (color) => this.setBackgroundColor(color),
+    });
+    this.controlPanel.sectionBody('background').appendChild(this.backgroundPanel.element);
     // 畫布上的播放控制條（底部中央）與相機按鈕（右下角）——issue #129；只吃自己範圍內的點擊。
     root.appendChild(this.controlPanel.playbackBar);
     root.appendChild(this.controlPanel.cameraControls);
@@ -827,10 +848,18 @@ export class JellySandbox {
     const renderer = await JellyRenderer.create({
       width: root.clientWidth,
       height: root.clientHeight,
-      background: { color: 0x1a1a1a, alpha: 1 },
+      background: { color: colorToNumber(DEFAULT_BACKGROUND_COLOR), alpha: 1 },
     });
     root.appendChild(renderer.canvas);
-    return new JellySandbox(root, renderer, drawDefaultTexture());
+    // 背景設定（issue #147）：先從 IndexedDB 讀好再建沙盒，開頁第一格就是上次的背景。
+    // 儲存寫不進去時的提示要等沙盒建好才有地方顯示，所以回呼晚綁。
+    let sandbox: JellySandbox | null = null;
+    const store = new BackgroundStore(await openIndexedDbStore(), (message) =>
+      sandbox?.showNotice(message),
+    );
+    const color = (await store.loadColor()) ?? DEFAULT_BACKGROUND_COLOR;
+    sandbox = new JellySandbox(root, renderer, drawDefaultTexture(), { store, color });
+    return sandbox;
   }
 
   start(): void {
@@ -1595,6 +1624,15 @@ export class JellySandbox {
     if (this.activeTool !== 'pin') return null;
     const variant = this.input.modeOf('pin') === 'place' ? 'spray' : 'erase';
     return { variant, radius: this.pinBrushRadius };
+  }
+
+  /**
+   * 背景色選擇器（issue #147）：立即換掉清畫布的顏色並存起來（拖動選色器途中連續呼叫，
+   * 儲存層只留最後一個值）。背景色不是提示，乾淨畫面、播放中照常顯示。
+   */
+  private setBackgroundColor(color: string): void {
+    this.renderer.setBackgroundColor(colorToNumber(color));
+    this.backgroundStore.saveColor(color);
   }
 
   /** 「匯入尺寸」拉霸（issue #88）——只記下意圖，下一次匯入才套用；場上的果凍不動。 */

@@ -24,6 +24,10 @@
  * 縮放／平移／resize 時重畫）；`null`（Infinite 模式）整層藏起來。幾何都是世界座
  * 標常數（`WalledBoundary.box`／`FloorBoundary.floorY`，不隨 Jelly 變形），只在邊界
  * 模式切換時重設。它**不是**提示，不受「播放時隱藏提示」影響。
+ *
+ * **背景色**（issue #147；CONTEXT.md「Background color」）：建立時的 `background.color` 只是
+ * 初值，`setBackgroundColor` 在執行中換掉——清畫布用的就是這個顏色，所以相機怎麼平移縮放都
+ * 填滿整個畫面。它不是提示，乾淨畫面與播放中照常顯示。
  */
 
 import {
@@ -233,6 +237,11 @@ export class JellyRenderer {
     // setBoundaryFrame 才會用新的 scale；地板線的長度也跟著相機平移／縮放走。
     this.wireframeDirty = true;
     if (this.frameGraphics.visible) this.redrawBoundaryFrame();
+  }
+
+  /** 背景色（0xRRGGBB，issue #147）——下一次 `render()` 起生效。 */
+  setBackgroundColor(color: number): void {
+    this.app.renderer.background.color = color;
   }
 
   /** 網格線框開關（debug 用）。開啟時下一次 `render()` 就畫，不用等下一次 `setPositions`。 */
