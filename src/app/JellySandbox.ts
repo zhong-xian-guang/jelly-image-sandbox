@@ -149,6 +149,7 @@ import {
 } from '../camera';
 import {
   type BackdropCommand,
+  type BackdropMode,
   DEFAULT_TOOL,
   type FanParams,
   type GrabMode,
@@ -207,7 +208,14 @@ import {
   type ClipState,
   type ClipTrack,
 } from './clipFile';
-import { type Backdrop, BackdropBoard, stepBackdropValue, type WorldRect } from './BackdropBoard';
+import {
+  type Backdrop,
+  BackdropBoard,
+  backdropNumber,
+  stepBackdropValue,
+  worldRectOf,
+  type WorldRect,
+} from './BackdropBoard';
 import { BackgroundPanel } from './BackgroundPanel';
 import { BackgroundStore, DEFAULT_BACKGROUND_COLOR, openIndexedDbStore } from './backgroundStore';
 import { BrushCursor, type BrushVariant } from './BrushCursor';
@@ -433,7 +441,7 @@ export class JellySandbox {
    * Jelly 工具的右鍵選單（issue #124）——右鍵點中某塊 Jelly 在游標處開 [重建｜移除]，
    * 作用在點中的那一塊（見 `openJellyMenu`）。切換工具時關掉。
    */
-  private readonly jellyMenu: ContextMenu;
+  private readonly contextMenu: ContextMenu;
   /** 「?」操作說明浮層（issue #132）——第一次打開網頁自動出現一次，之後按側欄標題列的「?」。 */
   private readonly helpOverlay: HelpOverlay;
   /** 定義編隊形狀時畫布上方那行說明（issue #132）——是提示，見 `updateFormationDefineHint`。 */
@@ -829,8 +837,7 @@ export class JellySandbox {
         if (!b) return;
         if (field === 'centerX') this.backdrops.setCenter(id, value, b.centerY);
         else if (field === 'centerY') this.backdrops.setCenter(id, b.centerX, value);
-        else if (field === 'scale') this.backdrops.setScale(id, value);
-        else this.backdrops.setOpacity(id, value);
+        else this.setBackdropValue(id, field, value);
       },
     });
     this.controlPanel.sectionBody('background').appendChild(this.backgroundPanel.element);
@@ -854,8 +861,8 @@ export class JellySandbox {
     });
     this.cursorLabel = new CursorLabel();
     root.appendChild(this.cursorLabel.element);
-    this.jellyMenu = new ContextMenu({ dismissBlockTarget: this.renderer.canvas });
-    root.appendChild(this.jellyMenu.element);
+    this.contextMenu = new ContextMenu({ dismissBlockTarget: this.renderer.canvas });
+    root.appendChild(this.contextMenu.element);
     this.formationDefineHint = new FormationDefineHint();
     root.appendChild(this.formationDefineHint.element);
     // 操作說明（issue #132）：「?」鈕放在側欄標題列「收起側欄」左邊；第一次打開網頁自動出現。
@@ -873,7 +880,7 @@ export class JellySandbox {
         this.importHint,
       ],
       onChange: () => this.applyCleanView(),
-      isEscapeClaimed: () => this.jellyMenu.isOpen,
+      isEscapeClaimed: () => this.contextMenu.isOpen,
     });
     root.appendChild(this.cleanView.element);
     this.controlPanel.titleBarActions.prepend(this.cleanView.createEnterButton());
@@ -949,7 +956,7 @@ export class JellySandbox {
     this.brushCursor.destroy();
     this.handfulRange.destroy();
     this.cursorLabel.destroy();
-    this.jellyMenu.destroy(); // 開著時在 window 上掛了監聽
+    this.contextMenu.destroy(); // 開著時在 window 上掛了監聽
     this.helpOverlay.destroy(); // 開著時在 window 上掛了 Esc 監聽
     this.cleanView.destroy(); // 乾淨畫面中在 document／root 上掛了監聽
     this.formationDefineHint.destroy();
@@ -1518,16 +1525,7 @@ export class JellySandbox {
     const b = id === null ? undefined : this.backdrops.get(id);
     const show =
       b !== undefined && b.visible && this.activeTool === 'backdrop' && !this.cleanView.isActive;
-    this.renderer.setBackdropOutline(
-      show
-        ? {
-            centerX: b.centerX,
-            centerY: b.centerY,
-            width: b.image.width * b.scale,
-            height: b.image.height * b.scale,
-          }
-        : null,
-    );
+    this.renderer.setBackdropOutline(show ? worldRectOf(b) : null);
   }
 
   /**
@@ -1546,14 +1544,19 @@ export class JellySandbox {
         const target = this.backdropAdjustTarget(cmd.at);
         if (!target) return;
         const next = stepBackdropValue(cmd.property, target[cmd.property], cmd.steps);
-        if (cmd.property === 'scale') this.backdrops.setScale(target.id, next);
-        else this.backdrops.setOpacity(target.id, next);
+        this.setBackdropValue(target.id, cmd.property, next);
         return;
       }
       case 'contextMenu':
         this.openBackdropMenu(cmd.id, cmd.screen);
         return;
     }
+  }
+
+  /** 設某張 Backdrop 的縮放或透明度（右鍵＋滾輪與清單數字欄位共用）。 */
+  private setBackdropValue(id: string, property: BackdropMode, value: number): void {
+    if (property === 'scale') this.backdrops.setScale(id, value);
+    else this.backdrops.setOpacity(id, value);
   }
 
   /**
@@ -1577,7 +1580,7 @@ export class JellySandbox {
       isTop: this.backdrops.isTop(id),
       isBottom: this.backdrops.isBottom(id),
     });
-    this.jellyMenu.open(screen, items, (item) => {
+    this.contextMenu.open(screen, items, (item) => {
       if (item === 'delete') this.backdrops.remove(id);
       else if (item === 'bringToFront') this.backdrops.bringToFront(id);
       else this.backdrops.sendToBack(id);
@@ -1634,7 +1637,7 @@ export class JellySandbox {
     this.activeTool = tool;
     this.input.setActiveTool(tool);
     this.controlPanel.setActiveTool(tool);
-    this.jellyMenu.close(); // Jelly 右鍵選單在切換工具時關閉（issue #124）
+    this.contextMenu.close(); // Jelly 右鍵選單在切換工具時關閉（issue #124）
     this.applyToolVisuals();
   }
 
@@ -1703,7 +1706,7 @@ export class JellySandbox {
    * 一個都不動，所以離開時各自回到進入前的樣子。進入時順手關掉開著的右鍵選單。
    */
   private applyCleanView(): void {
-    if (this.cleanView.isActive) this.jellyMenu.close();
+    if (this.cleanView.isActive) this.contextMenu.close();
     this.applyHintVisibility();
     this.updateFormationDefineHint();
     this.applyToolVisuals();
@@ -1878,24 +1881,13 @@ export class JellySandbox {
       list.flatMap((b) => {
         const source = this.backdropTextures.get(b.id);
         if (!source) return [];
-        return [
-          {
-            id: b.id,
-            source,
-            centerX: b.centerX,
-            centerY: b.centerY,
-            width: b.image.width * b.scale,
-            height: b.image.height * b.scale,
-            alpha: b.opacity,
-            visible: b.visible,
-          },
-        ];
+        return [{ id: b.id, source, ...worldRectOf(b), alpha: b.opacity, visible: b.visible }];
       }),
     );
     this.backgroundPanel.setBackdrops(
       list.map((b) => ({
         id: b.id,
-        label: `背景圖 ${b.id.slice(b.id.indexOf('/') + 1)}`,
+        label: `背景圖 ${backdropNumber(b.id)}`,
         thumbnailUrl: this.backdropThumbs.get(b.id) ?? '',
         visible: b.visible,
         isTop: this.backdrops.isTop(b.id),
@@ -2299,7 +2291,7 @@ export class JellySandbox {
       playing: this.playbackLocked,
       recording: this.trackRecorder.isRecording,
     });
-    this.jellyMenu.open(screen, items, (item) => this.runJellyMenuItem(item, hit.jellyId));
+    this.contextMenu.open(screen, items, (item) => this.runJellyMenuItem(item, hit.jellyId));
   }
 
   /** 選單項目的分派口（issue #124），守衛同 `jellyMenuItems` 的鎖法。 */

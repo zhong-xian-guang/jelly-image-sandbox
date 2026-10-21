@@ -212,7 +212,7 @@ export class BackgroundStore {
     return this.queue;
   }
 
-  protected async read(key: string): Promise<unknown> {
+  private async read(key: string): Promise<unknown> {
     if (!this.store) return undefined;
     try {
       return await this.store.get(key);
@@ -222,7 +222,7 @@ export class BackgroundStore {
   }
 
   /** 排一個寫入；同一個 key 已經在排隊就只換掉值。 */
-  protected write(key: string, value: unknown): void {
+  private write(key: string, value: unknown): void {
     const queued = this.pending.has(key);
     this.pending.set(key, value);
     if (queued) return;
@@ -233,7 +233,7 @@ export class BackgroundStore {
     });
   }
 
-  protected remove(key: string): void {
+  private remove(key: string): void {
     this.pending.delete(key);
     this.enqueue((store) => store.delete(key));
   }

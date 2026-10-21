@@ -22,7 +22,8 @@
  * 路徑都不碰這裡。
  */
 
-import type { BackgroundStore, StoredBackdropImage, StoredBackdropMeta } from './backgroundStore';
+import type { BackdropMode } from '../input';
+import type { BackgroundStore, StoredBackdropImage } from './backgroundStore';
 
 /** 一張 Backdrop 的圖：縮小後的圖檔與它的像素尺寸。 */
 export type BackdropImage = StoredBackdropImage;
@@ -87,11 +88,7 @@ function clamp(value: number, min: number, max: number): number {
  * 右鍵＋滾輪 `steps` 格之後的值（issue #150）：縮放每格乘上 `BACKDROP_SCALE_STEP`（等比縮放
  * 用倍率才有一致的手感），透明度每格加減一個 step、對齊格點並捨掉浮點誤差；都夾在範圍內。
  */
-export function stepBackdropValue(
-  property: 'scale' | 'opacity',
-  value: number,
-  steps: number,
-): number {
+export function stepBackdropValue(property: BackdropMode, value: number, steps: number): number {
   if (property === 'scale') {
     return clamp(
       value * BACKDROP_SCALE_STEP ** steps,
@@ -151,9 +148,11 @@ export class BackdropBoard {
     for (let i = this.items.length - 1; i >= 0; i--) {
       const b = this.items[i]!;
       if (!b.visible) continue;
-      const halfW = (b.image.width * b.scale) / 2;
-      const halfH = (b.image.height * b.scale) / 2;
-      if (Math.abs(point.x - b.centerX) <= halfW && Math.abs(point.y - b.centerY) <= halfH) {
+      const rect = worldRectOf(b);
+      if (
+        Math.abs(point.x - rect.centerX) <= rect.width / 2 &&
+        Math.abs(point.y - rect.centerY) <= rect.height / 2
+      ) {
         return b.id;
       }
     }
@@ -282,7 +281,7 @@ export class BackdropBoard {
 
   /** 狀態改了：寫回清單、通知訂閱者。 */
   private changed(): void {
-    this.store.saveBackdropList(this.items.map(toMeta));
+    this.store.saveBackdropList(this.items);
     this.notify();
   }
 
@@ -291,13 +290,17 @@ export class BackdropBoard {
   }
 }
 
-function toMeta(b: Backdrop): StoredBackdropMeta {
+/** 一張 Backdrop 在世界座標佔的矩形（圖片像素尺寸 × 等比縮放）——hit test、算繪、外框共用。 */
+export function worldRectOf(b: Readonly<Backdrop>): WorldRect {
   return {
-    id: b.id,
     centerX: b.centerX,
     centerY: b.centerY,
-    scale: b.scale,
-    opacity: b.opacity,
-    visible: b.visible,
+    width: b.image.width * b.scale,
+    height: b.image.height * b.scale,
   };
+}
+
+/** Backdrop id 裡的流水號（清單顯示「背景圖 3」用）；id 格式是這個模組的事，不讓呼叫端自己拆。 */
+export function backdropNumber(id: string): string {
+  return id.startsWith(ID_PREFIX) ? id.slice(ID_PREFIX.length) : id;
 }
