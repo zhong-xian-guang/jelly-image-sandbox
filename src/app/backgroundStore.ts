@@ -35,6 +35,31 @@ export const BACKGROUND_STORAGE_UNAVAILABLE_NOTICE =
   '這個瀏覽器環境不能保存背景設定：關掉或重新整理頁面後，背景色與背景圖會回到預設';
 
 const COLOR_KEY = 'backgroundColor';
+/** Backdrop 清單（依疊放順序的中繼資料，不含圖）。 */
+const BACKDROPS_KEY = 'backdrops';
+/** 每張 Backdrop 的圖分開存：拖曳只改中繼資料，不必每次重寫整包圖片。 */
+const imageKey = (id: string): string => `backdrop-image:${id}`;
+
+/** 存檔裡的一張 Backdrop：中繼資料（陣列順序＝疊放順序，先畫的在前）。 */
+export interface StoredBackdropMeta {
+  id: string;
+  centerX: number;
+  centerY: number;
+  scale: number;
+  opacity: number;
+  visible: boolean;
+}
+
+/** 存檔裡的一張 Backdrop 圖：縮小後的圖檔與它的像素尺寸。 */
+export interface StoredBackdropImage {
+  blob: Blob;
+  width: number;
+  height: number;
+}
+
+export interface StoredBackdrop extends StoredBackdropMeta {
+  image: StoredBackdropImage;
+}
 
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
@@ -150,6 +175,38 @@ export class BackgroundStore {
     this.write(COLOR_KEY, color);
   }
 
+  /**
+   * 上次存的 Backdrop（依疊放順序）。格式不對的項目、或圖不見了（例如寫到一半頁面被關掉）
+   * 的那一張直接略過，其餘照常還原。
+   */
+  async loadBackdrops(): Promise<StoredBackdrop[]> {
+    const list = await this.read(BACKDROPS_KEY);
+    if (!Array.isArray(list)) return [];
+    const result: StoredBackdrop[] = [];
+    for (const entry of list) {
+      if (!isBackdropMeta(entry)) continue;
+      const image = await this.read(imageKey(entry.id));
+      if (!isBackdropImage(image)) continue;
+      result.push({ ...pickMeta(entry), image });
+    }
+    return result;
+  }
+
+  /** 整份 Backdrop 清單（中繼資料＋順序）——拖曳中連續呼叫只會真的寫最後一次。 */
+  saveBackdropList(list: readonly StoredBackdropMeta[]): void {
+    this.write(BACKDROPS_KEY, list.map(pickMeta));
+  }
+
+  /** 存一張 Backdrop 的圖（新增時一次）。 */
+  saveBackdropImage(id: string, image: StoredBackdropImage): void {
+    this.write(imageKey(id), { blob: image.blob, width: image.width, height: image.height });
+  }
+
+  /** 刪掉一張 Backdrop 的圖（從清單拿掉之後）。 */
+  deleteBackdropImage(id: string): void {
+    this.remove(imageKey(id));
+  }
+
   /** 等目前排進佇列的寫入全部做完（測試與「先存完再重新整理」的驗證用）。 */
   flush(): Promise<void> {
     return this.queue;
@@ -204,4 +261,35 @@ export class BackgroundStore {
     this.notified = true;
     this.onUnavailable(BACKGROUND_STORAGE_UNAVAILABLE_NOTICE);
   }
+}
+
+function pickMeta(meta: StoredBackdropMeta): StoredBackdropMeta {
+  const { id, centerX, centerY, scale, opacity, visible } = meta;
+  return { id, centerX, centerY, scale, opacity, visible };
+}
+
+function isBackdropMeta(value: unknown): value is StoredBackdropMeta {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.id === 'string' &&
+    Number.isFinite(v.centerX) &&
+    Number.isFinite(v.centerY) &&
+    Number.isFinite(v.scale) &&
+    (v.scale as number) > 0 &&
+    Number.isFinite(v.opacity) &&
+    typeof v.visible === 'boolean'
+  );
+}
+
+function isBackdropImage(value: unknown): value is StoredBackdropImage {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    v.blob instanceof Blob &&
+    Number.isFinite(v.width) &&
+    (v.width as number) > 0 &&
+    Number.isFinite(v.height) &&
+    (v.height as number) > 0
+  );
 }

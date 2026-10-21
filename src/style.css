@@ -1267,3 +1267,41 @@ body {
 .jelly-clean-view-exit[hidden] {
   display: none;
 }
+
+/* 「背景」分區的 Backdrop 清單（issue #148）：縮圖＋名稱＋按鈕，最上層排最前面。 */
+.jelly-backdrop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.jelly-backdrop-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.jelly-backdrop-thumb {
+  width: 40px;
+  height: 28px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.jelly-backdrop-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jelly-backdrop-empty {
+  opacity: 0.6;
+  font-size: 0.85em;
+}

@@ -28,6 +28,12 @@
  * **背景色**（issue #147；CONTEXT.md「Background color」）：建立時的 `background.color` 只是
  * 初值，`setBackgroundColor` 在執行中換掉——清畫布用的就是這個顏色，所以相機怎麼平移縮放都
  * 填滿整個畫面。它不是提示，乾淨畫面與播放中照常顯示。
+ *
+ * **Backdrop 圖層**（issue #148；CONTEXT.md「Backdrop」、ADR-0017）：`setBackdrops(items)` 給
+ * 整份 Backdrop 清單（依疊放順序、先畫→後畫），每張一個 `Sprite`，掛在世界容器最底層——所有
+ * Jelly、線框、邊界線都畫在它上面，世界→螢幕轉換跟 Jelly 共用同一個相機。只在清單變了時呼叫，
+ * 不必每幀。貼圖來源由呼叫端解碼好給（`ImageBitmap` 等），Renderer 依 id 快取 `Sprite`，
+ * 清單裡消失的那張連同貼圖一起釋放。它不是提示，乾淨畫面與播放中照常顯示。
  */
 
 import {
@@ -36,6 +42,7 @@ import {
   Graphics,
   Mesh,
   MeshGeometry,
+  Sprite,
   Texture,
   type TextureSourceLike,
 } from 'pixi.js';
@@ -58,6 +65,21 @@ import {
 export type BoundaryFrame =
   | { kind: 'walled'; minX: number; minY: number; maxX: number; maxY: number }
   | { kind: 'floor'; y: number };
+
+/**
+ * 一張 Backdrop 在算繪端需要的東西（issue #148）：世界座標中心與寬高（已乘上縮放）、
+ * 透明度、顯示與否，以及貼圖來源。`source` 同一個 id 不會換（換圖＝刪掉重加）。
+ */
+export interface BackdropSprite {
+  id: string;
+  source: TextureSourceLike;
+  centerX: number;
+  centerY: number;
+  width: number;
+  height: number;
+  alpha: number;
+  visible: boolean;
+}
 
 /** 地板線往可視範圍外多畫的倍數——平移一格內不會先看到線的盡頭才等重畫。 */
 const FLOOR_LINE_OVERSCAN = 2;
@@ -85,6 +107,9 @@ interface JellyEntry {
 export class JellyRenderer {
   private readonly app: Application;
   private readonly world: Container;
+  /** 所有 Backdrop 的 `Sprite`（issue #148），子節點順序 = 疊放順序；在世界容器最底層。 */
+  private readonly backdropLayer: Container;
+  private readonly backdrops = new Map<string, Sprite>();
   /** 所有 Jelly 的 `Mesh` 都掛在這層，子節點順序 = 繪製順序（`setJellyOrder`）。 */
   private readonly jellyLayer: Container;
   private readonly jellies = new Map<string, JellyEntry>();
@@ -106,6 +131,7 @@ export class JellyRenderer {
     this.width = opts.width;
     this.height = opts.height;
 
+    this.backdropLayer = new Container();
     this.jellyLayer = new Container();
 
     this.wireframe = new Graphics();
@@ -115,6 +141,7 @@ export class JellyRenderer {
     this.frameGraphics.visible = false;
 
     this.world = new Container();
+    this.world.addChild(this.backdropLayer); // 最底層——Backdrop 在所有 Jelly、線框、邊框之下
     this.world.addChild(this.jellyLayer);
     this.world.addChild(this.wireframe); // 疊在所有貼圖之上
     this.world.addChild(this.frameGraphics); // 最上層——邊框不該被網格線蓋住
@@ -224,6 +251,43 @@ export class JellyRenderer {
     // （bufferSubData，不重配 GPU buffer）。
     entry.geometry.positions = entry.positionBuffer;
     this.wireframeDirty = true;
+  }
+
+  // ---- backdrops ---------------------------------------------------------------
+
+  /**
+   * 整份 Backdrop 清單（issue #148），依疊放順序（先畫→後畫）。新的 id 建 `Sprite`、不在清單
+   * 裡的釋放（連同這裡建的貼圖），其餘更新位置、大小、透明度、顯示與順序。
+   */
+  setBackdrops(items: readonly BackdropSprite[]): void {
+    const keep = new Set(items.map((item) => item.id));
+    for (const [id, sprite] of this.backdrops) {
+      if (keep.has(id)) continue;
+      this.backdrops.delete(id);
+      this.backdropLayer.removeChild(sprite);
+      sprite.destroy({ texture: true, textureSource: true });
+    }
+    items.forEach((item, index) => {
+      let sprite = this.backdrops.get(item.id);
+      if (!sprite) {
+        sprite = new Sprite(Texture.from(item.source));
+        sprite.anchor.set(0.5);
+        sprite.label = item.id;
+        this.backdrops.set(item.id, sprite);
+        this.backdropLayer.addChild(sprite);
+      }
+      sprite.position.set(item.centerX, item.centerY);
+      sprite.width = item.width;
+      sprite.height = item.height;
+      sprite.alpha = item.alpha;
+      sprite.visible = item.visible;
+      this.backdropLayer.setChildIndex(sprite, index);
+    });
+  }
+
+  /** 目前有哪些 Backdrop（依疊放順序，先畫的在前）。 */
+  backdropIds(): string[] {
+    return this.backdropLayer.children.map((child) => child.label);
   }
 
   // ---- camera / overlays --------------------------------------------------------
