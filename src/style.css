@@ -1305,3 +1305,48 @@ body {
   opacity: 0.6;
   font-size: 0.85em;
 }
+
+/* Backdrop 清單完整版（issue #151）：開關＋縮圖＋名稱＋上移／下移／刪除；選中那列展開數字欄位。 */
+.jelly-backdrop-row {
+  flex-direction: column;
+  align-items: stretch;
+  cursor: pointer;
+}
+
+.jelly-backdrop-row.is-selected {
+  background: rgba(255, 204, 51, 0.16);
+  outline: 1px solid rgba(255, 204, 51, 0.7);
+}
+
+.jelly-backdrop-row-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.jelly-backdrop-row-main button {
+  flex: none;
+  padding: 1px 4px;
+  font-size: 0.75rem;
+}
+
+.jelly-backdrop-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  padding: 4px 2px 2px;
+  cursor: default;
+}
+
+.jelly-backdrop-fields label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+
+.jelly-backdrop-fields input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}

@@ -299,3 +299,56 @@ describe('BackdropBoard：縮放、透明度、疊放順序（issue #150）', ()
     expect(restored.get(b.id)).toMatchObject({ scale: 4, opacity: 0.5 });
   });
 });
+
+describe('BackdropBoard：顯示切換、上移／下移（issue #151）', () => {
+  function threeBoards() {
+    const made = memoryBoard();
+    const a = made.board.add(image(10, 10), VIEW);
+    const b = made.board.add(image(10, 10), VIEW);
+    const c = made.board.add(image(10, 10), VIEW);
+    return { ...made, a, b, c };
+  }
+  const order = (board: BackdropBoard) => board.list().map((x) => x.id);
+
+  it('切換顯示', () => {
+    const { board, a } = threeBoards();
+    board.setVisible(a.id, false);
+    expect(board.get(a.id)!.visible).toBe(false);
+    board.setVisible(a.id, true);
+    expect(board.get(a.id)!.visible).toBe(true);
+  });
+
+  it('上移＝往上疊一層、下移＝往下墊一層', () => {
+    const { board, a, b, c } = threeBoards();
+    board.moveUp(a.id);
+    expect(order(board)).toEqual([b.id, a.id, c.id]);
+    board.moveDown(c.id);
+    expect(order(board)).toEqual([b.id, c.id, a.id]);
+  });
+
+  it('在最上層上移、在最下層下移都不動作（不通知）', () => {
+    const { board, a, c } = threeBoards();
+    const listener = vi.fn();
+    board.onChange(listener);
+    board.moveUp(c.id);
+    board.moveDown(a.id);
+    board.moveUp('nope');
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('顯示與否、順序存起來', async () => {
+    const { board, store, memory, a, b, c } = threeBoards();
+    board.setVisible(b.id, false);
+    board.moveUp(a.id);
+    await store.flush();
+    const restored = await BackdropBoard.restore(new BackgroundStore(memory, () => {}));
+    expect(order(restored)).toEqual([b.id, a.id, c.id]);
+    expect(restored.get(b.id)!.visible).toBe(false);
+  });
+
+  it('setCenter 直接設中心（清單數字欄位用）', () => {
+    const { board, a } = threeBoards();
+    board.setCenter(a.id, -12, 34);
+    expect(board.get(a.id)).toMatchObject({ centerX: -12, centerY: 34 });
+  });
+});

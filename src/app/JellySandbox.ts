@@ -819,6 +819,19 @@ export class JellySandbox {
       onColorChange: (color) => this.setBackgroundColor(color),
       onImportBackdrop: () => this.backdropFileInput.open(),
       onDeleteBackdrop: (id) => this.backdrops.remove(id),
+      // 清單完整版（issue #151）：選取跟畫布上的背景圖工具共用 `BackdropBoard` 那一份。
+      onBackdropVisibleChange: (id, visible) => this.backdrops.setVisible(id, visible),
+      onMoveBackdropUp: (id) => this.backdrops.moveUp(id),
+      onMoveBackdropDown: (id) => this.backdrops.moveDown(id),
+      onSelectBackdrop: (id) => this.backdrops.select(id),
+      onBackdropFieldChange: (id, field, value) => {
+        const b = this.backdrops.get(id);
+        if (!b) return;
+        if (field === 'centerX') this.backdrops.setCenter(id, value, b.centerY);
+        else if (field === 'centerY') this.backdrops.setCenter(id, b.centerX, value);
+        else if (field === 'scale') this.backdrops.setScale(id, value);
+        else this.backdrops.setOpacity(id, value);
+      },
     });
     this.controlPanel.sectionBody('background').appendChild(this.backgroundPanel.element);
     // 畫布上的播放控制條（底部中央）與相機按鈕（右下角）——issue #129；只吃自己範圍內的點擊。
@@ -1884,6 +1897,14 @@ export class JellySandbox {
         id: b.id,
         label: `背景圖 ${b.id.slice(b.id.indexOf('/') + 1)}`,
         thumbnailUrl: this.backdropThumbs.get(b.id) ?? '',
+        visible: b.visible,
+        isTop: this.backdrops.isTop(b.id),
+        isBottom: this.backdrops.isBottom(b.id),
+        selected: b.id === this.backdrops.selectedId,
+        centerX: b.centerX,
+        centerY: b.centerY,
+        scale: b.scale,
+        opacity: b.opacity,
       })),
     );
     this.applyBackdropOutline();

@@ -160,6 +160,15 @@ export class BackdropBoard {
     return null;
   }
 
+  /** 直接設中心（issue #151：清單的 x／y 欄位）；不存在不動作。 */
+  setCenter(id: string, centerX: number, centerY: number): void {
+    if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return;
+    this.update(id, (b) => {
+      b.centerX = centerX;
+      b.centerY = centerY;
+    });
+  }
+
   /** 移動一張（世界座標移動量）；不存在不動作。 */
   move(id: string, dx: number, dy: number): void {
     this.update(id, (b) => {
@@ -192,6 +201,18 @@ export class BackdropBoard {
   /** 是不是墊在最下面那張。 */
   isBottom(id: string): boolean {
     return this.items[0]?.id === id;
+  }
+
+  /** 往上疊一層（issue #151）；已經在最上層（或不存在）不動作。 */
+  moveUp(id: string): void {
+    const index = this.items.findIndex((b) => b.id === id);
+    if (index >= 0) this.reorder(id, Math.min(index + 1, this.items.length - 1));
+  }
+
+  /** 往下墊一層（issue #151）；已經在最下層（或不存在）不動作。 */
+  moveDown(id: string): void {
+    const index = this.items.findIndex((b) => b.id === id);
+    if (index >= 0) this.reorder(id, Math.max(index - 1, 0));
   }
 
   /** 移到最上層；已經在最上層（或不存在）不動作。 */
