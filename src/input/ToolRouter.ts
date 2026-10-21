@@ -159,6 +159,11 @@
  * 這些手勢走獨立的出口 `onBackdropCommand`，**不是** `emit`——Backdrop 不是模擬的一部分，
  * 不送任何 `InputEvent`，所以天生不會被錄進 Action Track，錄製中照樣能操作。跟其他分支一樣
  * 在按下當下定下（`pointerBehaviors`）。
+ *
+ * **背景圖工具的模式與右鍵**（issue #150 / 背景 T4）：模式是「右鍵＋滾輪調什麼」——縮放／
+ * 透明度，中鍵輪替、各自記住（同電風扇）。右鍵＋滾輪走 `adjustBackdrop`（送 `adjust`），右鍵
+ * 單擊點中某張送 `contextMenu`（呼叫端開「刪除／移到最上層／移到最下層」選單）。同樣不送
+ * `InputEvent`。
  */
 
 import { isPointInFanRect, type FanState, type PinInfo, type PointerId, type Point } from '../sim';
@@ -191,6 +196,7 @@ export const TOOL_MODES = {
   grab: ['single', 'handful', 'formation'],
   pin: ['place', 'remove'],
   fan: ['width', 'strength', 'falloff', 'frequency'],
+  backdrop: ['scale', 'opacity'],
 } as const satisfies Partial<Record<ToolId, readonly string[]>>;
 
 /** 有模式的工具。 */
@@ -205,6 +211,11 @@ export type GrabMode = ToolModeOf<'grab'>;
 export type PinMode = ToolModeOf<'pin'>;
 /** 電風扇的模式（issue #125）：右鍵＋滾輪調的參數——寬度／強度／衰減／頻率。左鍵不受影響。 */
 export type FanMode = ToolModeOf<'fan'>;
+/**
+ * 背景圖工具的模式（issue #150）：右鍵＋滾輪調選中（或游標下）那張 Backdrop 的縮放或透明度。
+ * 左鍵不受影響。數值住在 `BackdropBoard`，不是 `ToolRouter` 的數值（見 `adjustBackdrop`）。
+ */
+export type BackdropMode = ToolModeOf<'backdrop'>;
 
 export function isModalTool(tool: ToolId): tool is ModalToolId {
   return tool in TOOL_MODES;
@@ -228,11 +239,17 @@ type Behavior =
 export const DEFAULT_TOOL: ToolId = 'grab';
 
 /**
- * 背景圖工具送出的指令（issue #149）——走 `onBackdropCommand`，不是 `InputEvent`（見類別頂端
- * 說明）。`select` 的 `id: null`＝取消選取；`move` 是這一格的世界座標移動量。
+ * 背景圖工具送出的指令（issue #149；issue #150 加 `adjust`／`contextMenu`）——走
+ * `onBackdropCommand`，不是 `InputEvent`（見類別頂端說明）。`select` 的 `id: null`＝取消選取；
+ * `move` 是這一格的世界座標移動量；`adjust` 是右鍵＋滾輪 `steps` 格，調哪一張（選中那張，沒
+ * 選中就 `at` 游標下那張）由呼叫端決定；`contextMenu` 是右鍵單擊點中某張，`screen` 是畫布
+ * 局部座標（選單擺的位置）。
  */
 export type BackdropCommand =
-  { type: 'select'; id: string | null } | { type: 'move'; id: string; dx: number; dy: number };
+  | { type: 'select'; id: string | null }
+  | { type: 'move'; id: string; dx: number; dy: number }
+  | { type: 'adjust'; property: BackdropMode; steps: number; at: Point }
+  | { type: 'contextMenu'; id: string; screen: Point };
 
 /** 手勢直接交給 `GestureTracker` 的分支——只有單點抓取（見類別頂端說明）。 */
 function usesGestureTracker(behavior: Behavior): boolean {
@@ -383,6 +400,8 @@ const MODE_VALUE_KEYS: {
     falloff: 'fanFalloffExponent',
     frequency: 'fanFrequency',
   },
+  // 背景圖工具調的是某一張 Backdrop 的值，不是 `ToolRouter` 的欄位——走 `adjustBackdrop`。
+  backdrop: {},
 };
 
 /** 一個可用右鍵＋滾輪調的數值：範圍＋讀寫 `ToolRouter` 內那一個欄位。 */
@@ -581,6 +600,7 @@ export class ToolRouter {
     grab: TOOL_MODES.grab[0],
     pin: TOOL_MODES.pin[0],
     fan: TOOL_MODES.fan[0],
+    backdrop: TOOL_MODES.backdrop[0],
   };
   /**
    * 每個進行中的指標在**按下當下**定下的手勢分支（issue #122）——`move`／`up`／`cancel`
@@ -907,6 +927,23 @@ export class ToolRouter {
     return { key, value };
   }
 
+  /**
+   * 背景圖工具的「右鍵＋滾輪」（issue #150）：依目前模式送 `adjust`（縮放或透明度，`steps` 格，
+   * 帶滾輪當下游標的世界座標），回報 `true`＝已處理、相機不縮放。不是背景圖工具回 `false`，
+   * 呼叫端照舊走 `adjustActiveValue`／縮放。跟 `adjustActiveValue` 分開：那邊調的是
+   * `ToolRouter` 自己的欄位（下一次按下用的參數），這裡調的是場上某一張 Backdrop。
+   */
+  adjustBackdrop(steps: number, screenX: number, screenY: number): boolean {
+    if (this.activeTool !== 'backdrop') return false;
+    this.onBackdropCommand?.({
+      type: 'adjust',
+      property: this.modes.backdrop,
+      steps,
+      at: this.screenToWorld(screenX, screenY),
+    });
+    return true;
+  }
+
   down(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
     // 按下當下就定下這次手勢的分支（issue #122），之後切工具／切模式都不影響它。
     const behavior = this.currentBehavior();
@@ -1205,6 +1242,18 @@ export class ToolRouter {
    * - 其他工具忽略。
    */
   rightClick(world: Point, screenX: number, screenY: number): void {
+    if (this.activeTool === 'backdrop') {
+      // 點中某張 Backdrop 才開選單（issue #150）；點空白處什麼都不做。
+      const hit = this.backdropHitTest?.(world) ?? null;
+      if (hit !== null) {
+        this.onBackdropCommand?.({
+          type: 'contextMenu',
+          id: hit,
+          screen: { x: screenX, y: screenY },
+        });
+      }
+      return;
+    }
     if (this.activeTool === 'jelly') {
       if (this.hitTest && !this.hitTest(world)) return;
       this.onJellyContextMenu?.(world, { x: screenX, y: screenY });

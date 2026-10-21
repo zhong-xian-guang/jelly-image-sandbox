@@ -754,7 +754,10 @@ export class ControlPanel {
     const jellyParams = this.toolParams('Jelly', []);
 
     // 背景圖工具的參數卡（issue #149）：操作 Backdrop；匯入與清單在「背景」分區。
-    const backdropParams = this.toolParams('背景圖', []);
+    // issue #150：模式（縮放／透明度）＝右鍵＋滾輪調的值。
+    const backdropParams = this.toolParams('背景圖', [
+      this.modeRow('backdrop', opts.initial.toolModes.backdrop, opts.onModeChange),
+    ]);
 
     const toolbarSection = this.toolbarSection(
       opts.initial.activeTool,

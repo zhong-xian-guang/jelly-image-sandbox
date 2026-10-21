@@ -38,6 +38,7 @@ export type {
   GrabMode,
   PinMode,
   FanMode,
+  BackdropMode,
   ModeValueKey,
   ModeValue,
 } from './ToolRouter';

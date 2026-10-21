@@ -37,7 +37,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
   return {
     initial: {
       activeTool: 'grab',
-      toolModes: { grab: 'single', pin: 'place', fan: 'width' },
+      toolModes: { grab: 'single', pin: 'place', fan: 'width', backdrop: 'scale' },
       showCursorLabel: true,
       boundary: 'infinite',
       softness: 0.5,
@@ -864,7 +864,7 @@ describe('ControlPanel — 電風扇的模式鈕（issue #125）', () => {
     const opts = makeOptions({
       initial: {
         ...makeOptions().initial,
-        toolModes: { grab: 'single', pin: 'place', fan: 'strength' },
+        toolModes: { grab: 'single', pin: 'place', fan: 'strength', backdrop: 'scale' },
       },
     });
     const panel = new ControlPanel(opts);
@@ -899,7 +899,7 @@ describe('ControlPanel — 抓取工具的模式鈕（issue #122）', () => {
       makeOptions({
         initial: {
           ...makeOptions().initial,
-          toolModes: { grab: 'handful', pin: 'place', fan: 'width' },
+          toolModes: { grab: 'handful', pin: 'place', fan: 'width', backdrop: 'scale' },
         },
       }),
     );
@@ -1200,7 +1200,7 @@ describe('ControlPanel — Pin 工具（issue #123 / V4 T2）', () => {
     const opts = makeOptions({
       initial: {
         ...makeOptions().initial,
-        toolModes: { grab: 'single', pin: 'remove', fan: 'width' },
+        toolModes: { grab: 'single', pin: 'remove', fan: 'width', backdrop: 'scale' },
       },
     });
     const panel = new ControlPanel(opts);

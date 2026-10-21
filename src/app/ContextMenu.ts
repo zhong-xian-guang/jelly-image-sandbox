@@ -43,6 +43,32 @@ export function jellyMenuItems(state: {
   ];
 }
 
+/** Backdrop 右鍵選單的項目（issue #150；spec #146 US14）。 */
+export type BackdropMenuItemId = 'delete' | 'bringToFront' | 'sendToBack';
+
+/**
+ * Backdrop 右鍵選單的項目（issue #150）：刪除、移到最上層、移到最下層。已經在最上層／最下層
+ * 時對應的項目變灰。Backdrop 不是 Scene 也不進 Track，播放中、錄製中都照常能用。
+ */
+export function backdropMenuItems(state: {
+  isTop: boolean;
+  isBottom: boolean;
+}): ContextMenuItem<BackdropMenuItemId>[] {
+  return [
+    { id: 'delete', label: '刪除', disabledReason: null },
+    {
+      id: 'bringToFront',
+      label: '移到最上層',
+      disabledReason: state.isTop ? '已經在最上層' : null,
+    },
+    {
+      id: 'sendToBack',
+      label: '移到最下層',
+      disabledReason: state.isBottom ? '已經在最下層' : null,
+    },
+  ];
+}
+
 export interface ContextMenuOptions {
   /** 在它上面按左鍵關選單時吞掉那一下（畫布），見類別頂端說明。 */
   dismissBlockTarget?: HTMLElement;

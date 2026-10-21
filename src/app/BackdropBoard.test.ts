@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { BackdropBoard, coverPlacement, type BackdropImage } from './BackdropBoard';
+import {
+  BACKDROP_OPACITY_RANGE,
+  BACKDROP_SCALE_RANGE,
+  BACKDROP_SCALE_STEP,
+  BackdropBoard,
+  coverPlacement,
+  stepBackdropValue,
+  type BackdropImage,
+} from './BackdropBoard';
 import { BackgroundStore, memoryKeyValueStore, type AsyncKeyValueStore } from './backgroundStore';
 
 function image(width: number, height: number, tag = 'x'): BackdropImage {
@@ -220,5 +228,74 @@ describe('BackdropBoard：hit test、選取、移動（issue #149）', () => {
     await store.flush();
     const restored = await BackdropBoard.restore(new BackgroundStore(memory, () => {}));
     expect(restored.get(b.id)).toMatchObject({ centerX: 60, centerY: 12 });
+  });
+});
+
+describe('BackdropBoard：縮放、透明度、疊放順序（issue #150）', () => {
+  function threeBoards() {
+    const made = memoryBoard();
+    const a = made.board.add(image(10, 10), VIEW);
+    const b = made.board.add(image(10, 10), VIEW);
+    const c = made.board.add(image(10, 10), VIEW);
+    return { ...made, a, b, c };
+  }
+  const order = (board: BackdropBoard) => board.list().map((x) => x.id);
+
+  it('縮放夾在範圍內', () => {
+    const { board, a } = threeBoards();
+    board.setScale(a.id, 3);
+    expect(board.get(a.id)!.scale).toBe(3);
+    board.setScale(a.id, 1e9);
+    expect(board.get(a.id)!.scale).toBe(BACKDROP_SCALE_RANGE.max);
+    board.setScale(a.id, 0);
+    expect(board.get(a.id)!.scale).toBe(BACKDROP_SCALE_RANGE.min);
+  });
+
+  it('透明度夾在範圍內', () => {
+    const { board, a } = threeBoards();
+    board.setOpacity(a.id, 0.4);
+    expect(board.get(a.id)!.opacity).toBe(0.4);
+    board.setOpacity(a.id, 2);
+    expect(board.get(a.id)!.opacity).toBe(1);
+    board.setOpacity(a.id, -1);
+    expect(board.get(a.id)!.opacity).toBe(BACKDROP_OPACITY_RANGE.min);
+  });
+
+  it('滾輪一格：縮放乘上固定倍率、透明度走一格並對齊格點', () => {
+    expect(stepBackdropValue('scale', 2, 1)).toBeCloseTo(2 * BACKDROP_SCALE_STEP);
+    expect(stepBackdropValue('scale', 2, -2)).toBeCloseTo(2 / BACKDROP_SCALE_STEP ** 2);
+    expect(stepBackdropValue('opacity', 0.5, -1)).toBe(0.45);
+    expect(stepBackdropValue('opacity', 0.3, 1)).toBe(0.35);
+    expect(stepBackdropValue('opacity', 1, 3)).toBe(1);
+  });
+
+  it('移到最上層／最下層', () => {
+    const { board, a, b, c } = threeBoards();
+    board.bringToFront(a.id);
+    expect(order(board)).toEqual([b.id, c.id, a.id]);
+    board.sendToBack(c.id);
+    expect(order(board)).toEqual([c.id, b.id, a.id]);
+  });
+
+  it('已經在最上層／最下層時不動作（不通知）', () => {
+    const { board, a, c } = threeBoards();
+    const listener = vi.fn();
+    board.onChange(listener);
+    board.bringToFront(c.id);
+    board.sendToBack(a.id);
+    expect(listener).not.toHaveBeenCalled();
+    expect(board.isTop(c.id)).toBe(true);
+    expect(board.isBottom(a.id)).toBe(true);
+  });
+
+  it('縮放、透明度、順序都存起來', async () => {
+    const { board, store, memory, a, b, c } = threeBoards();
+    board.setScale(b.id, 4);
+    board.setOpacity(b.id, 0.5);
+    board.bringToFront(a.id);
+    await store.flush();
+    const restored = await BackdropBoard.restore(new BackgroundStore(memory, () => {}));
+    expect(order(restored)).toEqual([b.id, c.id, a.id]);
+    expect(restored.get(b.id)).toMatchObject({ scale: 4, opacity: 0.5 });
   });
 });

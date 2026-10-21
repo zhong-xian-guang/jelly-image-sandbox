@@ -143,6 +143,11 @@ export class PointerInput {
     return this.tracker.adjustActiveValue(steps);
   }
 
+  /** 轉發給 `ToolRouter.adjustBackdrop`（issue #150）——背景圖工具的右鍵＋滾輪。 */
+  adjustBackdrop(steps: number, screenX: number, screenY: number): boolean {
+    return this.tracker.adjustBackdrop(steps, screenX, screenY);
+  }
+
   /** 目前模式的數值（游標標籤用，issue #122）。 */
   get activeValue(): ModeValue | null {
     return this.tracker.activeValue;

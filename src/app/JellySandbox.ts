@@ -207,16 +207,26 @@ import {
   type ClipState,
   type ClipTrack,
 } from './clipFile';
-import { BackdropBoard, type WorldRect } from './BackdropBoard';
+import { type Backdrop, BackdropBoard, stepBackdropValue, type WorldRect } from './BackdropBoard';
 import { BackgroundPanel } from './BackgroundPanel';
 import { BackgroundStore, DEFAULT_BACKGROUND_COLOR, openIndexedDbStore } from './backgroundStore';
 import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { CanvasHover } from './CanvasHover';
 import { CleanView } from './CleanView';
 import { coveredInsets, visibleRect } from './fitInsets';
-import { ContextMenu, jellyMenuItems, type JellyMenuItemId } from './ContextMenu';
+import {
+  backdropMenuItems,
+  ContextMenu,
+  jellyMenuItems,
+  type JellyMenuItemId,
+} from './ContextMenu';
 import { ControlPanel } from './ControlPanel';
-import { CursorLabel, cursorLabelText, type FormationShapeState } from './CursorLabel';
+import {
+  backdropValueText,
+  CursorLabel,
+  cursorLabelText,
+  type FormationShapeState,
+} from './CursorLabel';
 import { KeyboardShortcuts } from './KeyboardShortcuts';
 import { canvasToPng, drawDefaultTexture } from './defaultJelly';
 import {
@@ -695,6 +705,7 @@ export class JellySandbox {
           grab: this.input.modeOf('grab'),
           pin: this.input.modeOf('pin'),
           fan: this.input.modeOf('fan'),
+          backdrop: this.input.modeOf('backdrop'),
         },
         showCursorLabel: this.showCursorLabel,
         boundary: this.boundaryMode,
@@ -1506,10 +1517,58 @@ export class JellySandbox {
     );
   }
 
-  /** 背景圖工具的指令（issue #149）——直接改 `BackdropBoard`，不經 `World`、不錄進 Track。 */
+  /**
+   * 背景圖工具的指令（issue #149；issue #150 加右鍵＋滾輪與右鍵選單）——直接改
+   * `BackdropBoard`，不經 `World`、不錄進 Track。
+   */
   private runBackdropCommand(cmd: BackdropCommand): void {
-    if (cmd.type === 'select') this.backdrops.select(cmd.id);
-    else this.backdrops.move(cmd.id, cmd.dx, cmd.dy);
+    switch (cmd.type) {
+      case 'select':
+        this.backdrops.select(cmd.id);
+        return;
+      case 'move':
+        this.backdrops.move(cmd.id, cmd.dx, cmd.dy);
+        return;
+      case 'adjust': {
+        const target = this.backdropAdjustTarget(cmd.at);
+        if (!target) return;
+        const next = stepBackdropValue(cmd.property, target[cmd.property], cmd.steps);
+        if (cmd.property === 'scale') this.backdrops.setScale(target.id, next);
+        else this.backdrops.setOpacity(target.id, next);
+        return;
+      }
+      case 'contextMenu':
+        this.openBackdropMenu(cmd.id, cmd.screen);
+        return;
+    }
+  }
+
+  /**
+   * 右鍵＋滾輪調的是哪一張（issue #150）：選中那張；沒有選中時是 `at`（游標下）最上層、顯示中
+   * 那張。游標標籤顯示的也是它的值。
+   */
+  private backdropAdjustTarget(at: Point | null): Readonly<Backdrop> | undefined {
+    const selected = this.backdrops.selectedId;
+    if (selected !== null) return this.backdrops.get(selected);
+    const hit = at && this.backdrops.hitTest(at);
+    return hit ? this.backdrops.get(hit) : undefined;
+  }
+
+  /**
+   * Backdrop 右鍵選單（issue #150）：先選中點到的那張（外框標出選單作用在哪一張），再在游標處
+   * 開「刪除／移到最上層／移到最下層」。跟 Jelly 選單共用同一個 `ContextMenu`。
+   */
+  private openBackdropMenu(id: string, screen: Point): void {
+    this.backdrops.select(id);
+    const items = backdropMenuItems({
+      isTop: this.backdrops.isTop(id),
+      isBottom: this.backdrops.isBottom(id),
+    });
+    this.jellyMenu.open(screen, items, (item) => {
+      if (item === 'delete') this.backdrops.remove(id);
+      else if (item === 'bringToFront') this.backdrops.bringToFront(id);
+      else this.backdrops.sendToBack(id);
+    });
   }
 
   /**
@@ -1662,10 +1721,23 @@ export class JellySandbox {
       : shape && shape.length > 0
         ? 'ready'
         : 'none';
-    this.cursorLabel.setText(
-      cursorLabelText({ mode, value: this.input.activeValue?.value ?? null, formation }),
-    );
+    this.cursorLabel.setText(cursorLabelText({ mode, value: this.cursorLabelValue(), formation }));
     this.cursorLabel.setPosition(this.canvasHover.point);
+  }
+
+  /**
+   * 游標標籤上的數值：背景圖工具（issue #150）是右鍵＋滾輪會調的那張（選中的，沒有就游標下的）
+   * 目前的縮放或透明度；其餘工具是 `ToolRouter` 自己的數值。
+   */
+  private cursorLabelValue(): number | string | null {
+    if (this.activeTool !== 'backdrop') return this.input.activeValue?.value ?? null;
+    const point = this.canvasHover.point;
+    const at = point
+      ? screenToWorld(this.cameraState.transform, this.canvasSize(), point.x, point.y)
+      : null;
+    const target = this.backdropAdjustTarget(at);
+    const property = this.input.modeOf('backdrop');
+    return target ? backdropValueText(property, target[property]) : null;
   }
 
   /**
@@ -2587,7 +2659,9 @@ export class JellySandbox {
         hitTest(world) ||
         (this.activeTool === 'backdrop' && this.backdrops.hitTest(world) !== null),
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
-      adjustModeValue: (steps) => this.adjustModeValue(steps),
+      // 背景圖工具調的是場上某張 Backdrop（issue #150），其餘工具調自己的數值。
+      adjustModeValue: (steps, sx, sy) =>
+        input.adjustBackdrop(steps, sx, sy) || this.adjustModeValue(steps),
       onMiddleClick: () => this.cycleMode(), // 中鍵單擊輪替模式（issue #122）
       // 右鍵單擊交給目前工具（issue #124 / #125）：Jelly 開選單、電風扇點在風扇上＝移除。
       onRightClick: (world, sx, sy) => input.rightClick(world, sx, sy),

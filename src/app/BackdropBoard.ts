@@ -66,6 +66,44 @@ export function coverPlacement(
 
 const ID_PREFIX = 'backdrop/';
 
+/**
+ * 等比縮放的範圍（issue #150），一個圖片像素＝幾個世界單位。範圍放得很寬：cover 擺放算出來的
+ * 值依圖片解析度與當時的相機縮放而定，可能落在很小或很大的地方；只擋掉會讓圖消失或爆掉的極端值。
+ */
+export const BACKDROP_SCALE_RANGE = { min: 0.001, max: 1000 } as const;
+/** 右鍵＋滾輪一格的縮放倍率（往上滾放大、往下滾縮小）。 */
+export const BACKDROP_SCALE_STEP = 1.1;
+/**
+ * 透明度的範圍與一格的量（issue #150）。下限不到 0：完全透明的圖還點得到卻看不見，只會讓人
+ * 困惑——要暫時拿掉請用清單的顯示開關。
+ */
+export const BACKDROP_OPACITY_RANGE = { min: 0.05, max: 1, step: 0.05 } as const;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * 右鍵＋滾輪 `steps` 格之後的值（issue #150）：縮放每格乘上 `BACKDROP_SCALE_STEP`（等比縮放
+ * 用倍率才有一致的手感），透明度每格加減一個 step、對齊格點並捨掉浮點誤差；都夾在範圍內。
+ */
+export function stepBackdropValue(
+  property: 'scale' | 'opacity',
+  value: number,
+  steps: number,
+): number {
+  if (property === 'scale') {
+    return clamp(
+      value * BACKDROP_SCALE_STEP ** steps,
+      BACKDROP_SCALE_RANGE.min,
+      BACKDROP_SCALE_RANGE.max,
+    );
+  }
+  const { min, max, step } = BACKDROP_OPACITY_RANGE;
+  const snapped = Math.round((value + steps * step) / step) * step;
+  return clamp(Number(snapped.toFixed(2)), min, max);
+}
+
 export class BackdropBoard {
   private readonly store: BackgroundStore;
   /** 依疊放順序（先畫→後畫）。 */
@@ -130,6 +168,42 @@ export class BackdropBoard {
     });
   }
 
+  /** 設定等比縮放（夾在 `BACKDROP_SCALE_RANGE` 內，中心不動）。 */
+  setScale(id: string, scale: number): void {
+    if (!Number.isFinite(scale)) return;
+    this.update(id, (b) => {
+      b.scale = clamp(scale, BACKDROP_SCALE_RANGE.min, BACKDROP_SCALE_RANGE.max);
+    });
+  }
+
+  /** 設定透明度（夾在 `BACKDROP_OPACITY_RANGE` 內）。 */
+  setOpacity(id: string, opacity: number): void {
+    if (!Number.isFinite(opacity)) return;
+    this.update(id, (b) => {
+      b.opacity = clamp(opacity, BACKDROP_OPACITY_RANGE.min, BACKDROP_OPACITY_RANGE.max);
+    });
+  }
+
+  /** 是不是疊在最上面那張。 */
+  isTop(id: string): boolean {
+    return this.items.at(-1)?.id === id;
+  }
+
+  /** 是不是墊在最下面那張。 */
+  isBottom(id: string): boolean {
+    return this.items[0]?.id === id;
+  }
+
+  /** 移到最上層；已經在最上層（或不存在）不動作。 */
+  bringToFront(id: string): void {
+    this.reorder(id, this.items.length - 1);
+  }
+
+  /** 移到最下層；已經在最下層（或不存在）不動作。 */
+  sendToBack(id: string): void {
+    this.reorder(id, 0);
+  }
+
   /** 顯示／隱藏一張；被隱藏的不畫、也點不到。 */
   setVisible(id: string, visible: boolean): void {
     this.update(id, (b) => {
@@ -166,6 +240,15 @@ export class BackdropBoard {
     if (this.selected === id) this.selected = null;
     this.changed();
     this.store.deleteBackdropImage(id);
+  }
+
+  /** 把某張移到 `index`（疊放順序）；位置沒變或不存在不動作、不通知。 */
+  private reorder(id: string, index: number): void {
+    const from = this.items.findIndex((b) => b.id === id);
+    if (from < 0 || from === index) return;
+    const [backdrop] = this.items.splice(from, 1);
+    this.items.splice(index, 0, backdrop!);
+    this.changed();
   }
 
   /** 改某一張（不存在不動作），改完寫回並通知。 */
