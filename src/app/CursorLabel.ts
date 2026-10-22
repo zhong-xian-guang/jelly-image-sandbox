@@ -11,7 +11,7 @@
  * 文字由純函式 `cursorLabelText` 算，DOM 類別只管顯示——文字規則可以不開瀏覽器就測。
  */
 
-import type { ToolMode } from '../input';
+import type { BackdropMode, ToolMode } from '../input';
 import type { HoverPoint } from './CanvasHover';
 import { MODE_LABELS } from './toolLabels';
 
@@ -26,8 +26,11 @@ export type FormationShapeState = 'none' | 'defining' | 'ready';
 export interface CursorLabelInput {
   /** 目前工具的模式；沒有模式為 `null`。 */
   mode: ToolMode | null;
-  /** 目前模式用右鍵＋滾輪調的數值；沒有為 `null`。 */
-  value: number | null;
+  /**
+   * 目前模式用右鍵＋滾輪調的數值；沒有為 `null`。背景圖工具（issue #150）給排好的文字
+   * （`backdropValueText`）。
+   */
+  value: number | string | null;
   /** 編隊形狀的狀態——只有編隊模式會用到。 */
   formation: FormationShapeState;
 }
@@ -47,6 +50,11 @@ export function cursorLabelText(input: CursorLabelInput): string | null {
     return input.value === null ? name : `${name} · ${MODE_LABELS.handful} ${input.value}`;
   }
   return input.value === null ? name : `${name} · ${input.value}`;
+}
+
+/** 背景圖工具游標標籤上的數值（issue #150）：縮放「×1.25」、透明度「80%」。 */
+export function backdropValueText(property: BackdropMode, value: number): string {
+  return property === 'scale' ? `×${value.toFixed(2)}` : `${Math.round(value * 100)}%`;
 }
 
 export class CursorLabel {

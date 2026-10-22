@@ -1,6 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ContextMenu, jellyMenuItems, type ContextMenuItem } from './ContextMenu';
+import {
+  backdropMenuItems,
+  ContextMenu,
+  jellyMenuItems,
+  type ContextMenuItem,
+} from './ContextMenu';
+
+describe('backdropMenuItems — Backdrop 右鍵選單（issue #150）', () => {
+  it('刪除、移到最上層、移到最下層；夾在中間時都能用', () => {
+    const items = backdropMenuItems({ isTop: false, isBottom: false });
+    expect(items.map((i) => [i.id, i.label])).toEqual([
+      ['delete', '刪除'],
+      ['bringToFront', '移到最上層'],
+      ['sendToBack', '移到最下層'],
+    ]);
+    expect(items.every((i) => i.disabledReason === null)).toBe(true);
+  });
+
+  it('已經在最上層／最下層時，對應的項目變灰', () => {
+    const only = backdropMenuItems({ isTop: true, isBottom: true });
+    expect(only.find((i) => i.id === 'delete')!.disabledReason).toBeNull();
+    expect(only.find((i) => i.id === 'bringToFront')!.disabledReason).not.toBeNull();
+    expect(only.find((i) => i.id === 'sendToBack')!.disabledReason).not.toBeNull();
+  });
+});
 
 describe('jellyMenuItems — Jelly 右鍵選單的項目與鎖定原因（issue #124）', () => {
   it('平常：重建、移除都能按', () => {

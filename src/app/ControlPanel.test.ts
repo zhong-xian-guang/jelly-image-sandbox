@@ -37,7 +37,7 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
   return {
     initial: {
       activeTool: 'grab',
-      toolModes: { grab: 'single', pin: 'place', fan: 'width' },
+      toolModes: { grab: 'single', pin: 'place', fan: 'width', backdrop: 'scale' },
       showCursorLabel: true,
       boundary: 'infinite',
       softness: 0.5,
@@ -694,12 +694,13 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
     const buttons = [
       ...panel.element.querySelectorAll('.jelly-toolbar button'),
     ] as HTMLButtonElement[];
-    expect(buttons.map((b) => b.dataset.tool)).toEqual(['grab', 'pin', 'fan', 'jelly']);
+    expect(buttons.map((b) => b.dataset.tool)).toEqual(['grab', 'pin', 'fan', 'jelly', 'backdrop']);
     expect(buttons.map((b) => b.querySelector('.jelly-tool-button-text')!.textContent)).toEqual([
       '抓取',
       'Pin',
       '電風扇',
       'Jelly',
+      '背景圖',
     ]);
     for (const b of buttons) {
       expect(b.querySelector('.jelly-tool-button-icon')!.textContent).not.toBe('');
@@ -766,7 +767,7 @@ describe('ControlPanel — 參數卡隨目前工具切換（issue #122）', () =
     const titles = [...panel.element.querySelectorAll('.jelly-tool-card .jelly-tool-params')].map(
       (el) => el.querySelector('.jelly-tool-params-title')?.textContent,
     );
-    expect(titles).toEqual(['抓取', 'Pin', '電風扇', 'Jelly']);
+    expect(titles).toEqual(['抓取', 'Pin', '電風扇', 'Jelly', '背景圖']);
   });
 
   it('任一時刻只有一組參數卡顯示，跟著目前工具換', () => {
@@ -863,7 +864,7 @@ describe('ControlPanel — 電風扇的模式鈕（issue #125）', () => {
     const opts = makeOptions({
       initial: {
         ...makeOptions().initial,
-        toolModes: { grab: 'single', pin: 'place', fan: 'strength' },
+        toolModes: { grab: 'single', pin: 'place', fan: 'strength', backdrop: 'scale' },
       },
     });
     const panel = new ControlPanel(opts);
@@ -898,7 +899,7 @@ describe('ControlPanel — 抓取工具的模式鈕（issue #122）', () => {
       makeOptions({
         initial: {
           ...makeOptions().initial,
-          toolModes: { grab: 'handful', pin: 'place', fan: 'width' },
+          toolModes: { grab: 'handful', pin: 'place', fan: 'width', backdrop: 'scale' },
         },
       }),
     );
@@ -1199,7 +1200,7 @@ describe('ControlPanel — Pin 工具（issue #123 / V4 T2）', () => {
     const opts = makeOptions({
       initial: {
         ...makeOptions().initial,
-        toolModes: { grab: 'single', pin: 'remove', fan: 'width' },
+        toolModes: { grab: 'single', pin: 'remove', fan: 'width', backdrop: 'scale' },
       },
     });
     const panel = new ControlPanel(opts);
@@ -1620,7 +1621,7 @@ function expandedSections(panel: ControlPanel): string[] {
 }
 
 describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () => {
-  it('七個分區，照順序：匯入、片段、物理、檢視、Demo、錄製、開發者', () => {
+  it('八個分區，照順序：匯入、片段、物理、檢視、背景、Demo、錄製、開發者', () => {
     const panel = new ControlPanel(makeOptions());
     const sections = [...panel.element.querySelectorAll('.jelly-panel-section')] as HTMLElement[];
     expect(sections.map((s) => s.dataset.section)).toEqual([
@@ -1628,6 +1629,7 @@ describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () =>
       'clip',
       'physics',
       'view',
+      'background',
       'demo',
       'record',
       'dev',
@@ -1637,7 +1639,7 @@ describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () =>
         (s) =>
           s.querySelector('.jelly-panel-section-header .jelly-panel-section-title')!.textContent,
       ),
-    ).toEqual(['匯入', '片段', '物理', '檢視', 'Demo', '錄製', '開發者']);
+    ).toEqual(['匯入', '片段', '物理', '檢視', '背景', 'Demo', '錄製', '開發者']);
   });
 
   it('工具列＋工具卡在所有分區之上、不在任何分區裡', () => {

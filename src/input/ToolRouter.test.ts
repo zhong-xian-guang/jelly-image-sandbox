@@ -17,6 +17,7 @@ import {
   TOOL_IDS,
   ToolRouter,
   modesOf,
+  type BackdropCommand,
   type GrabMode,
   type ToolRouterOptions,
 } from './ToolRouter';
@@ -1191,8 +1192,8 @@ describe('ToolRouter — 調整目前模式的數值（issue #114 調半徑；is
 });
 
 describe('ToolRouter — 工具與模式（issue #122 / V4 T1；ADR-0016）', () => {
-  it('工具列的四個工具：抓取在最前（預設）、Pin、電風扇、Jelly（合併了生成／移除／重建）', () => {
-    expect([...TOOL_IDS]).toEqual(['grab', 'pin', 'fan', 'jelly']);
+  it('工具列的五個工具：抓取在最前（預設）、Pin、電風扇、Jelly（合併了生成／移除／重建）、背景圖', () => {
+    expect([...TOOL_IDS]).toEqual(['grab', 'pin', 'fan', 'jelly', 'backdrop']);
   });
 
   it('有模式的工具：抓取（單點／大把／編隊）、Pin（放／拔）、電風扇（寬度／強度／衰減／頻率）', () => {
@@ -1200,6 +1201,7 @@ describe('ToolRouter — 工具與模式（issue #122 / V4 T1；ADR-0016）', ()
     expect(modesOf('pin')).toEqual(['place', 'remove']);
     expect(modesOf('fan')).toEqual(['width', 'strength', 'falloff', 'frequency']);
     expect(modesOf('jelly')).toEqual([]);
+    expect(modesOf('backdrop')).toEqual(['scale', 'opacity']);
   });
 
   it('cycleMode 依序輪替目前工具的模式，最後一個繞回第一個', () => {
@@ -1675,5 +1677,154 @@ describe('ToolRouter — 定義編隊形狀途中鎖住抓取工具的模式（i
     expect(router.cycleMode()).toBe('remove');
     router.setMode('pin', 'place');
     expect(router.modeOf('pin')).toBe('place');
+  });
+});
+
+describe('ToolRouter — 背景圖工具：選取與拖曳（issue #149 / 背景 T3）', () => {
+  /** 世界座標 x < 1100 的地方有一張 Backdrop「bd」（螢幕 x < 100）。 */
+  function makeBackdropRouter() {
+    const commands: BackdropCommand[] = [];
+    const hitTest = vi.fn(() => true); // Jelly 到處都在——背景圖工具不該理它
+    const backdropHitTest = vi.fn((world: Point) => (world.x < 1100 ? 'bd' : null));
+    const made = makeRouter(undefined, undefined, {
+      hitTest,
+      backdropHitTest,
+      onBackdropCommand: (cmd) => commands.push(cmd),
+    });
+    made.router.setActiveTool('backdrop');
+    return { ...made, commands, hitTest, backdropHitTest };
+  }
+
+  it('左鍵按在 Backdrop 上：選中它（Jelly 不擋）', () => {
+    const { router, commands, events } = makeBackdropRouter();
+    router.down(1, 50, 50, 0);
+    router.up(1, 50, 50, 100);
+    expect(commands).toEqual([{ type: 'select', id: 'bd' }]);
+    expect(events).toEqual([]);
+  });
+
+  it('按在空白處：取消選取，拖曳不送移動', () => {
+    const { router, commands } = makeBackdropRouter();
+    router.down(1, 500, 50, 0);
+    router.move(1, 520, 60);
+    router.up(1, 520, 60, 300);
+    expect(commands).toEqual([{ type: 'select', id: null }]);
+  });
+
+  it('拖曳：每次 move 送世界座標的移動量', () => {
+    const { router, commands } = makeBackdropRouter();
+    router.down(1, 10, 10, 0);
+    router.move(1, 30, 15);
+    router.move(1, 25, 40);
+    router.up(1, 25, 40, 500);
+    expect(commands).toEqual([
+      { type: 'select', id: 'bd' },
+      { type: 'move', id: 'bd', dx: 20, dy: 5 },
+      { type: 'move', id: 'bd', dx: -5, dy: 25 },
+    ]);
+  });
+
+  it('cancel 之後不再跟著指標', () => {
+    const { router, commands } = makeBackdropRouter();
+    router.down(1, 10, 10, 0);
+    router.cancel(1);
+    router.move(1, 30, 15);
+    expect(commands).toEqual([{ type: 'select', id: 'bd' }]);
+  });
+
+  it('完全不送模擬用的 InputEvent', () => {
+    const { router, events } = makeBackdropRouter();
+    router.down(1, 10, 10, 0);
+    router.move(1, 30, 15);
+    router.up(1, 30, 15, 50);
+    router.down(2, 500, 10, 100);
+    router.up(2, 500, 10, 150);
+    router.rightClick({ x: 1010, y: 1010 }, 10, 10);
+    expect(events).toEqual([]);
+  });
+
+  it('拖曳中切換工具只影響下一次按下', () => {
+    const { router, commands, events } = makeBackdropRouter();
+    router.down(1, 10, 10, 0);
+    router.setActiveTool('grab');
+    router.move(1, 20, 10);
+    router.up(1, 20, 10, 500);
+    expect(commands).toEqual([
+      { type: 'select', id: 'bd' },
+      { type: 'move', id: 'bd', dx: 10, dy: 0 },
+    ]);
+    expect(events).toEqual([]);
+    router.down(2, 10, 10, 600);
+    expect(events[0]).toMatchObject({ type: 'grab' });
+    expect(commands).toHaveLength(2);
+  });
+
+  it('別的工具下按 Backdrop 不送任何 Backdrop 指令', () => {
+    const { router, commands } = makeBackdropRouter();
+    router.setActiveTool('grab');
+    router.down(1, 10, 10, 0);
+    router.up(1, 10, 10, 500);
+    expect(commands).toEqual([]);
+  });
+});
+
+describe('ToolRouter — 背景圖工具：右鍵＋滾輪、中鍵切模式、右鍵選單（issue #150 / 背景 T4）', () => {
+  function makeBackdropRouter() {
+    const commands: BackdropCommand[] = [];
+    const made = makeRouter(undefined, undefined, {
+      hitTest: () => true,
+      backdropHitTest: (world: Point) => (world.x < 1100 ? 'bd' : null),
+      onBackdropCommand: (cmd) => commands.push(cmd),
+    });
+    made.router.setActiveTool('backdrop');
+    return { ...made, commands };
+  }
+
+  it('預設模式是縮放；中鍵輪替縮放 ↔ 透明度', () => {
+    const { router } = makeBackdropRouter();
+    expect(router.currentMode).toBe('scale');
+    expect(router.cycleMode()).toBe('opacity');
+    expect(router.cycleMode()).toBe('scale');
+  });
+
+  it('切到別的工具再切回來，模式還是原來那個', () => {
+    const { router } = makeBackdropRouter();
+    router.cycleMode();
+    router.setActiveTool('fan');
+    router.setActiveTool('backdrop');
+    expect(router.currentMode).toBe('opacity');
+  });
+
+  it('右鍵＋滾輪依模式送出調整（帶游標的世界座標），回報已處理', () => {
+    const { router, commands, events } = makeBackdropRouter();
+    expect(router.adjustBackdrop(1, 10, 20)).toBe(true);
+    router.cycleMode();
+    expect(router.adjustBackdrop(-2, 30, 40)).toBe(true);
+    expect(commands).toEqual([
+      { type: 'adjust', property: 'scale', steps: 1, at: { x: 1010, y: 1020 } },
+      { type: 'adjust', property: 'opacity', steps: -2, at: { x: 1030, y: 1040 } },
+    ]);
+    expect(events).toEqual([]);
+  });
+
+  it('別的工具下 adjustBackdrop 不處理（照舊縮放相機／調該工具的數值）', () => {
+    const { router, commands } = makeBackdropRouter();
+    router.setActiveTool('grab');
+    expect(router.adjustBackdrop(1, 10, 20)).toBe(false);
+    expect(commands).toEqual([]);
+  });
+
+  it('背景圖工具沒有 ToolRouter 自己的數值：adjustActiveValue 回 null', () => {
+    const { router } = makeBackdropRouter();
+    expect(router.activeValue).toBeNull();
+    expect(router.adjustActiveValue(1)).toBeNull();
+  });
+
+  it('右鍵單擊 Backdrop：開選單（帶 id 與畫布座標）；點空白處不開', () => {
+    const { router, commands, events } = makeBackdropRouter();
+    router.rightClick({ x: 1010, y: 1010 }, 10, 10);
+    router.rightClick({ x: 1500, y: 1010 }, 500, 10);
+    expect(commands).toEqual([{ type: 'contextMenu', id: 'bd', screen: { x: 10, y: 10 } }]);
+    expect(events).toEqual([]);
   });
 });

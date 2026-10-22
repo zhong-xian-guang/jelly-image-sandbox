@@ -20,7 +20,7 @@
  * 拖曳到一半按中鍵只切模式，進行中的手勢不受影響）。
  *
  * **按住右鍵＋滾輪**（issue #114；issue #122 從「調工具半徑」推廣成「調目前模式的數值」）：
- * 右鍵按住（`buttons & 2`）時的滾輪先問 `adjustModeValue`——目前模式有數值就由它調、這
+ * 右鍵按住（`buttons & 2`）時的滾輪先問 `adjustModeValue`（帶滾輪當下的畫布座標，issue #150）——目前模式有數值就由它調、這
  * 一格不縮放；回報「不處理」（或沒接這個選項）才照舊縮放。右鍵按住本身不是手勢（指標層
  * 只認左鍵；右鍵只在放開時判定單擊，見下段），「右鍵按住」同時看滾輪事件自己的 `buttons` 與指標事件最近一次回報的 `buttons`
  * ——不是每個瀏覽器都會替 `WheelEvent` 填 `buttons`，而指標事件一定有（左鍵按住中
@@ -57,7 +57,7 @@ export interface CameraInputOptions {
    * （spec #112「只用一隻滑鼠就能操作」），每個刻度一個事件；觸控板連發小 delta 會
    * 走得比較快，但拿觸控板按住右鍵本來就不是這個手勢的用法。
    */
-  adjustModeValue?: (steps: number) => boolean;
+  adjustModeValue?: (steps: number, screenX: number, screenY: number) => boolean;
   /**
    * 滑鼠中鍵單擊（issue #122）——按下到放開位移不超過 `clickMaxDist`，帶放開處的畫布
    * 局部座標。呼叫端拿它輪替目前工具的模式。
@@ -102,7 +102,8 @@ export class CameraInput {
   private readonly gestures: CameraGestures;
   private readonly screenToWorld: (x: number, y: number) => Point;
   private readonly hitTest: (world: Point) => boolean;
-  private readonly adjustModeValue: ((steps: number) => boolean) | undefined;
+  private readonly adjustModeValue:
+    ((steps: number, screenX: number, screenY: number) => boolean) | undefined;
   private readonly onMiddleClick: ((screenX: number, screenY: number) => void) | undefined;
   private readonly onRightClick:
     ((world: Point, screenX: number, screenY: number) => void) | undefined;
@@ -150,8 +151,9 @@ export class CameraInput {
     ev.preventDefault(); // 擋掉頁面縮放 / 捲動
     if (this.right) this.right.spoiled = true; // 按住右鍵期間滾過滾輪 → 放開不算右鍵單擊
     const rightHeld = ((ev.buttons | this.mouseButtons) & 2) !== 0;
-    if (rightHeld && ev.deltaY !== 0 && this.adjustModeValue?.(-Math.sign(ev.deltaY))) return;
     const [x, y] = this.localXY(ev);
+    // 帶上滾輪當下的畫布座標（issue #150）：背景圖工具沒有選中時調游標下那張。
+    if (rightHeld && ev.deltaY !== 0 && this.adjustModeValue?.(-Math.sign(ev.deltaY), x, y)) return;
     this.gestures.wheel(ev.deltaY, x, y);
   };
 

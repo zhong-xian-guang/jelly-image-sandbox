@@ -1,7 +1,12 @@
 /** Renderer 對外介面（issue #10 / T9）。 */
 
 export { JellyRenderer } from './JellyRenderer';
-export type { BoundaryFrame, JellyRendererOptions } from './JellyRenderer';
+export type {
+  BackdropOutline,
+  BackdropSprite,
+  BoundaryFrame,
+  JellyRendererOptions,
+} from './JellyRenderer';
 export {
   createTextureBuffers,
   validateTextureMesh,

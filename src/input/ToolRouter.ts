@@ -150,6 +150,20 @@
  * （`rightClick`）落在場上風扇的矩形內就 emit `clearFan`——跟「移除風扇」按鈕同一個事件、
  * 經同一個 `emit`（呼叫端接到 `applyInput` + 錄製），所以錄製中照樣錄進 Track。按住右鍵
  * 期間滾過滾輪不算右鍵單擊（判定在 `CameraInput`），在風扇上調參數不會誤刪。
+ *
+ * **背景圖工具**（issue #149 / 背景 T3；spec #146、ADR-0017）：操作 Backdrop（背景圖）。左鍵
+ * `down` 用注入的 `backdropHitTest` 判定點中哪一張（最上層、顯示中、只看矩形範圍——判定本身
+ * 在 `BackdropBoard`），送 `select`（點空白處 `id: null`＝取消選取）；點中時之後每次 `move`
+ * 送這一格的世界座標移動量 `move`。Jelly 不擋：這個分支根本不問 `hitTest`。
+ *
+ * 這些手勢走獨立的出口 `onBackdropCommand`，**不是** `emit`——Backdrop 不是模擬的一部分，
+ * 不送任何 `InputEvent`，所以天生不會被錄進 Action Track，錄製中照樣能操作。跟其他分支一樣
+ * 在按下當下定下（`pointerBehaviors`）。
+ *
+ * **背景圖工具的模式與右鍵**（issue #150 / 背景 T4）：模式是「右鍵＋滾輪調什麼」——縮放／
+ * 透明度，中鍵輪替、各自記住（同電風扇）。右鍵＋滾輪走 `adjustBackdrop`（送 `adjust`），右鍵
+ * 單擊點中某張送 `contextMenu`（呼叫端開「刪除／移到最上層／移到最下層」選單）。同樣不送
+ * `InputEvent`。
  */
 
 import { isPointInFanRect, type FanState, type PinInfo, type PointerId, type Point } from '../sim';
@@ -169,10 +183,10 @@ import {
  * （issue #123，模式為放／拔）；生成、移除、重建 Jelly 合成 `'jelly'`（issue #124，沒有
  * 模式，移除與重建走右鍵選單）。工具與模式都不存檔、也不是 Track 事件，改名不影響舊片段檔。
  */
-export type ToolId = 'grab' | 'pin' | 'fan' | 'jelly';
+export type ToolId = 'grab' | 'pin' | 'fan' | 'jelly' | 'backdrop';
 
-/** 工具列的順序（issue #122）——面板照這個順序排按鈕。 */
-export const TOOL_IDS: readonly ToolId[] = ['grab', 'pin', 'fan', 'jelly'];
+/** 工具列的順序（issue #122；issue #149 加上背景圖）——面板照這個順序排按鈕。 */
+export const TOOL_IDS: readonly ToolId[] = ['grab', 'pin', 'fan', 'jelly', 'backdrop'];
 
 /**
  * 有模式的工具與它們的模式，依中鍵單擊輪替的順序排（issue #122；CONTEXT.md「模式」）。
@@ -182,6 +196,7 @@ export const TOOL_MODES = {
   grab: ['single', 'handful', 'formation'],
   pin: ['place', 'remove'],
   fan: ['width', 'strength', 'falloff', 'frequency'],
+  backdrop: ['scale', 'opacity'],
 } as const satisfies Partial<Record<ToolId, readonly string[]>>;
 
 /** 有模式的工具。 */
@@ -196,6 +211,11 @@ export type GrabMode = ToolModeOf<'grab'>;
 export type PinMode = ToolModeOf<'pin'>;
 /** 電風扇的模式（issue #125）：右鍵＋滾輪調的參數——寬度／強度／衰減／頻率。左鍵不受影響。 */
 export type FanMode = ToolModeOf<'fan'>;
+/**
+ * 背景圖工具的模式（issue #150）：右鍵＋滾輪調選中（或游標下）那張 Backdrop 的縮放或透明度。
+ * 左鍵不受影響。數值住在 `BackdropBoard`，不是 `ToolRouter` 的數值（見 `adjustBackdrop`）。
+ */
+export type BackdropMode = ToolModeOf<'backdrop'>;
 
 export function isModalTool(tool: ToolId): tool is ModalToolId {
   return tool in TOOL_MODES;
@@ -217,6 +237,19 @@ type Behavior =
   'single' | 'handful' | 'formation' | 'pinPlace' | 'pinRemove' | Exclude<ToolId, 'grab' | 'pin'>;
 
 export const DEFAULT_TOOL: ToolId = 'grab';
+
+/**
+ * 背景圖工具送出的指令（issue #149；issue #150 加 `adjust`／`contextMenu`）——走
+ * `onBackdropCommand`，不是 `InputEvent`（見類別頂端說明）。`select` 的 `id: null`＝取消選取；
+ * `move` 是這一格的世界座標移動量；`adjust` 是右鍵＋滾輪 `steps` 格，調哪一張（選中那張，沒
+ * 選中就 `at` 游標下那張）由呼叫端決定；`contextMenu` 是右鍵單擊點中某張，`screen` 是畫布
+ * 局部座標（選單擺的位置）。
+ */
+export type BackdropCommand =
+  | { type: 'select'; id: string | null }
+  | { type: 'move'; id: string; dx: number; dy: number }
+  | { type: 'adjust'; property: BackdropMode; steps: number; at: Point }
+  | { type: 'contextMenu'; id: string; screen: Point };
 
 /** 手勢直接交給 `GestureTracker` 的分支——只有單點抓取（見類別頂端說明）。 */
 function usesGestureTracker(behavior: Behavior): boolean {
@@ -367,6 +400,8 @@ const MODE_VALUE_KEYS: {
     falloff: 'fanFalloffExponent',
     frequency: 'fanFrequency',
   },
+  // 背景圖工具調的是某一張 Backdrop 的值，不是 `ToolRouter` 的欄位——走 `adjustBackdrop`。
+  backdrop: {},
 };
 
 /** 一個可用右鍵＋滾輪調的數值：範圍＋讀寫 `ToolRouter` 內那一個欄位。 */
@@ -433,6 +468,13 @@ export interface ToolRouterOptions extends GestureTrackerOptions {
    * 點在空白處（`hitTest` 沒命中）不呼叫。
    */
   onJellyContextMenu?: (world: Point, screen: Point) => void;
+  /**
+   * 背景圖工具的點選判定（issue #149）：這個世界座標上最上層、顯示中的 Backdrop id，沒有回
+   * `null`。不帶這個選項等同「場上沒有 Backdrop」。
+   */
+  backdropHitTest?: (world: Point) => string | null;
+  /** 背景圖工具的指令出口（issue #149）——獨立於 `emit`，不會進求解器也不會被錄進 Track。 */
+  onBackdropCommand?: (cmd: BackdropCommand) => void;
 }
 
 /** 放置新風扇進行中的狀態：世界座標原點 + 目前（拖曳中或放開時）的終點。 */
@@ -529,6 +571,12 @@ interface HandfulSession extends GestureStart {
   radius: number;
 }
 
+/** 進行中的一次 Backdrop 拖曳（issue #149）：拖哪一張、指標上一格的世界座標。 */
+interface BackdropDragSession {
+  id: string;
+  lastWorld: Point;
+}
+
 export class ToolRouter {
   private readonly gestureTracker: GestureTracker;
   private readonly screenToWorld: (x: number, y: number) => Point;
@@ -539,6 +587,10 @@ export class ToolRouter {
   private readonly random: () => number;
   private readonly onJellyClick: ((world: Point) => void) | undefined;
   private readonly onJellyContextMenu: ((world: Point, screen: Point) => void) | undefined;
+  private readonly backdropHitTest: ((world: Point) => string | null) | undefined;
+  private readonly onBackdropCommand: ((cmd: BackdropCommand) => void) | undefined;
+  /** 進行中的 Backdrop 拖曳（issue #149），鍵為指標 `id`（`up`/`cancel` 後移除）。 */
+  private readonly backdropSessions = new Map<PointerId, BackdropDragSession>();
   private activeTool: ToolId = DEFAULT_TOOL;
   /**
    * 每個有模式的工具各自目前的模式（issue #122）——整個 session 內記住、不存檔；切去
@@ -548,6 +600,7 @@ export class ToolRouter {
     grab: TOOL_MODES.grab[0],
     pin: TOOL_MODES.pin[0],
     fan: TOOL_MODES.fan[0],
+    backdrop: TOOL_MODES.backdrop[0],
   };
   /**
    * 每個進行中的指標在**按下當下**定下的手勢分支（issue #122）——`move`／`up`／`cancel`
@@ -611,6 +664,8 @@ export class ToolRouter {
     this.random = opts.random ?? Math.random;
     this.onJellyClick = opts.onJellyClick;
     this.onJellyContextMenu = opts.onJellyContextMenu;
+    this.backdropHitTest = opts.backdropHitTest;
+    this.onBackdropCommand = opts.onBackdropCommand;
     this.config = resolveGestureConfig(opts.config);
   }
 
@@ -872,6 +927,23 @@ export class ToolRouter {
     return { key, value };
   }
 
+  /**
+   * 背景圖工具的「右鍵＋滾輪」（issue #150）：依目前模式送 `adjust`（縮放或透明度，`steps` 格，
+   * 帶滾輪當下游標的世界座標），回報 `true`＝已處理、相機不縮放。不是背景圖工具回 `false`，
+   * 呼叫端照舊走 `adjustActiveValue`／縮放。跟 `adjustActiveValue` 分開：那邊調的是
+   * `ToolRouter` 自己的欄位（下一次按下用的參數），這裡調的是場上某一張 Backdrop。
+   */
+  adjustBackdrop(steps: number, screenX: number, screenY: number): boolean {
+    if (this.activeTool !== 'backdrop') return false;
+    this.onBackdropCommand?.({
+      type: 'adjust',
+      property: this.modes.backdrop,
+      steps,
+      at: this.screenToWorld(screenX, screenY),
+    });
+    return true;
+  }
+
   down(id: PointerId, screenX: number, screenY: number, timeMs: number): void {
     // 按下當下就定下這次手勢的分支（issue #122），之後切工具／切模式都不影響它。
     const behavior = this.currentBehavior();
@@ -994,6 +1066,14 @@ export class ToolRouter {
       }
       return;
     }
+    if (behavior === 'backdrop') {
+      // 點中哪一張由 Backdrop 自己的判定決定，Jelly 不擋（issue #149）。
+      const world = this.screenToWorld(screenX, screenY);
+      const hit = this.backdropHitTest?.(world) ?? null;
+      this.onBackdropCommand?.({ type: 'select', id: hit });
+      if (hit !== null) this.backdropSessions.set(id, { id: hit, lastWorld: world });
+      return;
+    }
     if (behavior === 'jelly') {
       // 生成要等 `up` 才算數（issue #97）——按下當下先記位置，拖曳與否由 `move` 判定。
       // 刻意不在 `down` 就動手：按錯地方時還能拖開取消。
@@ -1064,6 +1144,16 @@ export class ToolRouter {
       this.eraseAt(this.screenToWorld(screenX, screenY), session);
       return;
     }
+    if (behavior === 'backdrop') {
+      const session = this.backdropSessions.get(id);
+      if (!session) return;
+      const world = this.screenToWorld(screenX, screenY);
+      const dx = world.x - session.lastWorld.x;
+      const dy = world.y - session.lastWorld.y;
+      session.lastWorld = world;
+      if (dx !== 0 || dy !== 0) this.onBackdropCommand?.({ type: 'move', id: session.id, dx, dy });
+      return;
+    }
     if (behavior === 'jelly') {
       const click = this.clickSessions.get(id);
       // 超過輕拍的位移門檻（跟一般操作同一把尺）就不再是「點一下」。
@@ -1127,6 +1217,11 @@ export class ToolRouter {
       this.endPinSession(id);
       return;
     }
+    if (behavior === 'backdrop') {
+      // 放開前瀏覽器一定送過同座標的 `move`，這裡只是結束這次拖曳。
+      this.backdropSessions.delete(id);
+      return;
+    }
     if (behavior === 'jelly') {
       const click = this.clickSessions.get(id);
       if (!click) return;
@@ -1147,6 +1242,18 @@ export class ToolRouter {
    * - 其他工具忽略。
    */
   rightClick(world: Point, screenX: number, screenY: number): void {
+    if (this.activeTool === 'backdrop') {
+      // 點中某張 Backdrop 才開選單（issue #150）；點空白處什麼都不做。
+      const hit = this.backdropHitTest?.(world) ?? null;
+      if (hit !== null) {
+        this.onBackdropCommand?.({
+          type: 'contextMenu',
+          id: hit,
+          screen: { x: screenX, y: screenY },
+        });
+      }
+      return;
+    }
     if (this.activeTool === 'jelly') {
       if (this.hitTest && !this.hitTest(world)) return;
       this.onJellyContextMenu?.(world, { x: screenX, y: screenY });
@@ -1187,6 +1294,11 @@ export class ToolRouter {
       // 已經放下／拔掉的 Pin 是既成事實，取消不會把它們變回來（比照拖曳風扇的 cancel
       // 不回捲）——這裡只是停止繼續跟著指標撒／擦。
       this.endPinSession(id);
+      return;
+    }
+    if (behavior === 'backdrop') {
+      // 已經移過去的不回捲（比照拖曳風扇的 cancel），只是停止跟隨指標。
+      this.backdropSessions.delete(id);
       return;
     }
     // 生成還沒發生（要等 `up`），中斷就是整個作廢，不留痕跡（issue #97）。

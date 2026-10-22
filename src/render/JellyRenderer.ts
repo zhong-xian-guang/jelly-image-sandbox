@@ -24,6 +24,20 @@
  * 縮放／平移／resize 時重畫）；`null`（Infinite 模式）整層藏起來。幾何都是世界座
  * 標常數（`WalledBoundary.box`／`FloorBoundary.floorY`，不隨 Jelly 變形），只在邊界
  * 模式切換時重設。它**不是**提示，不受「播放時隱藏提示」影響。
+ *
+ * **背景色**（issue #147；CONTEXT.md「Background color」）：建立時的 `background.color` 只是
+ * 初值，`setBackgroundColor` 在執行中換掉——清畫布用的就是這個顏色，所以相機怎麼平移縮放都
+ * 填滿整個畫面。它不是提示，乾淨畫面與播放中照常顯示。
+ *
+ * **Backdrop 圖層**（issue #148；CONTEXT.md「Backdrop」、ADR-0017）：`setBackdrops(items)` 給
+ * 整份 Backdrop 清單（依疊放順序、先畫→後畫），每張一個 `Sprite`，掛在世界容器最底層——所有
+ * Jelly、線框、邊界線都畫在它上面，世界→螢幕轉換跟 Jelly 共用同一個相機。只在清單變了時呼叫，
+ * 不必每幀。貼圖來源由呼叫端解碼好給（`ImageBitmap` 等），Renderer 依 id 快取 `Sprite`，
+ * 清單裡消失的那張連同貼圖一起釋放。它不是提示，乾淨畫面與播放中照常顯示。
+ *
+ * **Backdrop 選取外框**（issue #149）：`setBackdropOutline(rect)` 在選中那張的範圍畫一圈外框，
+ * 疊在最上層（果凍壓在圖上也看得到圖的邊）。它是游標回饋：顯示與否由呼叫端決定（只在
+ * 「背景圖」工具作用、不在乾淨畫面時給），`null` 藏起來。線寬約 2 個螢幕像素（比邊框細一點，不跟邊框搶），不隨縮放變。
  */
 
 import {
@@ -32,6 +46,7 @@ import {
   Graphics,
   Mesh,
   MeshGeometry,
+  Sprite,
   Texture,
   type TextureSourceLike,
 } from 'pixi.js';
@@ -54,6 +69,29 @@ import {
 export type BoundaryFrame =
   | { kind: 'walled'; minX: number; minY: number; maxX: number; maxY: number }
   | { kind: 'floor'; y: number };
+
+/**
+ * 一張 Backdrop 在算繪端需要的東西（issue #148）：世界座標中心與寬高（已乘上縮放）、
+ * 透明度、顯示與否，以及貼圖來源。`source` 同一個 id 不會換（換圖＝刪掉重加）。
+ */
+export interface BackdropSprite {
+  id: string;
+  source: TextureSourceLike;
+  centerX: number;
+  centerY: number;
+  width: number;
+  height: number;
+  alpha: number;
+  visible: boolean;
+}
+
+/** Backdrop 選取外框的範圍（issue #149）：世界座標中心與寬高。 */
+export interface BackdropOutline {
+  centerX: number;
+  centerY: number;
+  width: number;
+  height: number;
+}
 
 /** 地板線往可視範圍外多畫的倍數——平移一格內不會先看到線的盡頭才等重畫。 */
 const FLOOR_LINE_OVERSCAN = 2;
@@ -81,11 +119,17 @@ interface JellyEntry {
 export class JellyRenderer {
   private readonly app: Application;
   private readonly world: Container;
+  /** 所有 Backdrop 的 `Sprite`（issue #148），子節點順序 = 疊放順序；在世界容器最底層。 */
+  private readonly backdropLayer: Container;
+  private readonly backdrops = new Map<string, Sprite>();
   /** 所有 Jelly 的 `Mesh` 都掛在這層，子節點順序 = 繪製順序（`setJellyOrder`）。 */
   private readonly jellyLayer: Container;
   private readonly jellies = new Map<string, JellyEntry>();
   private readonly wireframe: Graphics;
   private readonly frameGraphics: Graphics;
+  /** 選中 Backdrop 的外框（issue #149）；`null` = 不畫。 */
+  private readonly outlineGraphics: Graphics;
+  private outline: BackdropOutline | null = null;
   /** 目前邊界外框的幾何；`null` = Infinite（`frameGraphics` 隱藏）。 */
   private frame: BoundaryFrame | null = null;
   /**
@@ -102,6 +146,7 @@ export class JellyRenderer {
     this.width = opts.width;
     this.height = opts.height;
 
+    this.backdropLayer = new Container();
     this.jellyLayer = new Container();
 
     this.wireframe = new Graphics();
@@ -110,10 +155,15 @@ export class JellyRenderer {
     this.frameGraphics = new Graphics();
     this.frameGraphics.visible = false;
 
+    this.outlineGraphics = new Graphics();
+    this.outlineGraphics.visible = false;
+
     this.world = new Container();
+    this.world.addChild(this.backdropLayer); // 最底層——Backdrop 在所有 Jelly、線框、邊框之下
     this.world.addChild(this.jellyLayer);
     this.world.addChild(this.wireframe); // 疊在所有貼圖之上
-    this.world.addChild(this.frameGraphics); // 最上層——邊框不該被網格線蓋住
+    this.world.addChild(this.frameGraphics); // 邊框不該被網格線蓋住
+    this.world.addChild(this.outlineGraphics); // 最上層——選取外框是游標回饋
     this.app.stage.addChild(this.world);
 
     this.applyCamera();
@@ -222,6 +272,50 @@ export class JellyRenderer {
     this.wireframeDirty = true;
   }
 
+  // ---- backdrops ---------------------------------------------------------------
+
+  /**
+   * 整份 Backdrop 清單（issue #148），依疊放順序（先畫→後畫）。新的 id 建 `Sprite`、不在清單
+   * 裡的釋放（連同這裡建的貼圖），其餘更新位置、大小、透明度、顯示與順序。
+   */
+  setBackdrops(items: readonly BackdropSprite[]): void {
+    const keep = new Set(items.map((item) => item.id));
+    for (const [id, sprite] of this.backdrops) {
+      if (keep.has(id)) continue;
+      this.backdrops.delete(id);
+      this.backdropLayer.removeChild(sprite);
+      sprite.destroy({ texture: true, textureSource: true });
+    }
+    items.forEach((item, index) => {
+      let sprite = this.backdrops.get(item.id);
+      if (!sprite) {
+        sprite = new Sprite(Texture.from(item.source));
+        sprite.anchor.set(0.5);
+        sprite.label = item.id;
+        this.backdrops.set(item.id, sprite);
+        this.backdropLayer.addChild(sprite);
+      }
+      sprite.position.set(item.centerX, item.centerY);
+      sprite.width = item.width;
+      sprite.height = item.height;
+      sprite.alpha = item.alpha;
+      sprite.visible = item.visible;
+      this.backdropLayer.setChildIndex(sprite, index);
+    });
+  }
+
+  /** 選中 Backdrop 的外框（issue #149）；`null` 藏起來。 */
+  setBackdropOutline(outline: BackdropOutline | null): void {
+    this.outline = outline && { ...outline };
+    this.outlineGraphics.visible = outline !== null;
+    if (outline) this.redrawOutline();
+  }
+
+  /** 目前有哪些 Backdrop（依疊放順序，先畫的在前）。 */
+  backdropIds(): string[] {
+    return this.backdropLayer.children.map((child) => child.label);
+  }
+
   // ---- camera / overlays --------------------------------------------------------
 
   /** 世界→螢幕變換：`screen = (world − {x,y}) · scale + 畫布中心`。 */
@@ -233,6 +327,12 @@ export class JellyRenderer {
     // setBoundaryFrame 才會用新的 scale；地板線的長度也跟著相機平移／縮放走。
     this.wireframeDirty = true;
     if (this.frameGraphics.visible) this.redrawBoundaryFrame();
+    if (this.outlineGraphics.visible) this.redrawOutline();
+  }
+
+  /** 背景色（0xRRGGBB，issue #147）——下一次 `render()` 起生效。 */
+  setBackgroundColor(color: number): void {
+    this.app.renderer.background.color = color;
   }
 
   /** 網格線框開關（debug 用）。開啟時下一次 `render()` 就畫，不用等下一次 `setPositions`。 */
@@ -297,6 +397,15 @@ export class JellyRenderer {
       }
     }
     this.wireframe.stroke({ width: 1 / (this.camera.scale || 1), color: 0xff00ff, alpha: 0.85 });
+  }
+
+  /** 選取外框：線寬除以 `camera.scale`，固定約 2 個螢幕像素粗。 */
+  private redrawOutline(): void {
+    const o = this.outline;
+    if (!o) return;
+    this.outlineGraphics.clear();
+    this.outlineGraphics.rect(o.centerX - o.width / 2, o.centerY - o.height / 2, o.width, o.height);
+    this.outlineGraphics.stroke({ width: 2 / (this.camera.scale || 1), color: 0xffcc33, alpha: 1 });
   }
 
   /**

@@ -11,6 +11,7 @@ export const TOOL_LABELS: Readonly<Record<ToolId, { icon: string; text: string }
   pin: { icon: '📌', text: 'Pin' },
   fan: { icon: '🌀', text: '電風扇' },
   jelly: { icon: '🍮', text: 'Jelly' },
+  backdrop: { icon: '🖼️', text: '背景圖' },
 };
 
 /** 模式名稱（CONTEXT.md「模式」）。 */
@@ -25,4 +26,7 @@ export const MODE_LABELS: Readonly<Record<ToolMode, string>> = {
   strength: '強度',
   falloff: '衰減',
   frequency: '頻率',
+  // 背景圖工具的模式＝右鍵＋滾輪調的值（issue #150）。
+  scale: '縮放',
+  opacity: '透明度',
 };

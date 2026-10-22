@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
-import { CursorLabel, cursorLabelText, type CursorLabelInput } from './CursorLabel';
+import {
+  backdropValueText,
+  CursorLabel,
+  cursorLabelText,
+  type CursorLabelInput,
+} from './CursorLabel';
 
 function text(input: Partial<CursorLabelInput>): string | null {
   return cursorLabelText({ mode: null, value: null, formation: 'none', ...input });
 }
 
 describe('cursorLabelText（issue #122）', () => {
+  it('背景圖工具（issue #150）：模式＋選中或游標下那張的數值；沒有對象只顯示模式', () => {
+    expect(text({ mode: 'scale', value: backdropValueText('scale', 1.25) })).toBe('縮放 · ×1.25');
+    expect(text({ mode: 'opacity', value: backdropValueText('opacity', 0.8) })).toBe(
+      '透明度 · 80%',
+    );
+    expect(text({ mode: 'scale' })).toBe('縮放');
+  });
+
   it('抓取工具：單點只有模式名稱；大把加上半徑', () => {
     expect(text({ mode: 'single' })).toBe('單點');
     expect(text({ mode: 'handful', value: 140 })).toBe('大把 · 140');

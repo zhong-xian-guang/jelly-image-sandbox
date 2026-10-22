@@ -120,7 +120,7 @@ describe('CameraInput — 按住右鍵＋滾輪調目前模式的數值（issue 
     stubPointerCapture(el);
   });
 
-  function setup(adjustModeValue?: (steps: number) => boolean) {
+  function setup(adjustModeValue?: (steps: number, screenX: number, screenY: number) => boolean) {
     const cmds: CameraCommand[] = [];
     const input = new CameraInput(el, {
       screenToWorld: (x, y) => ({ x, y }),
@@ -155,6 +155,16 @@ describe('CameraInput — 按住右鍵＋滾輪調目前模式的數值（issue 
     expect(steps).toEqual([1, -1]);
     expect(cmds).toEqual([]);
     expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('adjustModeValue 帶滾輪當下的畫布局部座標（issue #150：背景圖工具調游標下那張）', () => {
+    const at: [number, number][] = [];
+    setup((_s, x, y) => {
+      at.push([x, y]);
+      return true;
+    });
+    wheel(-100, 2);
+    expect(at).toEqual([[50, 50]]);
   });
 
   it('按住右鍵＋滾輪、模式沒有數值（adjustModeValue 回報不處理）→ 照舊縮放', () => {

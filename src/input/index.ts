@@ -25,6 +25,7 @@ export {
   modesOf,
 } from './ToolRouter';
 export type {
+  BackdropCommand,
   ToolId,
   ToolRouterOptions,
   FanParams,
@@ -37,6 +38,7 @@ export type {
   GrabMode,
   PinMode,
   FanMode,
+  BackdropMode,
   ModeValueKey,
   ModeValue,
 } from './ToolRouter';

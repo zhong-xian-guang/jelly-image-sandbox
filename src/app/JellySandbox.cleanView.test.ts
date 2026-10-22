@@ -26,6 +26,8 @@ vi.mock('./defaultJelly', () => ({
   },
 }));
 
+import { BackdropBoard } from './BackdropBoard';
+import { BackgroundStore, memoryKeyValueStore } from './backgroundStore';
 import { JellySandbox } from './JellySandbox';
 
 /** 算繪端替身：`canvas` 是真的元素（輸入層要掛監聽），其餘方法一律 no-op，只記下網格顯示開關。 */
@@ -48,6 +50,7 @@ type SandboxCtor = new (
   root: HTMLElement,
   renderer: unknown,
   texture: HTMLCanvasElement,
+  background: { store: BackgroundStore; color: string; backdrops: BackdropBoard },
 ) => JellySandbox;
 
 describe('JellySandbox — 乾淨畫面不改寫提示開關（issue #130 / #139）', () => {
@@ -62,7 +65,12 @@ describe('JellySandbox — 乾淨畫面不改寫提示開關（issue #130 / #139
     document.body.appendChild(root);
     wireframeCalls = [];
     const Ctor = JellySandbox as unknown as SandboxCtor;
-    sandbox = new Ctor(root, fakeRenderer(wireframeCalls), document.createElement('canvas'));
+    const store = new BackgroundStore(memoryKeyValueStore(), () => {});
+    sandbox = new Ctor(root, fakeRenderer(wireframeCalls), document.createElement('canvas'), {
+      store,
+      color: '#1a1a1a',
+      backdrops: new BackdropBoard(store),
+    });
   });
 
   afterEach(() => {

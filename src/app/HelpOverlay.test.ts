@@ -121,14 +121,14 @@ describe('HelpOverlay — 「?」操作說明浮層（issue #132）', () => {
     expect(overlay.isOpen).toBe(false);
   });
 
-  it('列出四個工具、相機與快捷鍵，每組都有操作', () => {
+  it('列出五個工具、相機與快捷鍵，每組都有操作', () => {
     const overlay = make();
     const titles = [...overlay.element.querySelectorAll('.jelly-help-group h3')].map(
       (h) => h.textContent,
     );
     expect(titles).toEqual(HELP_GROUPS.map((g) => g.title));
     const text = overlay.element.textContent!;
-    for (const part of ['抓取', 'Pin', '電風扇', 'Jelly', '相機', '快捷鍵']) {
+    for (const part of ['抓取', 'Pin', '電風扇', 'Jelly', '背景圖', '相機', '快捷鍵']) {
       expect(text).toContain(part);
     }
     for (const part of ['單點', '大把', '編隊', '放', '拔', '中鍵拖曳', '滾輪', '空白鍵']) {

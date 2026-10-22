@@ -34,17 +34,18 @@ describe('KeyboardShortcuts — 鍵盤快捷鍵（issue #126）', () => {
     return ev;
   }
 
-  it('數字 1–4 依工具列順序切到抓取、Pin、電風扇、Jelly', () => {
+  it('數字 1–5 依工具列順序切到抓取、Pin、電風扇、Jelly、背景圖', () => {
     press('1');
     press('2');
     press('3');
     press('4');
-    expect(selected).toEqual(['grab', 'pin', 'fan', 'jelly']);
+    press('5');
+    expect(selected).toEqual(['grab', 'pin', 'fan', 'jelly', 'backdrop']);
   });
 
   it('其他數字不對應工具', () => {
     press('0');
-    press('5');
+    press('6');
     expect(selected).toEqual([]);
   });
 
