@@ -19,34 +19,12 @@ vi.mock('./defaultJelly', () => ({
 }));
 
 import { updateCamera, type CameraCommand, type CameraState } from '../camera';
-import { BackdropBoard } from './BackdropBoard';
-import { BackgroundStore, memoryKeyValueStore } from './backgroundStore';
 import { DemoRunner } from './demos/DemoRunner';
 import { mergeTracks } from './demos/overlay';
 import { STEP_SECONDS } from './demos/time';
 import type { DemoStep } from './demos/types';
-import { JellySandbox } from './JellySandbox';
-
-function fakeRenderer(): unknown {
-  const canvas = document.createElement('canvas');
-  return new Proxy(
-    {},
-    {
-      get(_target, prop) {
-        if (prop === 'canvas') return canvas;
-        if (prop === 'then') return undefined;
-        return () => [];
-      },
-    },
-  );
-}
-
-type SandboxCtor = new (
-  root: HTMLElement,
-  renderer: unknown,
-  texture: HTMLCanvasElement,
-  background: { store: BackgroundStore; color: string; backdrops: BackdropBoard },
-) => JellySandbox;
+import type { JellySandbox } from './JellySandbox';
+import { createTestSandbox } from './sandboxTestHarness';
 
 /** 測試要碰的私有成員（只讀寫狀態與呼叫既有入口，不改實作）。 */
 interface SandboxInternals {
@@ -86,13 +64,7 @@ describe('JellySandbox — 播放保留播放前的鏡位（issue #156）', () =
     localStorage.setItem('jelly-sandbox:help-seen', '1');
     root = document.createElement('div');
     document.body.appendChild(root);
-    const store = new BackgroundStore(memoryKeyValueStore(), () => {});
-    const Ctor = JellySandbox as unknown as SandboxCtor;
-    sandbox = new Ctor(root, fakeRenderer(), document.createElement('canvas'), {
-      store,
-      color: '#1a1a1a',
-      backdrops: new BackdropBoard(store),
-    });
+    ({ sandbox } = createTestSandbox(root));
     s = sandbox as unknown as SandboxInternals;
     s.cameraState = PREPARED;
     s.cameraCommands = [];

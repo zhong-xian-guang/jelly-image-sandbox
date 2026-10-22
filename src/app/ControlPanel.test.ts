@@ -120,6 +120,8 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onPlayAll: vi.fn(),
     onSnapshotSetupPins: vi.fn(),
     onClearSetupPins: vi.fn(),
+    onSetInitialPose: vi.fn(),
+    onInitialPoseConfirmPending: vi.fn(),
     onAddGroup: vi.fn(),
     onGroupEnabledChange: vi.fn(),
     onGroupRename: vi.fn(),
@@ -347,6 +349,59 @@ describe('ControlPanel — 片段初始 Pin 列（issue #39）', () => {
     expect(buttons().every((b) => b.disabled)).toBe(true);
     panel.setPlaybackControlsEnabled(true);
     expect(buttons().every((b) => !b.disabled)).toBe(true);
+  });
+});
+
+describe('ControlPanel — 「設為初始位置」（issue #155）', () => {
+  let panel: ControlPanel;
+  let opts: ControlPanelOptions;
+
+  beforeEach(() => {
+    opts = makeOptions();
+    panel = new ControlPanel(opts);
+  });
+
+  function poseButton(): HTMLButtonElement {
+    return panel.element.querySelector('.jelly-initial-pose-row button') as HTMLButtonElement;
+  }
+
+  it('跟「設為目前 Pin」並排在錄製區，緊接在它上面', () => {
+    const button = poseButton();
+    expect(button.textContent).toBe('設為初始位置');
+    const row = button.closest('.jelly-initial-pose-row')!;
+    expect(row.nextElementSibling!.classList.contains('jelly-setup-pins-row')).toBe(true);
+    expect(sectionOf(row)).toBe('record');
+  });
+
+  it('還沒有 Track：按一下就設定', () => {
+    poseButton().click();
+    expect(opts.onSetInitialPose).toHaveBeenCalledTimes(1);
+    expect(opts.onInitialPoseConfirmPending).not.toHaveBeenCalled();
+  });
+
+  it('已經有 Track：第一下只提醒、要再按一次才設定', () => {
+    panel.setGroups(groupRows());
+    panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    poseButton().click();
+    expect(opts.onSetInitialPose).not.toHaveBeenCalled();
+    expect(opts.onInitialPoseConfirmPending).toHaveBeenCalledTimes(1);
+    expect(poseButton().textContent).toBe('再按一次確認…');
+    poseButton().click();
+    expect(opts.onSetInitialPose).toHaveBeenCalledTimes(1);
+    expect(poseButton().textContent).toBe('設為初始位置');
+  });
+
+  it('錄製中／播放中鎖住，待確認也一併取消', () => {
+    panel.setGroups(groupRows());
+    panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
+    poseButton().click();
+    panel.setRecordingActive(true);
+    expect(poseButton().disabled).toBe(true);
+    expect(poseButton().textContent).toBe('設為初始位置');
+    panel.setRecordingActive(false);
+    expect(poseButton().disabled).toBe(false);
+    panel.setPlaybackControlsEnabled(false);
+    expect(poseButton().disabled).toBe(true);
   });
 });
 
@@ -2125,11 +2180,12 @@ describe('ControlPanel — 側欄不再有播放與相機控制（issue #129）'
     expect(panel.element.querySelector('.jelly-playback-time')).toBeNull();
   });
 
-  it('錄製區只剩：錄製目標、片段初始 Pin、Track／群組清單（＋ 新增群組）', () => {
+  it('錄製區只剩：錄製目標、果凍初始位置、片段初始 Pin、Track／群組清單（＋ 新增群組）', () => {
     const panel = new ControlPanel(makeOptions());
     const rows = [...panel.sectionBody('record').children];
     expect(rows).toEqual([
       labelByText(panel, '錄製目標'),
+      panel.element.querySelector('.jelly-initial-pose-row'),
       panel.element.querySelector('.jelly-setup-pins-row'),
       panel.element.querySelector('.jelly-grouped-tracks'),
       buttonByText(panel, '＋ 新增群組').closest('.jelly-control-row'),

@@ -805,6 +805,11 @@ export class JellySandbox {
       onToggleRecording: () => this.toggleRecording(),
       onPlayAll: () => this.playAll(),
       onSnapshotSetupPins: () => this.snapshotSetupPins(),
+      onSetInitialPose: () => this.setInitialPose(),
+      onInitialPoseConfirmPending: () =>
+        this.showNotice(
+          'Track 記的是絕對世界座標：果凍移走後，舊 Track 抓的那一點可能已經沒有果凍。確定的話再按一次「設為初始位置」',
+        ),
       onClearSetupPins: () => this.clearSetupPins(),
       onTogglePause: () => this.togglePause(),
       onTrackStartTimeChange: (id, seconds) => this.setTrackStartTime(id, seconds),
@@ -1133,6 +1138,30 @@ export class JellySandbox {
     if (track.customLabel === next) return;
     track.customLabel = next;
     this.syncPanelTracks();
+  }
+
+  /**
+   * 「設為初始位置」（issue #155）：把場上每塊 Jelly 目前的位置與角度寫回 Scene
+   * （`World.captureScenePose`：質心＋最佳擬合旋轉，不含變形），之後停止／重設、開始播放都從
+   * 這個姿態出發。
+   *
+   * 寫回之後**立刻** `world.reset()`，讓場上每塊以新姿態、rest 形狀重建——不然場上那塊仍是
+   * 舊姿態建出來的，之後匯入／生成／移除後的 `setScene(sceneSnapshot())` 會把新姿態洗回去，
+   * 「設為目前 Pin」拍的 rest 座標也會落在舊姿態上。重設會清掉約束與風扇，所以先記下按下前的
+   * Pin（同 id、同世界座標）與風扇，重建後放回去；這幾個事件不經 `dispatchInput`——錄製中、
+   * 播放中這顆鈕本來就按不了（`ControlPanel` 鎖住，這裡再擋一次）。
+   */
+  private setInitialPose(): void {
+    if (this.playbackLocked || this.trackRecorder.isRecording) return;
+    const pins = this.world.listPins();
+    const fan = this.world.fanState();
+    this.world.setScene(this.world.captureScenePose());
+    this.world.reset();
+    for (const pin of pins) {
+      this.world.applyInput({ type: 'pin', id: pin.id, x: pin.point.x, y: pin.point.y });
+    }
+    if (fan) this.world.applyInput({ type: 'setFan', ...fan });
+    this.showNotice('已把每塊果凍目前的位置與角度設為初始位置');
   }
 
   /**

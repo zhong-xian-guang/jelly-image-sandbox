@@ -64,6 +64,7 @@ function fullClip(): ClipState {
         meshParams: { ...MESH_PARAMS, targetParticleCount: 350 },
         importSize: 256,
         offset: { x: 300.5, y: -12 },
+        rotation: 0.75, // 「設為初始位置」拍下的角度（issue #155）
       },
       {
         jellyId: 'jelly/3',
@@ -386,6 +387,18 @@ describe('parseClipFile', () => {
       const doc = JSON.parse(serializeClip(fullClip())) as { scene: Record<string, unknown>[] };
       doc.scene[0]!.importSize = bad;
       expect(() => parseClipFile(JSON.stringify(doc))).toThrow(ClipFileError);
+    }
+  });
+
+  it('scene[].rotation（issue #155）：沒有＝不轉；不是數字 → ClipFileError', () => {
+    const doc = JSON.parse(serializeClip(fullClip())) as { scene: Record<string, unknown>[] };
+    expect(doc.scene[1]!.rotation).toBe(0.75);
+    expect(parseClipFile(JSON.stringify(doc)).scene[1]!.rotation).toBe(0.75);
+    expect('rotation' in parseClipFile(JSON.stringify(doc)).scene[0]!).toBe(false);
+    for (const bad of ['0.5', null, Number.NaN]) {
+      const broken = JSON.parse(serializeClip(fullClip())) as { scene: Record<string, unknown>[] };
+      broken.scene[1]!.rotation = bad;
+      expect(() => parseClipFile(JSON.stringify(broken))).toThrow(ClipFileError);
     }
   });
 

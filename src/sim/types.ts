@@ -102,6 +102,11 @@ export interface SceneEntry {
   meshParams: BuildSimMeshParams;
   importSize: number | null;
   offset: Point;
+  /**
+   * 擺放角度（弧度，issue #155「設為初始位置」）：rest ＝ 網格繞自己的質心轉這個角度、再加
+   * `offset`。沒有（或 0）＝不轉，算式跟加入這個欄位之前逐位元相同。
+   */
+  rotation?: number;
 }
 
 /** 求解器的手感參數。全部有預設值，建構時可只帶想改的欄位。 */

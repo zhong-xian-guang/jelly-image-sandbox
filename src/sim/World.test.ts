@@ -692,3 +692,100 @@ describe('World — 大把抓取與範圍 Tap（issue #113 / V3 T4-1；ADR-0014�
     });
   });
 });
+
+describe('World — 設為初始位置：把目前的位置與角度拍進 Scene（issue #155）', () => {
+  /** 把某塊目前的 Particle 位置整個換成 rest 繞質心轉 `angle`、再平移 `(dx, dy)`，可再疊一層變形。 */
+  function moveJelly(
+    world: World,
+    jellyId: string,
+    angle: number,
+    dx: number,
+    dy: number,
+    deform: (x: number, y: number) => [number, number] = (x, y) => [x, y],
+  ): void {
+    const j = world.jellies().find((v) => v.id === jellyId)!;
+    const rest = j.mesh.positions;
+    const n = rest.length / 2;
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < n; i++) {
+      cx += rest[2 * i]! / n;
+      cy += rest[2 * i + 1]! / n;
+    }
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    for (let i = 0; i < n; i++) {
+      const [x, y] = deform(rest[2 * i]! - cx, rest[2 * i + 1]! - cy);
+      j.positions[2 * i] = cos * x - sin * y + cx + dx;
+      j.positions[2 * i + 1] = sin * x + cos * y + cy + dy;
+    }
+  }
+
+  function expectRestEquals(world: World, jellyId: string, expected: ArrayLike<number>): void {
+    const j = world.jellies().find((v) => v.id === jellyId)!;
+    // rest 是 Float32Array：比到 Float32 的精度。
+    for (let i = 0; i < expected.length; i++) expect(j.positions[i]).toBeCloseTo(expected[i]!, 3);
+  }
+
+  it('搬走再轉一個角度 → 拍進 Scene → 重設：以那個位置與角度、rest 形狀出現', () => {
+    const { world } = twoJellies();
+    moveJelly(world, 'jelly/1', 0.6, 250, -40);
+    const target = Array.from(world.jellies()[0]!.positions);
+    world.setScene(world.captureScenePose());
+    world.reset();
+    expectRestEquals(world, 'jelly/1', target);
+    const entry = world.sceneSnapshot()[0]!;
+    expect(entry.rotation).toBeCloseTo(0.6, 10);
+  });
+
+  it('多塊各自記自己的位置與角度；沒動的那塊不變', () => {
+    const { world } = twoJellies();
+    const before2 = Array.from(world.jellies()[1]!.positions);
+    moveJelly(world, 'jelly/1', -1.1, 0, 300);
+    const target1 = Array.from(world.jellies()[0]!.positions);
+    world.setScene(world.captureScenePose());
+    world.reset();
+    expectRestEquals(world, 'jelly/1', target1);
+    expectRestEquals(world, 'jelly/2', before2);
+    expect(world.sceneSnapshot()[1]!.rotation ?? 0).toBeCloseTo(0, 10);
+  });
+
+  it('被拉伸變形時只記位置與角度：重設後是 rest 形狀（不帶變形）', () => {
+    const { world } = twoJellies();
+    moveJelly(world, 'jelly/1', 0.3, 50, 50, (x, y) => [x * 1.5, y * 1.5]); // 等比放大不改質心與角度
+    world.setScene(world.captureScenePose());
+    world.reset();
+    const { world: expected } = twoJellies();
+    moveJelly(expected, 'jelly/1', 0.3, 50, 50);
+    expectRestEquals(world, 'jelly/1', expected.jellies()[0]!.positions);
+  });
+
+  it('拍了兩次（角度累加）：以第二次的姿態為準', () => {
+    const { world } = twoJellies();
+    moveJelly(world, 'jelly/1', 0.5, 10, 0);
+    world.setScene(world.captureScenePose());
+    world.reset();
+    moveJelly(world, 'jelly/1', 0.5, 10, 0); // 相對新的 rest 再轉 0.5
+    const target = Array.from(world.jellies()[0]!.positions);
+    world.setScene(world.captureScenePose());
+    world.reset();
+    expectRestEquals(world, 'jelly/1', target);
+    expect(world.sceneSnapshot()[0]!.rotation).toBeCloseTo(1, 10);
+  });
+
+  it('沒有角度的 Scene 跟以前逐位元相同；restAttachPoint 在轉過的塊上照常運作', () => {
+    const { world } = twoJellies();
+    const plain = Array.from(world.jellies()[0]!.positions);
+    world.setScene(world.sceneSnapshot());
+    world.reset();
+    expect(Array.from(world.jellies()[0]!.positions)).toEqual(plain);
+
+    moveJelly(world, 'jelly/1', Math.PI / 2, 0, 0);
+    world.setScene(world.captureScenePose());
+    world.reset();
+    const p = world.jellies()[0]!.positions;
+    world.applyInput({ type: 'pin', id: 'p', x: p[0]!, y: p[1]! });
+    expect(world.restAttachPoint('p')!.x).toBeCloseTo(p[0]!, 3);
+    expect(world.restAttachPoint('p')!.y).toBeCloseTo(p[1]!, 3);
+  });
+});
