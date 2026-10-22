@@ -773,6 +773,20 @@ describe('World — 設為初始位置：把目前的位置與角度拍進 Scene
     expect(world.sceneSnapshot()[0]!.rotation).toBeCloseTo(1, 10);
   });
 
+  it('角度不是 0 時，只重建那一塊（remove＋同一份條目 spawn）姿態不變；移除照常', () => {
+    const { world } = twoJellies();
+    moveJelly(world, 'jelly/1', 0.9, 40, -20);
+    world.setScene(world.captureScenePose());
+    world.reset();
+    const posed = Array.from(world.jellies()[0]!.positions);
+    const entry = world.sceneSnapshot()[0]!;
+    world.applyInput({ type: 'remove', jellyId: 'jelly/1' });
+    world.applyInput({ type: 'spawn', ...entry });
+    expectRestEquals(world, 'jelly/1', posed);
+    world.applyInput({ type: 'remove', jellyId: 'jelly/1' });
+    expect(world.jellies().map((j) => j.id)).toEqual(['jelly/2']);
+  });
+
   it('沒有角度的 Scene 跟以前逐位元相同；restAttachPoint 在轉過的塊上照常運作', () => {
     const { world } = twoJellies();
     const plain = Array.from(world.jellies()[0]!.positions);

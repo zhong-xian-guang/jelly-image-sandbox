@@ -101,6 +101,15 @@ describe('JellySandbox — 播放保留播放前的鏡位（issue #156）', () =
     expect(s.cameraCommands).toEqual([]);
   });
 
+  it('播放中又按一次播放：記下的仍是最初播放前的鏡位', () => {
+    s.addTrack('action', [{ atStep: 600, event: { type: 'tap', x: 0, y: 0 } }], null);
+    s.playAll();
+    s.cameraState = RECORDED; // 播放中鏡頭被帶走
+    s.playAll();
+    s.resetSim();
+    expect(s.cameraState).toEqual(PREPARED);
+  });
+
   it('沒有播放過就按停止／重設：相機不動', () => {
     s.cameraState = RECORDED;
     s.resetSim();

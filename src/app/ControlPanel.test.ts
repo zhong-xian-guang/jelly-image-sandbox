@@ -310,8 +310,12 @@ describe('ControlPanel — 片段初始 Pin 列（issue #39）', () => {
   function setupRow(): HTMLElement {
     return panel.element.querySelector('.jelly-setup-pins-row') as HTMLElement;
   }
+  /** 「設為目前 Pin」（跟「設為初始位置」並排在上一列，issue #155）與「清除」。 */
   function buttons(): HTMLButtonElement[] {
-    return [...setupRow().querySelectorAll('button')] as HTMLButtonElement[];
+    return [
+      buttonByText(panel, '設為目前 Pin'),
+      ...setupRow().querySelectorAll('button'),
+    ] as HTMLButtonElement[];
   }
   function countText(): string {
     return setupRow().querySelector('.jelly-setup-pins-count')!.textContent ?? '';
@@ -365,10 +369,12 @@ describe('ControlPanel — 「設為初始位置」（issue #155）', () => {
     return panel.element.querySelector('.jelly-initial-pose-row button') as HTMLButtonElement;
   }
 
-  it('跟「設為目前 Pin」並排在錄製區，緊接在它上面', () => {
-    const button = poseButton();
-    expect(button.textContent).toBe('設為初始位置');
-    const row = button.closest('.jelly-initial-pose-row')!;
+  it('跟「設為目前 Pin」並排在同一列（錄製區），片段初始 Pin 的數量與清除在下一列', () => {
+    const row = poseButton().closest('.jelly-initial-pose-row')!;
+    expect([...row.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      '設為初始位置',
+      '設為目前 Pin',
+    ]);
     expect(row.nextElementSibling!.classList.contains('jelly-setup-pins-row')).toBe(true);
     expect(sectionOf(row)).toBe('record');
   });

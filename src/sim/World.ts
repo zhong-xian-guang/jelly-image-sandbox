@@ -40,7 +40,7 @@ import type { SimMesh } from '../mesh';
 
 import { type Boundary, InfiniteBoundary } from './boundary';
 import { type CollisionParams, DEFAULT_COLLISION_PARAMS, resolveCollisions } from './collision';
-import { fitRigidTransform } from './rigidFit';
+import { centroidOf, fitRigidTransform } from './rigidFit';
 import { SimCore } from './SimCore';
 import {
   type Bbox,
@@ -226,15 +226,7 @@ export class World {
       }
     } else {
       // 繞網格質心轉（issue #155）；不轉時走上面那條，跟以前逐位元相同。
-      const n = positions.length / 2;
-      let cx = 0;
-      let cy = 0;
-      for (let i = 0; i < n; i++) {
-        cx += raw.positions[2 * i]!;
-        cy += raw.positions[2 * i + 1]!;
-      }
-      cx /= n;
-      cy /= n;
+      const { x: cx, y: cy } = centroidOf(raw.positions);
       const cos = Math.cos(rotation);
       const sin = Math.sin(rotation);
       for (let i = 0; i < positions.length; i += 2) {
@@ -390,11 +382,11 @@ export class World {
         break;
       }
       case 'unpin': {
-        // 用世界座標指定（issue #154）：跨塊找半徑內最近的那一顆，交給它那塊用同一個座標拔
-        // （半徑 0：同一個 `listPins` 算出的座標，距離恰為 0）。
+        // 用世界座標指定（issue #154）：跨塊找半徑內最近的那一顆，交給它那塊、以那顆的座標為
+        // 圓心再拔一次——那塊裡離這個點最近的就是它自己（距離 0），不必靠浮點恰好相等。
         const hit = nearestPinWithin(this.listPins(), event, event.radius);
         if (!hit) break;
-        this.jellyMap.get(hit.jellyId)?.core.applyInput({ ...event, ...hit.point, radius: 0 });
+        this.jellyMap.get(hit.jellyId)?.core.applyInput({ ...event, ...hit.point });
         this.route.delete(hit.id);
         break;
       }

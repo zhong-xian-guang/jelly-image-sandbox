@@ -1336,7 +1336,8 @@ export class JellySandbox {
     const active = tracksInEnabledGroups(this.tracks, this.groups);
     if (active.length === 0) return;
     this.world.reset();
-    this.cameraBeforePlayback = this.cameraState;
+    // 播放中又按一次播放時，現在的鏡頭是播放中的（可能已被相機軌硬切），不能當成播放前。
+    if (!this.demoRunner.isRunning) this.cameraBeforePlayback = this.cameraState;
     this.demoRunner.start(
       mergeTracks([
         // 片段初始 Pin 合成軌排在最前面（issue #39）：`setup/` 前綴不撞 Action Track

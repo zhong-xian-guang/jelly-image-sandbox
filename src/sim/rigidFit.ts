@@ -21,8 +21,8 @@ export interface RigidFit {
 /** `rest`／`current` 都是 `[x0, y0, x1, y1, …]`，長度相同。 */
 export function fitRigidTransform(rest: ArrayLike<number>, current: ArrayLike<number>): RigidFit {
   const n = rest.length / 2;
-  const restCentroid = centroidOf(rest, n);
-  const centroid = centroidOf(current, n);
+  const restCentroid = centroidOf(rest);
+  const centroid = centroidOf(current);
   // 2×2 共變異 H = Σ (x − x̄)(r − r̄)ᵀ；2D 的最佳旋轉角 = atan2(H₂₁ − H₁₂, H₁₁ + H₂₂)。
   let dot = 0;
   let cross = 0;
@@ -37,7 +37,9 @@ export function fitRigidTransform(rest: ArrayLike<number>, current: ArrayLike<nu
   return { restCentroid, centroid, angle: Math.atan2(cross, dot) };
 }
 
-function centroidOf(points: ArrayLike<number>, n: number): Point {
+/** `[x0, y0, x1, y1, …]` 的質心（等權）——`World` 擺放有角度的 rest 時也用它。 */
+export function centroidOf(points: ArrayLike<number>): Point {
+  const n = points.length / 2;
   let x = 0;
   let y = 0;
   for (let i = 0; i < n; i++) {
