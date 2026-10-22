@@ -428,6 +428,13 @@ export interface ControlPanelOptions {
   onSnapshotSetupPins: () => void;
   /** 「片段初始 Pin：清除」被按（issue #39）——清空快照。 */
   onClearSetupPins: () => void;
+  /**
+   * 「設為初始位置」被按（issue #155）——把場上每塊 Jelly 目前的位置與角度寫回 Scene。已經有
+   * Track 時要再按一次確認才會呼叫（見 `onInitialPoseConfirmPending`）。
+   */
+  onSetInitialPose: () => void;
+  /** 「設為初始位置」進入待確認（已經有 Track）——呼叫端說明舊 Track 的抓取點可能落空。 */
+  onInitialPoseConfirmPending: () => void;
   /** 「＋ 新增群組」被按（issue #43）。 */
   onAddGroup: () => void;
   /** 某群組的開啟／關閉勾選框被切換（issue #43）。 */
@@ -505,6 +512,9 @@ export class ControlPanel {
   /** 上面兩顆的「再按一次確認」（issue #131）——被鎖住時 `cancel()` 取消待確認。 */
   private readonly rebuildAllConfirm: ConfirmButton;
   private readonly clearAllConfirm: ConfirmButton;
+  /** 「設為初始位置」鈕（issue #155）——錄製中／播放中鎖住，已有 Track 時要再按一次確認。 */
+  private readonly initialPoseButton: HTMLButtonElement;
+  private readonly initialPoseConfirm: ConfirmButton;
   /** 工具列按鈕與各工具的參數卡（issue #122）——`setActiveTool` 切高亮與顯示。 */
   private readonly toolButtons = new Map<ToolId, HTMLButtonElement>();
   private readonly toolCards = new Map<ToolId, HTMLElement>();
@@ -803,10 +813,22 @@ export class ControlPanel {
       opts.onRecordTargetChange,
     );
     this.recordTargetSelect = target.select;
-    const setupPins = this.setupPinsRow(opts.onSnapshotSetupPins, opts.onClearSetupPins);
-    this.setupPinsCountEl = setupPins.countEl;
-    this.setupPinsSnapshotButton = setupPins.snapshotButton;
-    this.setupPinsClearButton = setupPins.clearButton;
+    // 片段起點（issue #39；issue #155）：「設為初始位置」與「設為目前 Pin」並排一列，片段初始
+    // Pin 的數量與清除在下一列。Track 記的是絕對世界座標，已經有 Track 時移動果凍可能讓舊 Track
+    // 抓空，所以「設為初始位置」要再按一次確認。
+    const sceneStart = this.sceneStartRows(opts.onSnapshotSetupPins, opts.onClearSetupPins);
+    this.setupPinsCountEl = sceneStart.countEl;
+    this.setupPinsSnapshotButton = sceneStart.snapshotButton;
+    this.setupPinsClearButton = sceneStart.clearButton;
+    this.initialPoseButton = sceneStart.initialPoseButton;
+    this.initialPoseConfirm = confirmOnSecondClick(
+      sceneStart.initialPoseButton,
+      opts.onSetInitialPose,
+      {
+        needsConfirm: () => this.trackCount > 0,
+        onPending: opts.onInitialPoseConfirmPending,
+      },
+    );
 
     // 依群組分區的 Track 清單（issue #43）——群組標頭 + 底下該群組的成員卡片。
     this.groupedTracksEl = document.createElement('div');
@@ -845,7 +867,13 @@ export class ControlPanel {
       background: [],
       demo: opts.demos.map((demo) => this.demoButtonRow(demo.label, () => opts.onRunDemo(demo.id))),
       // 錄製、播放、暫停、停止／重設在畫布上的播放控制條（issue #129），這裡只留設定與清單。
-      record: [target.row, setupPins.row, this.groupedTracksEl, addGroup.row],
+      record: [
+        target.row,
+        sceneStart.actionsRow,
+        sceneStart.setupPinsRow,
+        this.groupedTracksEl,
+        addGroup.row,
+      ],
       dev: [
         this.perfStatus,
         this.checkboxRow('顯示網格', opts.initial.showWireframe, opts.onWireframeChange),
@@ -1115,6 +1143,8 @@ export class ControlPanel {
     // 片段初始 Pin 的兩顆鈕比照 Track 清單編輯：錄製中／播放中鎖住（issue #39）。
     this.setupPinsSnapshotButton.disabled = busy;
     this.setupPinsClearButton.disabled = busy;
+    // 「設為初始位置」（issue #155）同理：Scene 不是錄得進 Track 的事件。
+    this.initialPoseButton.disabled = busy;
     // 「全部重建」鈕（issue #90）錄製中／播放中鎖住：重建只改 Scene、不是事件（ADR-0013）。
     this.rebuildAllButton.disabled = busy;
     // 「清空全部」（issue #95）同理：它會清掉正在錄／正在播的片段本身。
@@ -1123,6 +1153,7 @@ export class ControlPanel {
     if (busy) {
       this.rebuildAllConfirm.cancel();
       this.clearAllConfirm.cancel();
+      this.initialPoseConfirm.cancel();
     }
     // 工具列按鈕永遠可按（issue #124）：Jelly 工具的播放中／錄製中限制改在畫布上的右鍵
     // 選單各項變灰（`ContextMenu`），生成則由 `JellySandbox` 用禁止游標＋提示擋。
@@ -1585,26 +1616,35 @@ export class ControlPanel {
   }
 
   /**
-   * 「片段初始 Pin：N 個 ｜ 設為目前 Pin ｜ 清除」列（issue #39 / ADR-0007 追記）。
-   * 「設為目前 Pin」把畫面上所有 Pin 拍成片段初始快照（「▶ 播放」於 step 0 還原）；
-   * 「清除」清空快照。可用狀態一律交給 `updateTrackControlsState`（錄製中／播放中鎖住）。
-   * 回傳個別節點讓建構子直接賦值給 `readonly` 欄位。
+   * 片段起點的兩列（issue #39 / ADR-0007 追記；issue #155 加「設為初始位置」）：
+   *
+   * - 「[設為初始位置] [設為目前 Pin]」並排——一個把果凍目前的位置與角度寫回 Scene，一個把
+   *   畫面上所有 Pin 拍成片段初始快照（「▶ 播放」於 step 0 還原）。「設為初始位置」的點擊由
+   *   建構子接成條件式的再按一次確認。
+   * - 「片段初始 Pin：N 個 ｜ 清除」——快照的數量與清空。
+   *
+   * 可用狀態一律交給 `updateTrackControlsState`（錄製中／播放中鎖住）。回傳個別節點讓建構子
+   * 直接賦值給 `readonly` 欄位。
    */
-  private setupPinsRow(
+  private sceneStartRows(
     onSnapshot: () => void,
     onClear: () => void,
   ): {
-    row: HTMLElement;
+    actionsRow: HTMLElement;
+    setupPinsRow: HTMLElement;
+    initialPoseButton: HTMLButtonElement;
     countEl: HTMLElement;
     snapshotButton: HTMLButtonElement;
     clearButton: HTMLButtonElement;
   } {
-    const row = document.createElement('div');
-    row.className = 'jelly-control-row jelly-setup-pins-row';
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'jelly-control-row jelly-initial-pose-row';
 
-    const countEl = document.createElement('span');
-    countEl.className = 'jelly-setup-pins-count';
-    countEl.textContent = setupPinCountText(0);
+    const initialPoseButton = document.createElement('button');
+    initialPoseButton.type = 'button';
+    initialPoseButton.textContent = '設為初始位置';
+    initialPoseButton.title =
+      '把桌上每塊果凍目前的位置與角度設成片段的起點——停止／重設、開始播放時都從這裡出發（不含變形）';
 
     const snapshotButton = document.createElement('button');
     snapshotButton.type = 'button';
@@ -1612,14 +1652,23 @@ export class ControlPanel {
     snapshotButton.title = '把畫面上現在所有 Pin 拍成片段初始快照——「▶ 播放」時於 step 0 還原';
     snapshotButton.addEventListener('click', onSnapshot);
 
+    actionsRow.append(initialPoseButton, snapshotButton);
+
+    const setupPinsRow = document.createElement('div');
+    setupPinsRow.className = 'jelly-control-row jelly-setup-pins-row';
+
+    const countEl = document.createElement('span');
+    countEl.className = 'jelly-setup-pins-count';
+    countEl.textContent = setupPinCountText(0);
+
     const clearButton = document.createElement('button');
     clearButton.type = 'button';
     clearButton.textContent = '清除';
     clearButton.title = '清空片段初始 Pin 快照';
     clearButton.addEventListener('click', onClear);
 
-    row.append(countEl, snapshotButton, clearButton);
-    return { row, countEl, snapshotButton, clearButton };
+    setupPinsRow.append(countEl, clearButton);
+    return { actionsRow, setupPinsRow, initialPoseButton, countEl, snapshotButton, clearButton };
   }
 
   /**

@@ -24,7 +24,9 @@
  *
  * **Scene**（`setScene`／`sceneSnapshot`／`reset`）：`reset()` 讓場上與 Scene 一致——移除不
  * 在 Scene 的塊、補回缺的（或參數對不上的：整塊重建）、每塊回 rest、清掉所有約束與
- * 風扇。沙盒在不錄製時的匯入／生成／移除／重建之後呼叫 `setScene(sceneSnapshot())`。
+ * 風扇。沙盒在不錄製時的匯入／生成／移除／重建之後呼叫 `setScene(sceneSnapshot())`；
+ * 「設為初始位置」（issue #155）則是 `setScene(captureScenePose())`——每塊的 `offset`／
+ * `rotation` 換成目前的位置與角度。
  *
  * **`step(dt)`**：切 substep；每個 substep 對每塊 `predict` → 每塊 `solveInternal` →
  * 一次跨塊碰撞（`resolveCollisions`，issue #96 / V3 T3-3；就地改各塊的 `positions`／
@@ -38,12 +40,14 @@ import type { SimMesh } from '../mesh';
 
 import { type Boundary, InfiniteBoundary } from './boundary';
 import { type CollisionParams, DEFAULT_COLLISION_PARAMS, resolveCollisions } from './collision';
+import { centroidOf, fitRigidTransform } from './rigidFit';
 import { SimCore } from './SimCore';
 import {
   type Bbox,
   DEFAULT_SIM_PARAMS,
   type FanState,
   type InputEvent,
+  nearestPinWithin,
   type PinInfo,
   type Point,
   type PointerId,
@@ -105,6 +109,7 @@ function sameEntry(a: SceneEntry, b: SceneEntry): boolean {
     return false;
   }
   if (a.offset.x !== b.offset.x || a.offset.y !== b.offset.y) return false;
+  if ((a.rotation ?? 0) !== (b.rotation ?? 0)) return false;
   const ka = Object.keys(a.meshParams) as (keyof SceneEntry['meshParams'])[];
   const kb = Object.keys(b.meshParams);
   if (ka.length !== kb.length) return false;
@@ -118,7 +123,14 @@ function cloneEntry(e: SceneEntry): SceneEntry {
     meshParams: { ...e.meshParams },
     importSize: e.importSize,
     offset: { x: e.offset.x, y: e.offset.y },
+    ...(e.rotation !== undefined ? { rotation: e.rotation } : {}),
   };
+}
+
+/** 角度收到 `(−π, π]`（累加幾次「設為初始位置」也不會越滾越大）。 */
+function normalizeAngle(angle: number): number {
+  const turns = Math.round(angle / (2 * Math.PI));
+  return angle - turns * 2 * Math.PI;
 }
 
 export class World {
@@ -154,6 +166,27 @@ export class World {
     this.scene = entries.map(cloneEntry);
   }
 
+  /**
+   * 「設為初始位置」（issue #155）：場上每塊的 Scene 條目，`offset`／`rotation` 換成那塊**目前**
+   * 的位置與角度——位置看質心、角度看整塊相對 rest 的最佳擬合旋轉（`fitRigidTransform`），
+   * 變形不算。呼叫端 `setScene` 它之後，下一次 `reset()` 就以這個姿態、rest 形狀重建。
+   *
+   * rest ＝ R(θ)(m − c) + c + offset（c 是網格質心，旋轉不動質心），所以 rest 質心 ＝ c + offset；
+   * 要讓新的 rest 質心落在目前質心，新 offset ＝ 舊 offset ＋（目前質心 − rest 質心）。
+   */
+  captureScenePose(): SceneEntry[] {
+    return this.sorted.map((j) => {
+      const fit = fitRigidTransform(j.mesh.positions, j.core.positions);
+      const entry = cloneEntry(j.entry);
+      entry.offset = {
+        x: entry.offset.x + fit.centroid.x - fit.restCentroid.x,
+        y: entry.offset.y + fit.centroid.y - fit.restCentroid.y,
+      };
+      entry.rotation = normalizeAngle((entry.rotation ?? 0) + fit.angle);
+      return entry;
+    });
+  }
+
   /** 目前場上每塊當初 `spawn` 的參數（依 id 排序、深拷貝）。 */
   sceneSnapshot(): SceneEntry[] {
     return this.sorted.map((j) => cloneEntry(j.entry));
@@ -185,9 +218,23 @@ export class World {
   private buildJelly(entry: SceneEntry): Jelly {
     const raw = this.meshProvider(entry.sourceId, entry.meshParams, entry.importSize);
     const positions = new Float32Array(raw.positions.length);
-    for (let i = 0; i < positions.length; i += 2) {
-      positions[i] = raw.positions[i]! + entry.offset.x;
-      positions[i + 1] = raw.positions[i + 1]! + entry.offset.y;
+    const rotation = entry.rotation ?? 0;
+    if (rotation === 0) {
+      for (let i = 0; i < positions.length; i += 2) {
+        positions[i] = raw.positions[i]! + entry.offset.x;
+        positions[i + 1] = raw.positions[i + 1]! + entry.offset.y;
+      }
+    } else {
+      // 繞網格質心轉（issue #155）；不轉時走上面那條，跟以前逐位元相同。
+      const { x: cx, y: cy } = centroidOf(raw.positions);
+      const cos = Math.cos(rotation);
+      const sin = Math.sin(rotation);
+      for (let i = 0; i < positions.length; i += 2) {
+        const x = raw.positions[i]! - cx;
+        const y = raw.positions[i + 1]! - cy;
+        positions[i] = cos * x - sin * y + cx + entry.offset.x;
+        positions[i + 1] = sin * x + cos * y + cy + entry.offset.y;
+      }
     }
     const mesh: SimMesh = { ...raw, positions };
     const core = new SimCore(mesh, this.params);
@@ -327,12 +374,20 @@ export class World {
       case 'movePin':
         this.coreFor(event.id)?.applyInput(event);
         break;
-      case 'release':
-      case 'unpin': {
+      case 'release': {
         const core = this.coreFor(event.id);
         if (!core) break;
         core.applyInput(event);
         if (core.attachPoint(event.id) === null) this.route.delete(event.id);
+        break;
+      }
+      case 'unpin': {
+        // 用世界座標指定（issue #154）：跨塊找半徑內最近的那一顆，交給它那塊、以那顆的座標為
+        // 圓心再拔一次——那塊裡離這個點最近的就是它自己（距離 0），不必靠浮點恰好相等。
+        const hit = nearestPinWithin(this.listPins(), event, event.radius);
+        if (!hit) break;
+        this.jellyMap.get(hit.jellyId)?.core.applyInput({ ...event, ...hit.point });
+        this.route.delete(hit.id);
         break;
       }
       case 'clearPins':

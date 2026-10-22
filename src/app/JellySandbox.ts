@@ -110,11 +110,12 @@
  *
  * **Track 座標對齊**：Grab/Tap/Pin 記的是錄製當下的絕對世界座標，`playAll`
  * 因此在 `demoRunner.start` 之前先 `world.reset()`（場上回到 Scene、每塊回 rest，
- * 絕對世界座標才準確落在果凍上）。相機：整段沒有相機軌時，重設後推一個一次性 `frame`
- * 指令把鏡頭框回果凍靜止狀態；有相機軌時改由每條相機軌自帶的 `setState` 硬切
- * 在它的起始 step 把鏡頭瞬間設回錄製起點——兩種都是離散、決定性的瞬間對齊，
- * 確保「連按播放全部結果逐格一致」（issue #33 / #36 決定性驗收條件）不受播放前
- * 場景／相機被怎麼動過影響。
+ * 絕對世界座標才準確落在果凍上）。相機（issue #156 改，見 ADR-0007 追記）：播放開始
+ * **不動**相機——保留播放前的鏡位與「鎖定跟隨」，讓使用者能先擺好鏡位再播；相機軌
+ * 自帶的 `setState` 照舊在它的起始 step 把鏡頭硬切到錄製起點。「停止／重設」把相機
+ * 還原成播放前的狀態，所以「擺鏡位 → 播放 → 停止 → 再播」每一輪都從同一個起點出發，
+ * 從同一個鏡位連按播放全部仍逐格一致（#33／#36 的決定性，起點從「固定框住果凍」改成
+ * 「使用者擺好的鏡位」）。
  *
  * **場景狀態整合**（issue #38 / V2 T1-6；issue #95 改）：「停止／重設」（`resetSim`）、
  * 「清空全部」（`clearAll`）與「載入片段」（`applyClipState`）共用
@@ -485,6 +486,8 @@ export class JellySandbox {
   private noticeTimer = 0;
 
   private cameraState: CameraState;
+  /** 最近一次「播放全部」開始前的相機（issue #156）——「停止／重設」時還原，還原後清掉。 */
+  private cameraBeforePlayback: CameraState | null = null;
   /**
    * 畫布邊上被介面蓋住多少（issue #138）——相機 zoom-to-fit 要避開的部分，經 `canvasSize()`
    * 帶給相機。每幀開頭（還沒寫任何 DOM 前）重量一次，見 `refreshFitInsets`。
@@ -802,6 +805,11 @@ export class JellySandbox {
       onToggleRecording: () => this.toggleRecording(),
       onPlayAll: () => this.playAll(),
       onSnapshotSetupPins: () => this.snapshotSetupPins(),
+      onSetInitialPose: () => this.setInitialPose(),
+      onInitialPoseConfirmPending: () =>
+        this.showNotice(
+          'Track 記的是絕對世界座標：果凍移走後，舊 Track 抓的那一點可能已經沒有果凍。確定的話再按一次「設為初始位置」',
+        ),
       onClearSetupPins: () => this.clearSetupPins(),
       onTogglePause: () => this.togglePause(),
       onTrackStartTimeChange: (id, seconds) => this.setTrackStartTime(id, seconds),
@@ -1133,6 +1141,30 @@ export class JellySandbox {
   }
 
   /**
+   * 「設為初始位置」（issue #155）：把場上每塊 Jelly 目前的位置與角度寫回 Scene
+   * （`World.captureScenePose`：質心＋最佳擬合旋轉，不含變形），之後停止／重設、開始播放都從
+   * 這個姿態出發。
+   *
+   * 寫回之後**立刻** `world.reset()`，讓場上每塊以新姿態、rest 形狀重建——不然場上那塊仍是
+   * 舊姿態建出來的，之後匯入／生成／移除後的 `setScene(sceneSnapshot())` 會把新姿態洗回去，
+   * 「設為目前 Pin」拍的 rest 座標也會落在舊姿態上。重設會清掉約束與風扇，所以先記下按下前的
+   * Pin（同 id、同世界座標）與風扇，重建後放回去；這幾個事件不經 `dispatchInput`——錄製中、
+   * 播放中這顆鈕本來就按不了（`ControlPanel` 鎖住，這裡再擋一次）。
+   */
+  private setInitialPose(): void {
+    if (this.playbackLocked || this.trackRecorder.isRecording) return;
+    const pins = this.world.listPins();
+    const fan = this.world.fanState();
+    this.world.setScene(this.world.captureScenePose());
+    this.world.reset();
+    for (const pin of pins) {
+      this.world.applyInput({ type: 'pin', id: pin.id, x: pin.point.x, y: pin.point.y });
+    }
+    if (fan) this.world.applyInput({ type: 'setFan', ...fan });
+    this.showNotice('已把每塊果凍目前的位置與角度設為初始位置');
+  }
+
+  /**
    * 「片段初始 Pin：設為目前 Pin」（issue #39 / ADR-0007 追記）——把畫面上現在所有
    * Pin（`world.listPins()`，跨所有塊）的**rest 形狀附著座標**（`world.restAttachPoint`）
    * 拍成快照，取代上一份。存 rest 座標而非目前變形座標：`playAll` 會先 `world.reset()`，還原時
@@ -1295,24 +1327,17 @@ export class JellySandbox {
    * 它們才會準確落在果凍上、每次疊加結果才逐格一致（issue #33 決定性驗收條件），
    * 不受「播放前場景被怎麼動過」影響。
    *
-   * 相機：整段沒有任何 Camera Track 時，重設後推一個一次性 `frame` 指令把鏡頭
-   * 框回果凍靜止狀態（不停在上一次亂動到的位置）。有 Camera Track 時改成把
-   * `cameraState` 同步重設成剛框好的靜止狀態——這樣第一條相機軌起始秒數若被
-   * 調到 > 0，它生效前那段的鏡頭是從一個固定鏡位開始（決定性），而不是承接
-   * 播放前手動亂動到的鏡位；相機軌一生效，自帶的 `setState` 硬切就接管
-   * （issue #36 決定性驗收條件：不管播放前鏡頭在哪、重複播放鏡頭路徑都一致）。
+   * 相機（issue #156）：不動——保留播放前的鏡位與「鎖定跟隨」（以前會推 `frame` 或重設成
+   * 跟隨開著的框好鏡位，使用者沒辦法先擺好鏡位）。相機軌一生效，自帶的 `setState` 硬切
+   * 照舊接管。播放前的相機記在 `cameraBeforePlayback`，「停止／重設」時還原（見 `resetSim`），
+   * 同一個鏡位重複播放，鏡頭路徑仍逐格一致。
    */
   private playAll(): void {
     const active = tracksInEnabledGroups(this.tracks, this.groups);
     if (active.length === 0) return;
     this.world.reset();
-    const hasCameraTrack = active.some((t) => t.kind === 'camera');
-    if (hasCameraTrack) {
-      this.cameraState = createCameraState({ bbox: this.currentBbox() }, this.canvasSize());
-      this.cameraCommands = [];
-    } else {
-      this.cameraCommands.push({ type: 'frame' });
-    }
+    // 播放中又按一次播放時，現在的鏡頭是播放中的（可能已被相機軌硬切），不能當成播放前。
+    if (!this.demoRunner.isRunning) this.cameraBeforePlayback = this.cameraState;
     this.demoRunner.start(
       mergeTracks([
         // 片段初始 Pin 合成軌排在最前面（issue #39）：`setup/` 前綴不撞 Action Track
@@ -1399,11 +1424,18 @@ export class JellySandbox {
    * issue #95 回到 Scene）：先 `haltPlaybackAndRecording()`，再 `world.reset()` 讓場上
    * 與 Scene 一致（錄製中生成的塊消失、每塊回 rest 座標、速度歸零、清掉所有 Grab／
    * Pin 與風扇）。Track／群組清單與片段初始 Pin 快照（issue #39）**保留**——只有
-   * 「清空全部」／載入片段才換掉。
+   * 「清空全部」／載入片段才換掉。播放過的話相機回到播放前的狀態（issue #156）。
    */
   private resetSim(): void {
     this.haltPlaybackAndRecording();
     this.world.reset();
+    // 播放過就把相機還原成播放前的狀態（issue #156）：下一輪播放從同一個鏡位出發。還原
+    // 一次就丟掉，之後使用者重新擺的鏡位不會又被下一次重設拉回去。
+    if (this.cameraBeforePlayback) {
+      this.cameraState = this.cameraBeforePlayback;
+      this.cameraCommands = [];
+      this.cameraBeforePlayback = null;
+    }
   }
 
   /**

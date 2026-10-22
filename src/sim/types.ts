@@ -33,7 +33,10 @@ export type PointerId = number | string;
  * - `pin`：建立／轉成 Pin（目標點凍結、絕對硬鎖，ADR-0004）。帶 `(x, y)` = 在該
  *   座標 picking 建立；不帶座標 = 把該 `id` 既有的 Grab 就地凍結（不跳動）——大把抓取
  *   不支援，對它的 `id` 送無座標 `pin` 為 no-op。
- * - `unpin`：解除該 `id` 的 Pin（未鎖的 Grab 不受影響）。
+ * - `unpin`（issue #154 改成用世界座標指定）：解除 `(x, y)` 半徑 `radius` 內（含邊界）
+ *   最近的那一顆 Pin（多塊時跨塊比，見 `World`）；半徑內沒有 Pin 就是 no-op，未鎖的 Grab
+ *   不受影響。不用 id：播放時 `mergeTracks` 會替各條 Track 的 id 加前綴、片段初始 Pin 也叫
+ *   `setup/N`，錄下的 id 跟場上的對不上；Pin 釘在世界座標上，每次播放位置都一樣。
  * - `movePin`：把該 `id` 的 Pin 鎖定點移到 `(x, y)` 並在該處重新硬鎖。
  * - `tap`：在 `(x, y)` 施加一次性向內徑向脈衝（凹陷後彈回）。`strength` 預設
  *   `params.tapStrength`。`radius`（issue #113，大把抓取的範圍 Tap）預設目前 bbox
@@ -67,7 +70,7 @@ export type InputEvent =
   | { type: 'moveGrab'; id: PointerId; x: number; y: number }
   | { type: 'release'; id: PointerId }
   | { type: 'pin'; id: PointerId; x?: number; y?: number; radius?: number }
-  | { type: 'unpin'; id: PointerId }
+  | { type: 'unpin'; x: number; y: number; radius: number }
   | { type: 'movePin'; id: PointerId; x: number; y: number }
   | { type: 'tap'; x: number; y: number; strength?: number; radius?: number }
   | { type: 'clearPins' }
@@ -99,6 +102,11 @@ export interface SceneEntry {
   meshParams: BuildSimMeshParams;
   importSize: number | null;
   offset: Point;
+  /**
+   * 擺放角度（弧度，issue #155「設為初始位置」）：rest ＝ 網格繞自己的質心轉這個角度、再加
+   * `offset`。沒有（或 0）＝不轉，算式跟加入這個欄位之前逐位元相同。
+   */
+  rotation?: number;
 }
 
 /** 求解器的手感參數。全部有預設值，建構時可只帶想改的欄位。 */
@@ -207,6 +215,28 @@ export interface FanState {
   strength: number;
   falloffExponent: number;
   frequency: number;
+}
+
+/**
+ * `pins` 裡距離 `point` 最近、且落在 `radius` 內（含邊界）的那一個；沒有就回 `undefined`
+ * （拔模式單擊 issue #123；issue #154 起也是 `unpin` 事件的判定，`SimCore`／`World` 共用）。
+ * 一樣近時取後面那一個。純函式。
+ */
+export function nearestPinWithin<P extends PinInfo>(
+  pins: readonly P[],
+  point: Point,
+  radius: number,
+): P | undefined {
+  let best: P | undefined;
+  let bestDist = radius;
+  for (const pin of pins) {
+    const d = Math.hypot(pin.point.x - point.x, pin.point.y - point.y);
+    if (d <= bestDist) {
+      best = pin;
+      bestDist = d;
+    }
+  }
+  return best;
 }
 
 /**

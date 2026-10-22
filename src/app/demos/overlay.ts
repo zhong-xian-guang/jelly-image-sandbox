@@ -22,7 +22,9 @@
  *    落到共同的全域 step 軸上。多條 Action Track 在時間軸上可自由重疊——那正是
  *    疊出 Multi-grab 的用途。
  * 3. **id 重新映射**：每條 Track 內部用到的 `PointerId`（grab／moveGrab／
- *    release／pin／unpin／movePin 的 `id`）一律加上該 Track 專屬的 `idPrefix`。
+ *    release／pin／movePin 的 `id`）一律加上該 Track 專屬的 `idPrefix`。`unpin` 用世界
+ *    座標指定要拔哪一顆（issue #154），沒有 id、不受前綴影響，所以拔得到別條 Track 或
+ *    片段初始 Pin 放的 Pin。
  *    同一條 Track 內引用同一個原始 id 的事件套同一個前綴 → 條內關聯保住；不同
  *    Track 前綴不同 → 跨 Track 不再碰撞（否則 TrackA 的 `release` 會誤中 TrackB
  *    的 Grab，疊加就不是真正的同時多點抓取）。`tap` 與相機指令沒有 `id`，原樣通過。
@@ -125,7 +127,10 @@ export function overlappingCameraTrackIds(
   return flagged;
 }
 
-/** 把 `event` 的 `PointerId`（若有）加上 `prefix`；`tap`／相機指令沒有 `id`，原樣回傳。 */
+/**
+ * 把 `event` 的 `PointerId`（若有）加上 `prefix`；`tap`、`unpin`（issue #154 起用世界座標指定）
+ * 與相機指令沒有 `id`，原樣回傳。
+ */
 function withPrefixedId(event: DemoEvent, prefix: string): DemoEvent {
   return 'id' in event ? { ...event, id: `${prefix}${String(event.id)}` } : event;
 }
@@ -171,7 +176,7 @@ type GrabEvent = Extract<DemoEvent, { type: 'grab' }>;
  * Grab」——`grab` 是原始的 `grab` 事件（挑選座標讓 picking 命中 rest 形狀上正確的
  * 材質點；`radius`／`handfulRadius` 等選擇性欄位原樣保留，issue #113 的大把抓取
  * 重建後才是同一把）、`target` 是最後一次 `grab`／`moveGrab` 的目標座標。`release`／`pin`
- *（轉成 Pin，不再是可重建的 Grab）／`unpin` 清掉。Pin 本身橫跨修剪點的重建不在
+ *（轉成 Pin，不再是可重建的 Grab）清掉。Pin 本身橫跨修剪點的重建不在
  * issue #35 範圍。
  */
 function openGrabs(
@@ -192,7 +197,6 @@ function openGrabs(
       }
       case 'release':
       case 'pin':
-      case 'unpin':
         open.delete(event.id);
         break;
       default:

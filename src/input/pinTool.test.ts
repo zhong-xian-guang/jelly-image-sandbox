@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { mulberry32 } from '../mesh';
-import type { InputEvent, PinInfo, Point } from '../sim';
+import { nearestPinWithin, type InputEvent, type PinInfo, type Point } from '../sim';
 import {
   DEFAULT_PIN_BRUSH_RADIUS,
   DEFAULT_SPRAY_SPACING,
@@ -38,6 +38,8 @@ function makePinRouter(opts?: {
   const scale = opts?.scale ?? 1;
   const store: PinInfo[] = [...(opts?.pins ?? [])];
   const events: InputEvent[] = [];
+  /** `unpin` 帶的是世界座標（issue #154）——照 `World` 的規則換回被拔掉的那顆的 id。 */
+  const removed: PinInfo['id'][] = [];
   const router = new ToolRouter({
     screenToWorld: (x, y) => ({ x: x / scale + 1000, y: y / scale + 1000 }),
     emit: (e) => {
@@ -46,8 +48,11 @@ function makePinRouter(opts?: {
       if (e.type === 'pin' && e.x !== undefined && e.y !== undefined) {
         store.push({ id: e.id, point: { x: e.x, y: e.y } });
       } else if (e.type === 'unpin') {
-        const index = store.findIndex((p) => p.id === e.id);
-        if (index >= 0) store.splice(index, 1);
+        const hit = nearestPinWithin(store, e, e.radius);
+        if (hit) {
+          removed.push(hit.id);
+          store.splice(store.indexOf(hit), 1);
+        }
       }
     },
     listPins: () => store,
@@ -60,7 +65,15 @@ function makePinRouter(opts?: {
     events.flatMap((e) =>
       e.type === 'pin' && e.x !== undefined && e.y !== undefined ? [{ x: e.x, y: e.y }] : [],
     );
-  const unpinnedIds = () => events.flatMap((e) => (e.type === 'unpin' ? [e.id] : []));
+  const unpinnedIds = () => {
+    if (!(opts?.live ?? true)) {
+      // 靜態清單：每個 `unpin` 對照原始清單換回 id（不從清單移除）。
+      return events.flatMap((e) =>
+        e.type === 'unpin' ? [nearestPinWithin(store, e, e.radius)?.id ?? null] : [],
+      );
+    }
+    return removed;
+  };
   return { router, events, store, pinPoints, unpinnedIds };
 }
 
@@ -255,7 +268,8 @@ describe('Pin 工具 — 拔模式', () => {
     router.setMode('pin', 'remove');
     router.down(1, 0, 0, 0);
     router.up(1, 0, 0, 50);
-    expect(events).toEqual([{ type: 'unpin', id: 'nearer' }]);
+    // 帶的是那顆 Pin 的世界座標與點擊半徑（換算成世界單位），不是 id（issue #154）。
+    expect(events).toEqual([{ type: 'unpin', x: 1002, y: 1001, radius: PIN_REMOVE_RADIUS_PX }]);
   });
 
   it('點擊半徑是螢幕像素：放大兩倍時，世界距離只剩一半才算點中', () => {
@@ -331,7 +345,17 @@ describe('Pin 工具 — 拔模式', () => {
     router.setMode('pin', 'remove');
     router.down(1, 0, 0, 0);
     router.up(1, 0, 0, 50);
-    expect(events).toEqual([{ type: 'unpin', id: 'p' }]);
+    expect(events).toEqual([{ type: 'unpin', x: 1000, y: 1000, radius: PIN_REMOVE_RADIUS_PX }]);
+  });
+
+  it('拖曳擦除的每個 unpin 也帶 Pin 的世界座標（issue #154）', () => {
+    const { router, events } = makePinRouter({
+      pins: [{ id: 'p', point: { x: 1100, y: 1010 } }],
+    });
+    router.setMode('pin', 'remove');
+    router.setPinBrushParams({ radius: 60 });
+    drag(router, 1, [0, 0], [300, 0], 30);
+    expect(events).toEqual([{ type: 'unpin', x: 1100, y: 1010, radius: PIN_REMOVE_RADIUS_PX }]);
   });
 });
 
@@ -363,7 +387,7 @@ describe('Pin 工具 — 手勢分支在按下當下定下（spec #121）', () =
     router.setMode('pin', 'place');
     for (let i = 1; i <= 10; i++) router.move(1, i * 30, 0);
     router.up(1, 300, 0, 2000);
-    expect(events).toEqual([{ type: 'unpin', id: 'p' }]);
+    expect(events).toEqual([{ type: 'unpin', x: 1200, y: 1000, radius: PIN_REMOVE_RADIUS_PX }]);
   });
 
   it('抓取（單點）按下、途中切到 Pin 工具 → 仍是 grab → tap → release，不變成 Pin', () => {

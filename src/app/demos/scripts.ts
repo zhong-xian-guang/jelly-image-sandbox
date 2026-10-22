@@ -17,6 +17,8 @@ import type { DemoDefinition, DemoStep } from './types';
 const GRAB_ID: PointerId = 'demo-grab';
 const GRAB_ID_B: PointerId = 'demo-grab-b';
 const PIN_ID: PointerId = 'demo-pin';
+/** 拔 Pin 時對準 Pin 位置的容許距離（世界單位，issue #154）——Pin 就釘在 `anchor` 上，給一點餘裕。 */
+const PIN_MATCH_RADIUS = 4;
 
 /** 拖到極限並放開：抓一角，緩緩拉到遠超對角線的距離再放手，看回彈。 */
 function buildStretchRelease(positions: Float64Array): DemoStep[] {
@@ -56,7 +58,11 @@ function buildPinAndPull(positions: Float64Array): DemoStep[] {
     { atStep: pullStart, event: { type: 'grab', id: GRAB_ID, x: corner.x, y: corner.y } },
     ...easeMoveSteps(GRAB_ID, corner, target, pullStart, pullDuration, easeOutCubic),
     { atStep: releaseStep, event: { type: 'release', id: GRAB_ID } },
-    { atStep: releaseStep + at(0.2), event: { type: 'unpin', id: PIN_ID } },
+    // 用世界座標拔（issue #154）：Pin 釘在 `anchor`，容許距離給一點餘裕。
+    {
+      atStep: releaseStep + at(0.2),
+      event: { type: 'unpin', x: anchor.x, y: anchor.y, radius: PIN_MATCH_RADIUS },
+    },
   ];
 }
 

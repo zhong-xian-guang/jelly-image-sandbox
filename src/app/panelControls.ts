@@ -111,12 +111,21 @@ export const CONFIRM_TEXT = '再按一次確認…';
  * 把一顆按鈕接成「再按一次確認」：第一次按把文字換成 `CONFIRM_TEXT`、加上警示樣式，
  * `timeoutMs` 內再按才呼叫 `onConfirm`（並還原），逾時自動還原。按鈕原本的文字在
  * 接上時記下來，還原時放回去。
+ *
+ * `needsConfirm`（issue #155）：每次按下時問一次，回 `false` 就直接 `onConfirm`、不走兩段式
+ * ——「設為初始位置」只有在已經有 Track 時才需要提醒。`onPending` 在進入待確認時呼叫，
+ * 呼叫端可以藉機說明為什麼要確認。
  */
 export function confirmOnSecondClick(
   button: HTMLButtonElement,
   onConfirm: () => void,
-  timeoutMs = CONFIRM_TIMEOUT_MS,
+  opts: {
+    timeoutMs?: number;
+    needsConfirm?: () => boolean;
+    onPending?: () => void;
+  } = {},
 ): ConfirmButton {
+  const timeoutMs = opts.timeoutMs ?? CONFIRM_TIMEOUT_MS;
   const idleText = button.textContent ?? '';
   let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -134,9 +143,14 @@ export function confirmOnSecondClick(
       onConfirm();
       return;
     }
+    if (opts.needsConfirm && !opts.needsConfirm()) {
+      onConfirm();
+      return;
+    }
     button.textContent = CONFIRM_TEXT;
     button.classList.add(CONFIRM_PENDING_CLASS);
     timer = setTimeout(reset, timeoutMs);
+    opts.onPending?.();
   });
 
   return { cancel: reset };

@@ -26,51 +26,23 @@ vi.mock('./defaultJelly', () => ({
   },
 }));
 
-import { BackdropBoard } from './BackdropBoard';
-import { BackgroundStore, memoryKeyValueStore } from './backgroundStore';
-import { JellySandbox } from './JellySandbox';
-
-/** 算繪端替身：`canvas` 是真的元素（輸入層要掛監聽），其餘方法一律 no-op，只記下網格顯示開關。 */
-function fakeRenderer(wireframeCalls: boolean[]): unknown {
-  const canvas = document.createElement('canvas');
-  return new Proxy(
-    {},
-    {
-      get(_target, prop) {
-        if (prop === 'canvas') return canvas;
-        if (prop === 'setWireframeVisible') return (v: boolean) => wireframeCalls.push(v);
-        if (prop === 'then') return undefined;
-        return () => [];
-      },
-    },
-  );
-}
-
-type SandboxCtor = new (
-  root: HTMLElement,
-  renderer: unknown,
-  texture: HTMLCanvasElement,
-  background: { store: BackgroundStore; color: string; backdrops: BackdropBoard },
-) => JellySandbox;
+import type { JellySandbox } from './JellySandbox';
+import { createTestSandbox } from './sandboxTestHarness';
 
 describe('JellySandbox — 乾淨畫面不改寫提示開關（issue #130 / #139）', () => {
   let root: HTMLDivElement;
   let sandbox: JellySandbox;
-  let wireframeCalls: boolean[];
+  let rendererCalls: Map<string, unknown[][]>;
+  /** 算繪端「顯示網格」開關收到過的值（依序）。 */
+  const wireframeCalls = (): boolean[] =>
+    (rendererCalls.get('setWireframeVisible') ?? []).map(([visible]) => visible as boolean);
 
   beforeEach(() => {
     // 第一次開網頁會自動跳「?」說明浮層；這裡不關心它。
     localStorage.setItem('jelly-sandbox:help-seen', '1');
     root = document.createElement('div');
     document.body.appendChild(root);
-    wireframeCalls = [];
-    const Ctor = JellySandbox as unknown as SandboxCtor;
-    const store = new BackgroundStore(memoryKeyValueStore(), () => {});
-    sandbox = new Ctor(root, fakeRenderer(wireframeCalls), document.createElement('canvas'), {
-      store,
-      color: '#1a1a1a',
-      backdrops: new BackdropBoard(store),
-    });
+    ({ sandbox, rendererCalls } = createTestSandbox(root));
   });
 
   afterEach(() => {
@@ -109,17 +81,17 @@ describe('JellySandbox — 乾淨畫面不改寫提示開關（issue #130 / #139
     toggle(showPins); // 關掉 Pin 標記
     toggle(showWireframe); // 打開網格
     expect(pinMarkersVisible()).toBe(false);
-    expect(wireframeCalls.at(-1)).toBe(true);
+    expect(wireframeCalls().at(-1)).toBe(true);
 
     const enter = root.querySelector('button[aria-label="進入乾淨畫面"]');
     if (!(enter instanceof HTMLButtonElement)) throw new Error('找不到進入乾淨畫面鈕');
     enter.click();
     expect(pinMarkersVisible()).toBe(false);
-    expect(wireframeCalls.at(-1)).toBe(false); // 乾淨畫面中網格被壓下
+    expect(wireframeCalls().at(-1)).toBe(false); // 乾淨畫面中網格被壓下
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(pinMarkersVisible()).toBe(false); // 使用者關掉的仍然關著
-    expect(wireframeCalls.at(-1)).toBe(true); // 使用者打開的回來
+    expect(wireframeCalls().at(-1)).toBe(true); // 使用者打開的回來
     // 開關本身沒被乾淨畫面改寫
     expect(showPins.checked).toBe(false);
     expect(showWireframe.checked).toBe(true);

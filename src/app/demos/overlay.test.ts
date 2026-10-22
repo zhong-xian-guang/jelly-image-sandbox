@@ -83,7 +83,7 @@ describe('mergeTracks', () => {
       steps: [
         { atStep: 0, event: { type: 'pin', id: 'x', x: 0, y: 0 } },
         { atStep: 2, event: { type: 'movePin', id: 'x', x: 1, y: 1 } },
-        { atStep: 4, event: { type: 'unpin', id: 'x' } },
+        { atStep: 4, event: { type: 'unpin', x: 1, y: 1, radius: 5 } },
       ],
     };
     const b: OverlayTrack = {
@@ -97,8 +97,9 @@ describe('mergeTracks', () => {
       'A/x',
       'B/x',
       'A/x',
-      'A/x',
     ]);
+    // unpin 用世界座標指定（issue #154），沒有 id 可改寫，原樣通過。
+    expect(merged.at(-1)!.event).toEqual({ type: 'unpin', x: 1, y: 1, radius: 5 });
   });
 
   it('沒有 id 欄位的事件（tap）原樣通過，只平移 atStep', () => {
@@ -434,10 +435,12 @@ describe('mergeTracks', () => {
         steps: [
           { atStep: 2, event: { type: 'grab', id: 'p', x: 0, y: 0 } },
           { atStep: 4, event: { type: 'pin', id: 'p' } },
-          { atStep: 14, event: { type: 'unpin', id: 'p' } },
+          { atStep: 14, event: { type: 'unpin', x: 0, y: 0, radius: 5 } },
         ],
       };
-      expect(mergeTracks([track])).toEqual([{ atStep: 4, event: { type: 'unpin', id: 'A/p' } }]);
+      expect(mergeTracks([track])).toEqual([
+        { atStep: 4, event: { type: 'unpin', x: 0, y: 0, radius: 5 } },
+      ]);
     });
 
     it('inStep = 0 不觸發重建（沒有頭可修）', () => {

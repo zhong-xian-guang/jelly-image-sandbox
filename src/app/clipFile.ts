@@ -299,6 +299,10 @@ function parseSceneEntry(v: unknown, field: string): SceneEntry {
     meshParams: parseMeshParams(obj.meshParams, `${field}.meshParams`),
     importSize: parseImportSize(obj.importSize, `${field}.importSize`),
     offset: parsePoint(obj.offset, `${field}.offset`),
+    // 「設為初始位置」拍下的角度（issue #155）；沒有＝不轉。
+    ...(obj.rotation === undefined
+      ? {}
+      : { rotation: requireNumber(obj.rotation, `${field}.rotation`) }),
   };
 }
 
