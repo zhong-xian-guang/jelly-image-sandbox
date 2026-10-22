@@ -1277,11 +1277,13 @@ body {
 
 .jelly-backdrop-row {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   padding: 2px 4px;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
 }
 
 .jelly-backdrop-thumb {
@@ -1307,12 +1309,6 @@ body {
 }
 
 /* Backdrop 清單完整版（issue #151）：開關＋縮圖＋名稱＋上移／下移／刪除；選中那列展開數字欄位。 */
-.jelly-backdrop-row {
-  flex-direction: column;
-  align-items: stretch;
-  cursor: pointer;
-}
-
 .jelly-backdrop-row.is-selected {
   background: rgba(255, 204, 51, 0.16);
   outline: 1px solid rgba(255, 204, 51, 0.7);

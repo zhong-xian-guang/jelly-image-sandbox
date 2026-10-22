@@ -249,3 +249,25 @@ describe('BackgroundPanel — 清單完整版（issue #151）', () => {
     panel.element.remove();
   });
 });
+
+describe('BackgroundPanel — 數字欄位送出超出範圍的值（#152 驗證回饋）', () => {
+  it('按 Enter 送出後，就算欄位還有焦點也會顯示被夾住後的值', () => {
+    const panel = new BackgroundPanel(makeOptions());
+    document.body.appendChild(panel.element);
+    const row = { ...listRow('a', 'a', ''), selected: true, opacity: 0.4 };
+    panel.setBackdrops([row]);
+    const opacity = [
+      ...rows(panel)[0]!.querySelectorAll('input[type="number"]'),
+    ][3] as HTMLInputElement;
+    opacity.focus();
+    opacity.value = '0';
+    opacity.dispatchEvent(new Event('change'));
+    panel.setBackdrops([{ ...row, opacity: 0.05 }]);
+    expect(opacity.value).toBe('5');
+    // 送出那一次之後，繼續輸入中的欄位照舊不被洗掉。
+    opacity.value = '7';
+    panel.setBackdrops([{ ...row, opacity: 0.05 }]);
+    expect(opacity.value).toBe('7');
+    panel.element.remove();
+  });
+});
