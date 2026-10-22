@@ -107,6 +107,12 @@ export class BackgroundPanel {
   private renderedKey: string | null = null;
   /** 選中那一列的數字欄位（就地更新用）。 */
   private fieldInputs: { spec: FieldSpec; input: HTMLInputElement }[] = [];
+  /**
+   * 剛送出（`change`）、還等著拿回實際值的那一格（#152 驗證回饋）：打了超出範圍的值按 Enter，
+   * Board 會夾住，但焦點還在這一格——下一次 `updateFields` 照樣把它更正成實際值，之後恢復
+   * 「不動正在輸入的欄位」。
+   */
+  private committedInput: HTMLInputElement | null = null;
 
   constructor(opts: BackgroundPanelOptions) {
     this.opts = opts;
@@ -161,8 +167,9 @@ export class BackgroundPanel {
     if (!row) return;
     const active = this.element.ownerDocument.activeElement;
     for (const { spec, input } of this.fieldInputs) {
-      if (input !== active) input.value = spec.show(row);
+      if (input !== active || input === this.committedInput) input.value = spec.show(row);
     }
+    this.committedInput = null;
   }
 
   private rowEl(row: BackdropListRow): HTMLElement {
@@ -230,6 +237,7 @@ export class BackgroundPanel {
       input.addEventListener('change', () => {
         const value = Number.parseFloat(input.value);
         if (Number.isFinite(value)) {
+          this.committedInput = input;
           this.opts.onBackdropFieldChange(row.id, spec.field, spec.parse(value));
         }
       });

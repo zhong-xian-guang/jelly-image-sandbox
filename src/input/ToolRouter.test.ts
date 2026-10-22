@@ -1828,3 +1828,35 @@ describe('ToolRouter — 背景圖工具：右鍵＋滾輪、中鍵切模式、�
     expect(events).toEqual([]);
   });
 });
+
+describe('ToolRouter — 背景圖工具：多指同時拖同一張（#152 驗證回饋）', () => {
+  it('同一張已經有指標在拖時，第二根手指不再帶著它走（位移不疊加）', () => {
+    const commands: BackdropCommand[] = [];
+    const { router } = makeRouter(undefined, undefined, {
+      backdropHitTest: () => 'bd',
+      onBackdropCommand: (cmd) => commands.push(cmd),
+    });
+    router.setActiveTool('backdrop');
+    router.down(1, 0, 0, 0);
+    router.down(2, 50, 0, 0);
+    router.move(1, 10, 0);
+    router.move(2, 60, 0);
+    expect(commands.filter((c) => c.type === 'move')).toEqual([
+      { type: 'move', id: 'bd', dx: 10, dy: 0 },
+    ]);
+  });
+
+  it('第一根放開後，新的按下照常可以拖', () => {
+    const commands: BackdropCommand[] = [];
+    const { router } = makeRouter(undefined, undefined, {
+      backdropHitTest: () => 'bd',
+      onBackdropCommand: (cmd) => commands.push(cmd),
+    });
+    router.setActiveTool('backdrop');
+    router.down(1, 0, 0, 0);
+    router.up(1, 0, 0, 10);
+    router.down(2, 0, 0, 20);
+    router.move(2, 5, 0);
+    expect(commands.at(-1)).toEqual({ type: 'move', id: 'bd', dx: 5, dy: 0 });
+  });
+});

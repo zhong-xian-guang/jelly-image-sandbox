@@ -1071,7 +1071,12 @@ export class ToolRouter {
       const world = this.screenToWorld(screenX, screenY);
       const hit = this.backdropHitTest?.(world) ?? null;
       this.onBackdropCommand?.({ type: 'select', id: hit });
-      if (hit !== null) this.backdropSessions.set(id, { id: hit, lastWorld: world });
+      // 同一張已經有別的指標在拖（多指觸控）就不再多開一個跟隨——各送一份移動量會讓
+      // 位移疊加成兩倍（#152 驗證回饋）。由先按下的那根帶著走。
+      const alreadyDragged = [...this.backdropSessions.values()].some((s) => s.id === hit);
+      if (hit !== null && !alreadyDragged) {
+        this.backdropSessions.set(id, { id: hit, lastWorld: world });
+      }
       return;
     }
     if (behavior === 'jelly') {
