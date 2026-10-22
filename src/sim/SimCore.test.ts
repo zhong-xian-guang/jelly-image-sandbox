@@ -278,11 +278,11 @@ describe('SimCore — Pin', () => {
     expect(allFinite(sim.positions)).toBe(true);
   });
 
-  it('unpin → 該點恢復自由', () => {
+  it('unpin（世界座標，issue #154）→ 該點恢復自由', () => {
     const sim = new SimCore(MESH());
     sim.applyInput({ type: 'pin', id: 'p', x: 0, y: 0 });
     run(sim, 30);
-    sim.applyInput({ type: 'unpin', id: 'p' });
+    sim.applyInput({ type: 'unpin', x: 1, y: -1, radius: 5 });
     expect(sim.pinCount).toBe(0);
     expect(sim.attachPoint('p')).toBeNull();
 
@@ -493,6 +493,20 @@ describe('SimCore — Pin', () => {
     expect(pins[0]!.point).toEqual(sim.attachPoint('p'));
   });
 
+  it('unpin 只拔半徑內最近的那一顆；半徑內沒有就不動（issue #154）', () => {
+    const sim = new SimCore(MESH());
+    sim.applyInput({ type: 'pin', id: 'a', x: 0, y: 0 });
+    sim.applyInput({ type: 'pin', id: 'b', x: 96, y: 0 });
+    sim.applyInput({ type: 'grab', id: 'g', x: 48, y: 96 });
+    sim.applyInput({ type: 'unpin', x: 60, y: 0, radius: 20 }); // 離 b 36、a 60 → 都不在半徑內
+    expect(sim.listPins().map((p) => p.id)).toEqual(['a', 'b']);
+    sim.applyInput({ type: 'unpin', x: 80, y: 0, radius: 100 }); // 兩顆都在半徑內 → 拔最近的 b
+    expect(sim.listPins().map((p) => p.id)).toEqual(['a']);
+    sim.applyInput({ type: 'unpin', x: 48, y: 96, radius: 120 }); // 只剩 a 在半徑內；Grab 不受影響
+    expect(sim.listPins()).toEqual([]);
+    expect(sim.attachPoint('g')).not.toBeNull();
+  });
+
   it('決定性：含 pin / movePin / unpin 的事件流兩次跑結果完全相等', () => {
     const play = (): number[] => {
       const sim = new SimCore(MESH());
@@ -502,7 +516,7 @@ describe('SimCore — Pin', () => {
       run(sim, 15);
       sim.applyInput({ type: 'movePin', id: 1, x: -10, y: -8 });
       run(sim, 15);
-      sim.applyInput({ type: 'unpin', id: 1 });
+      sim.applyInput({ type: 'unpin', x: -10, y: -8, radius: 4 });
       sim.applyInput({ type: 'pin', id: 2 }); // Grab 就地轉 Pin
       run(sim, 20);
       return Array.from(sim.positions);

@@ -44,6 +44,7 @@ import {
   DEFAULT_SIM_PARAMS,
   type FanState,
   type InputEvent,
+  nearestPinWithin,
   type PinInfo,
   type Point,
   type PointerId,
@@ -327,12 +328,20 @@ export class World {
       case 'movePin':
         this.coreFor(event.id)?.applyInput(event);
         break;
-      case 'release':
-      case 'unpin': {
+      case 'release': {
         const core = this.coreFor(event.id);
         if (!core) break;
         core.applyInput(event);
         if (core.attachPoint(event.id) === null) this.route.delete(event.id);
+        break;
+      }
+      case 'unpin': {
+        // 用世界座標指定（issue #154）：跨塊找半徑內最近的那一顆，交給它那塊用同一個座標拔
+        // （半徑 0：同一個 `listPins` 算出的座標，距離恰為 0）。
+        const hit = nearestPinWithin(this.listPins(), event, event.radius);
+        if (!hit) break;
+        this.jellyMap.get(hit.jellyId)?.core.applyInput({ ...event, ...hit.point, radius: 0 });
+        this.route.delete(hit.id);
         break;
       }
       case 'clearPins':

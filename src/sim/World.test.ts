@@ -109,7 +109,7 @@ describe('World — 事件路由', () => {
     expect(world.grabCount).toBe(0);
     expect(() => {
       world.applyInput({ type: 'moveGrab', id: 'gB', x: 300, y: 300 });
-      world.applyInput({ type: 'unpin', id: 'pB' });
+      world.applyInput({ type: 'unpin', x: 110, y: 10, radius: 5 });
       world.applyInput({ type: 'release', id: 'gB' });
     }).not.toThrow();
     run(world, 5);
@@ -165,9 +165,22 @@ describe('World — 事件路由', () => {
     world.applyInput({ type: 'movePin', id: 'g', x: 120, y: 60 });
     run(world, 60);
     expect(world.listPins()[0]!.point.y).toBeCloseTo(60, 3);
-    world.applyInput({ type: 'unpin', id: 'g' });
+    world.applyInput({ type: 'unpin', x: 120, y: 60, radius: 5 });
     expect(world.pinCount).toBe(0);
     expect(world.restAttachPoint('g')).toBeNull();
+  });
+
+  it('unpin 跨塊找最近的那一顆（issue #154：不看 id，Track 前綴改寫 id 也拔得到）', () => {
+    const { world } = twoJellies();
+    world.applyInput({ type: 'pin', id: 'setup/0', x: 30, y: 10 });
+    world.applyInput({ type: 'pin', id: 't1/5', x: 110, y: 10 });
+    world.applyInput({ type: 'unpin', x: 104, y: 10, radius: 30 });
+    expect(world.listPins().map((p) => p.id)).toEqual(['setup/0']);
+    world.applyInput({ type: 'unpin', x: 300, y: 300, radius: 30 }); // 半徑內沒有 → 不動
+    expect(world.listPins().map((p) => p.id)).toEqual(['setup/0']);
+    world.applyInput({ type: 'unpin', x: 31, y: 10, radius: 30 });
+    expect(world.pinCount).toBe(0);
+    expect(world.restAttachPoint('setup/0')).toBeNull();
   });
 
   it('tap 在塊外時作用在最近的那塊', () => {

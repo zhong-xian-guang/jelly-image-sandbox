@@ -62,6 +62,7 @@ import {
   type Bbox,
   type FanState,
   type InputEvent,
+  nearestPinWithin,
   type PinInfo,
   type Point,
   type PointerId,
@@ -438,8 +439,9 @@ export class SimCore {
         break;
       }
       case 'unpin': {
-        const c = this.constraints.get(event.id);
-        if (c?.pinned) this.constraints.delete(event.id);
+        // 用世界座標指定（issue #154）：拔半徑內最近的那一顆。
+        const hit = nearestPinWithin(this.listPins(), event, event.radius);
+        if (hit) this.constraints.delete(hit.id);
         break;
       }
       case 'movePin': {

@@ -166,7 +166,14 @@
  * `InputEvent`。
  */
 
-import { isPointInFanRect, type FanState, type PinInfo, type PointerId, type Point } from '../sim';
+import {
+  isPointInFanRect,
+  nearestPinWithin,
+  type FanState,
+  type PinInfo,
+  type PointerId,
+  type Point,
+} from '../sim';
 import {
   GestureTracker,
   isTap,
@@ -1062,7 +1069,7 @@ export class ToolRouter {
       const hit = nearestPinWithin(this.listPins?.() ?? [], world, radius);
       if (hit) {
         session.erasedPinIds.add(hit.id);
-        this.emit({ type: 'unpin', id: hit.id });
+        this.emitUnpin(hit, radius);
       }
       return;
     }
@@ -1146,7 +1153,11 @@ export class ToolRouter {
       // 沒有進行中的手勢就不作用——橡皮擦是「按住拖過去才擦」，不是滑過就擦。
       const session = this.pinRemoveSessions.get(id);
       if (!session || !this.passedDragThreshold(session, screenX, screenY)) return;
-      this.eraseAt(this.screenToWorld(screenX, screenY), session);
+      this.eraseAt(
+        this.screenToWorld(screenX, screenY),
+        session,
+        this.worldRadiusAt(screenX, screenY, PIN_REMOVE_RADIUS_PX),
+      );
       return;
     }
     if (behavior === 'backdrop') {
@@ -1393,17 +1404,29 @@ export class ToolRouter {
    * `sim.applyInput`，也就是第一顆 `unpin` 送出去的當下，場上的 Pin 清單就已經
    * 變了。邊走邊 emit 的話，如果 `listPins()` 回傳的是內部那份清單本身（而不是
    * 每次都新配的快照），迴圈就會邊跑邊被抽掉元素、漏掉後面幾顆。
+   *
+   * `matchRadius` 是送出的 `unpin` 用來對準那顆 Pin 的容許距離（點擊半徑換算成世界單位，
+   * 見 `emitUnpin`），跟筆刷半徑無關。
    */
-  private eraseAt(center: Point, session: PinRemoveSession): void {
+  private eraseAt(center: Point, session: PinRemoveSession, matchRadius: number): void {
     const radius = Math.max(0, this.pinBrushRadius);
-    const hitPinIds: PointerId[] = [];
+    const hits: PinInfo[] = [];
     for (const pin of this.listPins?.() ?? []) {
       if (session.erasedPinIds.has(pin.id)) continue;
       if (Math.hypot(pin.point.x - center.x, pin.point.y - center.y) > radius) continue;
       session.erasedPinIds.add(pin.id);
-      hitPinIds.push(pin.id);
+      hits.push(pin);
     }
-    for (const pinId of hitPinIds) this.emit({ type: 'unpin', id: pinId });
+    for (const pin of hits) this.emitUnpin(pin, matchRadius);
+  }
+
+  /**
+   * 拔掉 `pin`（issue #154）：`unpin` 帶它的**世界座標**而不是 id——播放時 id 會被 Track
+   * 前綴改寫、片段初始 Pin 也另有 id，只有位置每次都一樣。`radius` 是對準用的容許距離
+   * （拔模式的點擊半徑換算成世界單位），附近有好幾顆時求解器拔最近的那一顆。
+   */
+  private emitUnpin(pin: PinInfo, radius: number): void {
+    this.emit({ type: 'unpin', x: pin.point.x, y: pin.point.y, radius });
   }
 
   /**
@@ -1496,27 +1519,6 @@ export class ToolRouter {
 /** `point` 是否距離 `others` 裡任何一點不到 `minDistance`（撒 Pin 的間距判定）。 */
 function isWithin(point: Point, others: readonly Point[], minDistance: number): boolean {
   return others.some((o) => Math.hypot(o.x - point.x, o.y - point.y) < minDistance);
-}
-
-/**
- * `pins` 裡距離 `point` 最近、且落在 `radius` 內（含邊界）的那一個；沒有就回 `undefined`
- * （拔模式單擊，issue #123；原本在 `routeForPinTool`）。
- */
-function nearestPinWithin(
-  pins: readonly PinInfo[],
-  point: Point,
-  radius: number,
-): PinInfo | undefined {
-  let best: PinInfo | undefined;
-  let bestDist = radius;
-  for (const pin of pins) {
-    const d = Math.hypot(pin.point.x - point.x, pin.point.y - point.y);
-    if (d <= bestDist) {
-      best = pin;
-      bestDist = d;
-    }
-  }
-  return best;
 }
 
 /**

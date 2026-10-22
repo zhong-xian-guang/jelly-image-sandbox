@@ -47,3 +47,11 @@
 - **形狀**：`clearPins` 進 `SimCore.applyInput` 聯集（`SimCore.clearPins()` 本來就是 public method，這只是也讓它走窄介面、順手把 `onClearPins` 繞過 `applyInput` 的直呼拿掉，回到 ADR-0005）。不夾帶「清掉了哪些」的快照——決定性重播，到那個 step 畫面上有什麼就清什麼。`mergeTracks` **零改動**：無 `id` 事件本來就原樣通過、跟著軌的 `startStep` + 頭尾修剪走（比照 `tap`）。`isCameraCommand` 為 false → `DemoRunner` 派給 `applyInput`；`TrackRecorder.stop()` 分流時落 `action` 份 → 錄製目標為「只錄運鏡」時自動不錄。
 - **不可編輯性**：就是軌裡的一個事件，受該軌起始秒數 + 頭尾修剪支配，沒有單獨調時間／刪單一個（比照 `#28` Out of Scope）。
 - **落點**：本節之外不改 ADR-0007 其餘結論。實作為 `#33` 的兄弟票（`#39` 之後的第二張），`#28` 傘票等 `#39` + 本票都 merge 才關。
+
+## 追記（2026-10-22，issue #154）：`unpin` 改用世界座標指定
+
+上一節說「一條軌的 `unpin` 永遠打不到別條軌（或 `setup/`）放的 Pin」，原本是當成「軌之間互不干擾」的副作用接受下來。實際錄素材時這成了 bug：先設好片段初始 Pin、再錄一條用拔模式把它們拔掉的 Track，播放時一顆都拔不掉；A 軌放、B 軌拔也一樣。使用者錄下拔 Pin，意圖就是拔掉畫面上那顆 Pin，跟它是哪條軌放的無關——跟 `clearPins` 刻意跨軌同一個理由。
+
+- **改法**：`unpin` 不再帶 `id`，改帶 Pin 的世界座標 `(x, y)` 與對準用的容許距離 `radius`（拔模式點擊半徑換算成世界單位），求解器拔半徑內最近的那一顆（`World` 跨塊比）。Pin 釘在世界座標上，決定性重播時每次都在同一個位置，所以對得上；`mergeTracks` 不再對 `unpin` 加前綴。
+- **US10 不受影響**：`release`／`moveGrab`／`movePin` 仍依 id 加前綴，「某條的 release 不會放掉另一條的 Grab」照舊成立。被跨軌拔掉的只有使用者明確錄下要拔、而且就在那個位置的 Pin。
+- **不相容舊片段檔**：使用者還沒錄過素材，帶 `id` 的舊 `unpin` 直接淘汰；內建 Demo 一併改成新格式（播放結果逐位元相同）。
