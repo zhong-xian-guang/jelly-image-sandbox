@@ -19,6 +19,7 @@ vi.mock('./defaultJelly', () => ({
 }));
 
 import { updateCamera, type CameraCommand, type CameraState } from '../camera';
+import type { Clip } from './Clip';
 import { DemoRunner } from './demos/DemoRunner';
 import { mergeTracks } from './demos/overlay';
 import { STEP_SECONDS } from './demos/time';
@@ -30,9 +31,7 @@ import { createTestSandbox } from './sandboxTestHarness';
 interface SandboxInternals {
   cameraState: CameraState;
   cameraCommands: CameraCommand[];
-  addTrack(kind: 'action' | 'camera', steps: DemoStep[], startCamera: CameraState | null): void;
-  setTrackStartTime(id: string, seconds: number): void;
-  tracks: { id: string }[];
+  clip: Clip;
   playAll(): void;
   resetSim(): void;
 }
@@ -77,22 +76,26 @@ describe('JellySandbox — 播放保留播放前的鏡位（issue #156）', () =
   });
 
   it('沒有相機軌：播放開始時鏡頭留在原處、跟隨照舊關著，不推「框住果凍」', () => {
-    s.addTrack('action', [TAP], null);
+    s.clip.addTrack('action', [TAP], null);
     s.playAll();
     expect(s.cameraState).toEqual(PREPARED);
     expect(s.cameraCommands).toEqual([]);
   });
 
   it('有相機軌：相機軌開始前維持播放前的鏡位（不重設成跟隨開著）', () => {
-    s.addTrack('camera', [{ atStep: 0, event: { type: 'setFollow', enabled: true } }], RECORDED);
-    s.setTrackStartTime(s.tracks[0]!.id, 1);
+    s.clip.addTrack(
+      'camera',
+      [{ atStep: 0, event: { type: 'setFollow', enabled: true } }],
+      RECORDED,
+    );
+    s.clip.setTrackStartTime(s.clip.view().tracks[0]!.id, 1);
     s.playAll();
     expect(s.cameraState).toEqual(PREPARED);
     expect(s.cameraCommands).toEqual([]);
   });
 
   it('停止／重設：相機回到播放前的鏡位與跟隨狀態', () => {
-    s.addTrack('action', [TAP], null);
+    s.clip.addTrack('action', [TAP], null);
     s.playAll();
     s.cameraState = RECORDED; // 播放中鏡頭被相機軌或跟隨帶走
     s.cameraCommands = [{ type: 'frame' }];
@@ -102,7 +105,7 @@ describe('JellySandbox — 播放保留播放前的鏡位（issue #156）', () =
   });
 
   it('播放中又按一次播放：記下的仍是最初播放前的鏡位', () => {
-    s.addTrack('action', [{ atStep: 600, event: { type: 'tap', x: 0, y: 0 } }], null);
+    s.clip.addTrack('action', [{ atStep: 600, event: { type: 'tap', x: 0, y: 0 } }], null);
     s.playAll();
     s.cameraState = RECORDED; // 播放中鏡頭被帶走
     s.playAll();
@@ -117,7 +120,7 @@ describe('JellySandbox — 播放保留播放前的鏡位（issue #156）', () =
   });
 
   it('還原一次之後，下一次停止／重設不再把鏡頭拉回去', () => {
-    s.addTrack('action', [TAP], null);
+    s.clip.addTrack('action', [TAP], null);
     s.playAll();
     s.resetSim();
     s.cameraState = RECORDED; // 使用者重新擺鏡位
