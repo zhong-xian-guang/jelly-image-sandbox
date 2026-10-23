@@ -148,27 +148,22 @@ import {
   type BackdropCommand,
   type BackdropMode,
   DEFAULT_TOOL,
-  type FanParams,
   type GrabMode,
   type ModalToolId,
   type PinMode,
-  type ModeValueKey,
   type ToolId,
   type ToolMode,
-  DEFAULT_FAN_FALLOFF_EXPONENT,
-  DEFAULT_FAN_FREQUENCY,
-  DEFAULT_FAN_STRENGTH,
-  DEFAULT_FAN_WIDTH,
-  DEFAULT_PIN_BRUSH_RADIUS,
-  DEFAULT_SPRAY_SPACING,
-  DEFAULT_HANDFUL_RADIUS,
+  type ToolParamKey,
   FAN_FALLOFF_RANGE,
   FAN_FREQUENCY_RANGE,
+  FAN_PARAM_KEYS,
   FAN_STRENGTH_RANGE,
   FAN_WIDTH_RANGE,
   HANDFUL_RADIUS_RANGE,
   PIN_BRUSH_RADIUS_RANGE,
+  SPRAY_SPACING_RANGE,
   PointerInput,
+  ToolParams,
   ToolRouter,
 } from '../input';
 import {
@@ -283,13 +278,6 @@ const DEFAULT_SOFTNESS = 0.5;
  * 拉到底壓扁到 ~0.7、靜置下陷 ~6%，仍穩定、1–2 秒內靜止。
  */
 const GRAVITY_RANGE = { min: 0, max: 10000, step: 100 };
-/**
- * 撒 Pin 間距滑桿的範圍（issue #69），世界座標單位。下限 12 是「撒得很密」的實用
- * 下限——再小只是讓 Pin 疊在同一批 Particle 上，手感沒有變化、求解器卻要多扛
- * 幾十個硬約束。右鍵＋滾輪調得到的拉霸（大把抓取半徑、Pin 筆刷半徑、電風扇四個參數）
- * 的範圍住在 `ToolRouter`（issue #114 / #125：右鍵＋滾輪要夾在同一個範圍內）。
- */
-const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
 /**
  * 「匯入尺寸」拉霸的範圍與預設（issue #88 / V3 T1-1，見 GLOSSARY.md「匯入尺寸」），
  * 世界單位 = 未縮放時的 mask 像素。預設 512：一般解析度的圖進場大小跟以前差不多
@@ -474,24 +462,11 @@ export class JellySandbox {
     handfulRange: true,
   };
   /**
-   * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿目前值（issue #67）
-   * ——`ToolRouter` 沒有 getter，這裡另存一份供：(a) 面板初始值、
-   * (b) `updateLiveFan` 組出更新場上目前風扇要用的完整 `setFan` 事件（該事件
-   * 是整包覆蓋，缺任何一個欄位都不行）。
+   * 工具參數（issue #160）：電風扇四個參數、Pin 筆刷半徑、撒 Pin 間距、大把抓取半徑的唯一
+   * 擁有者。交給 `ToolRouter`（按下時讀、右鍵＋滾輪時 `step`）；側欄拉霸寫入；筆刷圓圈、
+   * 大把範圍圈每幀讀；變更通知由 `onToolParamChange` 收（更新場上風扇、同步拉霸）。
    */
-  private fanWidth = DEFAULT_FAN_WIDTH;
-  private fanStrength = DEFAULT_FAN_STRENGTH;
-  private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
-  private fanFrequency = DEFAULT_FAN_FREQUENCY;
-  /**
-   * 「Pin 筆刷半徑」（issue #123）／「撒 Pin 間距」（issue #69）拉霸目前值——`ToolRouter`
-   * 沒有 getter，這裡另存一份供：(a) 面板初始值、(b) `frame()` 每幀把半徑換算
-   * 成螢幕像素餵給筆刷圓圈游標（`BrushCursor`）。
-   */
-  private pinBrushRadius = DEFAULT_PIN_BRUSH_RADIUS;
-  private spraySpacing = DEFAULT_SPRAY_SPACING;
-  /** 「大把抓取半徑」拉霸目前值（issue #113）——用途同 `pinBrushRadius`（範圍圈的大小）。 */
-  private handfulRadius = DEFAULT_HANDFUL_RADIUS;
+  private readonly toolParams = new ToolParams();
   /**
    * 「播放時隱藏提示」全域開關（issue #71 / V2 T3-7）——開著時，播放中把所有提示
    * 一律壓下（見 `hintsSuppressed`／`applyHintVisibility`）。它跟上面那幾個
@@ -634,14 +609,14 @@ export class JellySandbox {
         recordTarget: this.clip.recordTarget,
         showFanRange: this.hintIntent.fanRange,
         showFanIcon: this.hintIntent.fanIcon,
-        fanWidth: this.fanWidth,
-        fanStrength: this.fanStrength,
-        fanFalloffExponent: this.fanFalloffExponent,
-        fanFrequency: this.fanFrequency,
+        fanWidth: this.toolParams.get('fanWidth'),
+        fanStrength: this.toolParams.get('fanStrength'),
+        fanFalloffExponent: this.toolParams.get('fanFalloffExponent'),
+        fanFrequency: this.toolParams.get('fanFrequency'),
         showFormationHint: this.hintIntent.formation,
-        pinBrushRadius: this.pinBrushRadius,
-        spraySpacing: this.spraySpacing,
-        handfulRadius: this.handfulRadius,
+        pinBrushRadius: this.toolParams.get('pinBrushRadius'),
+        spraySpacing: this.toolParams.get('spraySpacing'),
+        handfulRadius: this.toolParams.get('handfulRadius'),
         showHandfulRange: this.hintIntent.handfulRange,
         formationPerPointHandful: this.router.perPointHandful,
         hideHintsDuringPlayback: this.hideHintsDuringPlayback,
@@ -669,16 +644,18 @@ export class JellySandbox {
       onRemoveFan: () => this.removeFan(),
       onShowFanRangeChange: (visible) => this.setHintVisible('fanRange', visible),
       onShowFanIconChange: (visible) => this.setHintVisible('fanIcon', visible),
-      onFanWidthChange: (width) => this.setFanWidth(width),
-      onFanStrengthChange: (strength) => this.setFanStrength(strength),
-      onFanFalloffChange: (falloffExponent) => this.setFanFalloffExponent(falloffExponent),
-      onFanFrequencyChange: (frequency) => this.setFanFrequency(frequency),
+      // 工具參數拉霸（issue #160）一律寫進 `ToolParams`，後續副作用在 `onToolParamChange`。
+      onFanWidthChange: (width) => this.toolParams.set('fanWidth', width),
+      onFanStrengthChange: (strength) => this.toolParams.set('fanStrength', strength),
+      onFanFalloffChange: (falloffExponent) =>
+        this.toolParams.set('fanFalloffExponent', falloffExponent),
+      onFanFrequencyChange: (frequency) => this.toolParams.set('fanFrequency', frequency),
       onFormationDefineStart: () => this.beginFormationDefine(),
       onFormationDefineEnd: () => this.router.endFormationDefine(),
       onShowFormationHintChange: (visible) => this.setHintVisible('formation', visible),
-      onPinBrushRadiusChange: (radius) => this.setPinBrushRadius(radius),
-      onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
-      onHandfulRadiusChange: (radius) => this.setHandfulRadius(radius),
+      onPinBrushRadiusChange: (radius) => this.toolParams.set('pinBrushRadius', radius),
+      onSpraySpacingChange: (spacing) => this.toolParams.set('spraySpacing', spacing),
+      onHandfulRadiusChange: (radius) => this.toolParams.set('handfulRadius', radius),
       onShowHandfulRangeChange: (visible) => this.setHintVisible('handfulRange', visible),
       // 每點大把（issue #135）：只影響下一次按下；範圍圈與游標標籤每幀自己重算。
       onFormationPerPointHandfulChange: (enabled) =>
@@ -730,6 +707,8 @@ export class JellySandbox {
       onTrackGroupsChange: (trackId, groupIds) => this.clip.setTrackGroups(trackId, groupIds),
     });
     root.appendChild(this.controlPanel.element);
+    // 工具參數變了（拉霸或右鍵＋滾輪，issue #160）→ 更新場上風扇、同步拉霸。
+    this.toolParams.subscribe((key, value) => this.onToolParamChange(key, value));
     // 「背景」分區（issue #147）：背景色；Backdrop 匯入與清單（issue #148）。
     this.backdropFileInput = new HiddenFileInput(root.ownerDocument, 'image/*', (files) => {
       const file = files[0];
@@ -1367,23 +1346,10 @@ export class JellySandbox {
       : shape && shape.length > 0
         ? 'ready'
         : 'none';
-    this.cursorLabel.setText(cursorLabelText({ mode, value: this.cursorLabelValue(), formation }));
+    // 數值由目前的工具回答（issue #161）：背景圖是右鍵＋滾輪會調的那張的值，其餘是工具參數。
+    const value = this.router.cursorValue(this.canvasHover.point);
+    this.cursorLabel.setText(cursorLabelText({ mode, value, formation }));
     this.cursorLabel.setPosition(this.canvasHover.point);
-  }
-
-  /**
-   * 游標標籤上的數值：背景圖工具（issue #150）是右鍵＋滾輪會調的那張（選中的，沒有就游標下的）
-   * 目前的縮放或透明度；其餘工具是 `ToolRouter` 自己的數值。
-   */
-  private cursorLabelValue(): number | string | null {
-    if (this.activeTool !== 'backdrop') return this.router.activeValue?.value ?? null;
-    const point = this.canvasHover.point;
-    const at = point
-      ? screenToWorld(this.cameraState.transform, this.canvasSize(), point.x, point.y)
-      : null;
-    const target = this.backdropAdjustTarget(at);
-    const property = this.router.modeOf('backdrop');
-    return target ? backdropValueText(property, target[property]) : null;
   }
 
   /**
@@ -1404,7 +1370,7 @@ export class JellySandbox {
   private brushFor(): { variant: BrushVariant; radius: number } | null {
     if (this.activeTool !== 'pin') return null;
     const variant = this.router.modeOf('pin') === 'place' ? 'spray' : 'erase';
-    return { variant, radius: this.pinBrushRadius };
+    return { variant, radius: this.toolParams.get('pinBrushRadius') };
   }
 
   /**
@@ -1556,46 +1522,14 @@ export class JellySandbox {
     this.showNotice(`效能不足，已把網格密度降到 ${reduced}；下一次匯入／重建生效`);
   }
 
-  /** 「Pin 筆刷半徑」拉霸（issue #123）——撒 Pin 與橡皮擦的範圍，同時是筆刷圓圈的大小。 */
-  private setPinBrushRadius(radius: number): void {
-    this.pinBrushRadius = radius;
-    this.router.setPinBrushParams({ radius });
-  }
-
-  /** 「撒 Pin 間距」拉霸（issue #69）——越小越密，見 `ToolRouter.sprayAt`。 */
-  private setSpraySpacing(spacing: number): void {
-    this.spraySpacing = spacing;
-    this.router.setPinBrushParams({ spacing });
-  }
-
-  /** 「大把抓取半徑」拉霸（issue #113）——下一次按下用，同時是範圍圈的大小。 */
-  private setHandfulRadius(radius: number): void {
-    this.handfulRadius = radius;
-    this.router.setHandfulParams({ radius });
-  }
-
   /**
-   * 按住右鍵＋滾輪（issue #114，`CameraInput` 呼叫；issue #122 從「調工具半徑」推廣成
-   * 「調目前模式的數值」）：目前模式有數值就由 `ToolRouter` 增減並夾在範圍內，新值走跟
-   * 拉霸同一條路（`setXRadius`：沙盒狀態＝圓圈大小 + `ToolRouter`；電風扇四個參數走
-   * `setFanX`，issue #125：同時即時套用到場上的風扇、錄製中照樣錄進 Track），再灌回面板拉霸。
-   * 回傳 `false`（沒有數值，例如單點、沒開每點大把的編隊模式）時相機照舊縮放。
+   * 工具參數的單一變更通知（issue #160）——拉霸與右鍵＋滾輪都走到這裡：電風扇參數即時套用到
+   * 場上的風扇（若有，見 `updateLiveFan`），再把新值灌回側欄拉霸（拖拉霸時灌回的是同一個值，
+   * 不會觸發回呼）。筆刷圓圈、大把範圍圈與游標標籤每幀自己讀 `ToolParams`。
    */
-  private adjustModeValue(steps: number): boolean {
-    const adjusted = this.router.adjustActiveValue(steps);
-    if (!adjusted) return false;
-    const { key, value } = adjusted;
-    const setValue: Record<ModeValueKey, (v: number) => void> = {
-      pinBrushRadius: (v) => this.setPinBrushRadius(v),
-      handfulRadius: (v) => this.setHandfulRadius(v),
-      fanWidth: (v) => this.setFanWidth(v),
-      fanStrength: (v) => this.setFanStrength(v),
-      fanFalloffExponent: (v) => this.setFanFalloffExponent(v),
-      fanFrequency: (v) => this.setFanFrequency(v),
-    };
-    setValue[key](value);
-    this.controlPanel.setModeValue(key, value);
-    return true;
+  private onToolParamChange(key: ToolParamKey, value: number): void {
+    if (FAN_PARAM_KEYS.includes(key)) this.updateLiveFan();
+    this.controlPanel.setToolParam(key, value);
   }
 
   /**
@@ -1619,40 +1553,6 @@ export class JellySandbox {
     this.dispatchInput({ type: 'clearFan' });
   }
 
-  /** 「風扇寬度」滑桿（issue #67）。 */
-  private setFanWidth(width: number): void {
-    this.fanWidth = width;
-    this.applyFanParamChange({ width });
-  }
-
-  /** 「風扇強度」滑桿（issue #67）。 */
-  private setFanStrength(strength: number): void {
-    this.fanStrength = strength;
-    this.applyFanParamChange({ strength });
-  }
-
-  /** 「風扇衰減程度」滑桿（issue #67）。 */
-  private setFanFalloffExponent(falloffExponent: number): void {
-    this.fanFalloffExponent = falloffExponent;
-    this.applyFanParamChange({ falloffExponent });
-  }
-
-  /** 「風扇頻率」滑桿（issue #67 事後檢視追加——平均每秒陣風次數，見 `SimCore.applyFan`）。 */
-  private setFanFrequency(frequency: number): void {
-    this.fanFrequency = frequency;
-    this.applyFanParamChange({ frequency });
-  }
-
-  /**
-   * 四個風扇滑桿共用的收尾（issue #67）——`patch` 只帶剛被改的那個欄位，先轉發給
-   * `ToolRouter`（下一次放置要用，見 `setFanParams`），再呼叫 `updateLiveFan`
-   * 把「目前場上的風扇（若有）」也一併更新。
-   */
-  private applyFanParamChange(patch: Partial<FanParams>): void {
-    this.router.setFanParams(patch);
-    this.updateLiveFan();
-  }
-
   /**
    * 「即時反映到目前場上的風扇（若有）」（issue #67）：場上沒有風扇就什麼都不做；
    * 有的話拿它目前的原點／方向／長度，換上最新的寬度／強度／衰減程度／頻率，
@@ -1671,10 +1571,10 @@ export class JellySandbox {
       dirX: fan.dirX,
       dirY: fan.dirY,
       length: fan.length,
-      width: this.fanWidth,
-      strength: this.fanStrength,
-      falloffExponent: this.fanFalloffExponent,
-      frequency: this.fanFrequency,
+      width: this.toolParams.get('fanWidth'),
+      strength: this.toolParams.get('fanStrength'),
+      falloffExponent: this.toolParams.get('fanFalloffExponent'),
+      frequency: this.toolParams.get('fanFrequency'),
     };
     this.dispatchInput(event);
   }
@@ -2267,6 +2167,7 @@ export class JellySandbox {
     const hitTest = (world: { x: number; y: number }) => this.world.pick(world.x, world.y) != null;
 
     const router = new ToolRouter({
+      params: this.toolParams,
       screenToWorld: project,
       hitTest,
       getFan: () => this.world.fanState(),
@@ -2280,6 +2181,11 @@ export class JellySandbox {
       // 背景圖工具（issue #149）：判定與指令都是 `BackdropBoard` 的事，不經 `World`，也不錄進 Track。
       backdropHitTest: (world) => this.backdrops.hitTest(world),
       onBackdropCommand: (cmd) => this.runBackdropCommand(cmd),
+      // 游標標籤：右鍵＋滾輪此刻會調的那張（選中的，沒有就游標下的）目前的縮放或透明度（issue #150）。
+      backdropCursorValue: (property, at) => {
+        const target = this.backdropAdjustTarget(at);
+        return target ? backdropValueText(property, target[property]) : null;
+      },
       // 進 World + no-op 除非正在錄製（issue #29）。Pin 工具直接送 pin／unpin（issue #123），
       // 不再經 `routeForPinTool` 轉換。
       emit: (event) => this.dispatchInput(event),
@@ -2288,13 +2194,13 @@ export class JellySandbox {
     const cameraInput = new CameraInput(canvas, {
       screenToWorld: project,
       // 觸控在背景上拖曳＝平移相機；背景圖工具下按在 Backdrop 上是拖那張圖，不算背景（issue #149）。
-      hitTest: (world) =>
-        hitTest(world) ||
-        (this.activeTool === 'backdrop' && this.backdrops.hitTest(world) !== null),
+      // 歸不歸工具由目前的 adapter 回答（issue #161）。
+      hitTest: (world) => hitTest(world) || router.ownsPointerAt(world),
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
-      // 背景圖工具調的是場上某張 Backdrop（issue #150），其餘工具調自己的數值。
-      adjustModeValue: (steps, sx, sy) =>
-        router.adjustBackdrop(steps, sx, sy) || this.adjustModeValue(steps),
+      // 右鍵＋滾輪的退路在 `ToolRouter.wheel`（issue #161）：工具自己處理（背景圖調場上那張）
+      // → 目前模式的工具參數 → 都沒有回 false，相機照舊縮放。同步拉霸、即時更新場上風扇
+      // （錄製中照樣錄進 Track）都在 `onToolParamChange`，跟拖拉霸同一條路。
+      adjustModeValue: (steps, sx, sy) => router.wheel(steps, sx, sy),
       onMiddleClick: () => this.cycleMode(), // 中鍵單擊輪替模式（issue #122）
       // 右鍵單擊交給目前工具（issue #124 / #125）：Jelly 開選單、電風扇點在風扇上＝移除。
       onRightClick: (world, sx, sy) => router.rightClick(world, sx, sy),
@@ -2517,6 +2423,7 @@ export class JellySandbox {
       radiusPx: radius * scale,
     });
     const hover = this.canvasHover.point;
+    const handfulRadius = this.toolParams.get('handfulRadius');
     const active = this.router.formationActiveGroups;
     const circles: HandfulRangeCircle[] = [];
     for (const group of active) {
@@ -2524,7 +2431,7 @@ export class JellySandbox {
       if (radius !== null) for (const p of group.points) circles.push(circleAt(p, radius));
     }
     if (this.isGrabMode('handful')) {
-      if (hover) circles.push({ x: hover.x, y: hover.y, radiusPx: this.handfulRadius * scale });
+      if (hover) circles.push({ x: hover.x, y: hover.y, radiusPx: handfulRadius * scale });
     } else if (this.isGrabMode('formation') && this.router.perPointHandful && active.length === 0) {
       const points = this.router.isDefiningFormation
         ? this.router.formationDefinePreview
@@ -2533,7 +2440,7 @@ export class JellySandbox {
               screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y),
             )
           : [];
-      for (const p of points) circles.push(circleAt(p, this.handfulRadius));
+      for (const p of points) circles.push(circleAt(p, handfulRadius));
     }
     return circles;
   }

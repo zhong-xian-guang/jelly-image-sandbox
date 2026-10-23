@@ -62,7 +62,7 @@ function placePins(router: ToolRouter): void {
 /** 拔模式從左到右拖過所有 Pin（筆刷半徑蓋得到）。 */
 function eraseAcross(router: ToolRouter): void {
   router.setMode('pin', 'remove');
-  router.setPinBrushParams({ radius: 12 });
+  router.params.set('pinBrushRadius', 12);
   router.down(1, 0, 48, 100);
   for (let x = 4; x <= 96; x += 4) router.move(1, x, 48);
   router.up(1, 96, 48, 600);
