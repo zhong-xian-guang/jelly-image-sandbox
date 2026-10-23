@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { InputEvent } from '../sim';
 import { PointerInput } from './PointerInput';
+import { ToolRouter } from './ToolRouter';
 
 /**
  * jsdom（這個專案用的版本）沒實作 Pointer Capture API——補三個 no-op，
@@ -66,10 +67,11 @@ describe('PointerInput — 每個手勢配一個獨立 id（不直接沿用瀏�
 
   it('滑鼠永遠回報同一個 pointerId，但兩次分開的 down→up 手勢要拿到不同的內部 id', () => {
     const events: InputEvent[] = [];
-    const input = new PointerInput(el, {
+    const router = new ToolRouter({
       screenToWorld: (x, y) => ({ x, y }),
-      applyInput: (e) => events.push(e),
+      emit: (e) => events.push(e),
     });
+    const input = new PointerInput(el, router);
 
     fireDown(el, 1, 10, 10);
     fireUp(el, 1, 10, 10);
@@ -85,10 +87,11 @@ describe('PointerInput — 每個手勢配一個獨立 id（不直接沿用瀏�
 
   it('同一個 id 放開後再重用（模擬瀏覽器 pointerId 循環使用）也不會混到上一次手勢', () => {
     const events: InputEvent[] = [];
-    const input = new PointerInput(el, {
+    const router = new ToolRouter({
       screenToWorld: (x, y) => ({ x, y }),
-      applyInput: (e) => events.push(e),
+      emit: (e) => events.push(e),
     });
+    const input = new PointerInput(el, router);
 
     fireDown(el, 7, 0, 0);
     fireUp(el, 7, 0, 0);
@@ -107,10 +110,11 @@ describe('PointerInput — 每個手勢配一個獨立 id（不直接沿用瀏�
 
   it('滑鼠中鍵按下不算 Grab（中鍵留給 CameraInput 當相機平移）', () => {
     const events: InputEvent[] = [];
-    const input = new PointerInput(el, {
+    const router = new ToolRouter({
       screenToWorld: (x, y) => ({ x, y }),
-      applyInput: (e) => events.push(e),
+      emit: (e) => events.push(e),
     });
+    const input = new PointerInput(el, router);
 
     fireDown(el, 1, 10, 10, 1); // button === 1（中鍵）
     fireUp(el, 1, 10, 10);

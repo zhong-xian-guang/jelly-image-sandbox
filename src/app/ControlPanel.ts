@@ -297,11 +297,11 @@ export interface ControlPanelOptions {
   onLoadClip: () => void;
   /**
    * 工具列按鈕被按（issue #65；issue #122 改成工具列）——切換給 `JellySandbox` 轉發到
-   * `PointerInput.setActiveTool`。
+   * `ToolRouter.setActiveTool`。
    */
   onToolChange: (tool: ToolId) => void;
   /**
-   * 參數卡的模式鈕被按（issue #122）——`JellySandbox` 轉發到 `PointerInput.setMode`，
+   * 參數卡的模式鈕被按（issue #122）——`JellySandbox` 轉發到 `ToolRouter.setMode`，
    * 並同步游標標籤與提示。跟中鍵單擊輪替走同一條路。
    */
   onModeChange: (tool: ModalToolId, mode: ToolMode) => void;

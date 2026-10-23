@@ -2,13 +2,12 @@
  * `PointerInput`（issue #11 / T10）——把 DOM 指標事件接到 `ToolRouter`。
  *
  * 薄的接線層：`pointerdown/move/up/cancel` → 換算成畫布局部座標 + 時間戳 →
- * 呼叫 `ToolRouter`。所有影響模擬的輸入都經由 tracker 的 `emit`（接
+ * 呼叫 `ToolRouter`。所有影響模擬的輸入都經由 `ToolRouter` 的 `emit`（接
  * `sim.applyInput`），輸入層不直接碰求解器內部（ADR-0005）。
  *
  * issue #65 / V2 T3-1：內部持有的 tracker 從 `GestureTracker` 換成
- * `ToolRouter`（「一般操作」下原封不動委派給既有 `GestureTracker`，行為不變）
- * ——`setActiveTool` 轉發給 `ToolRouter`，供 `ControlPanel` 的「目前工具」
- * 選擇器呼叫（見 ADR-0011）。
+ * `ToolRouter`（「一般操作」下原封不動委派給既有 `GestureTracker`，行為不變；
+ * 見 ADR-0011）。
  *
  * **不直接把瀏覽器的 `PointerEvent.pointerId` 當 `GestureTracker`／`SimCore` 的
  * `id` 用**——滑鼠裝置的 `pointerId` 依規範永遠是 `1`，如果照樣沿用，兩次分開
@@ -24,69 +23,32 @@
  * 回報 0）。滑鼠中鍵（`button === 1`）整個忽略、不進 `ToolRouter`——
  * 中鍵留給 `CameraInput` 當相機平移，兩者才不會對同一次按下各自反應（見
  * `CameraInput` 對應的判斷）。
+ *
+ * issue #159（spec #158）：縮成純 DOM adapter——只做指標事件監聽、pointer capture、
+ * session id，並呼叫 `ToolRouter` 的 `down`／`move`／`up`／`cancel`。`ToolRouter` 由沙盒
+ * 自己建立並持有（工具、模式、參數、編隊查詢都直接對它），這裡不再轉發任何方法或選項；
+ * 螢幕→世界投影也由 `ToolRouter` 自己持有，這裡只遞畫布局部座標。
  */
 
-import type { FanState, InputEvent, PinInfo, Point } from '../sim';
-import type { GestureConfig } from './GestureTracker';
-import {
-  type HandfulParams,
-  type FormationParams,
-  type FanParams,
-  type ModalToolId,
-  type ModeValue,
-  type ToolMode,
-  type ToolModeOf,
-  type PinBrushParams,
-  type ToolId,
-  ToolRouter,
-  type ToolRouterOptions,
-} from './ToolRouter';
+import type { ToolRouter } from './ToolRouter';
 
 export interface PointerInputOptions {
-  screenToWorld: (screenX: number, screenY: number) => Point;
-  applyInput: (event: InputEvent) => void;
-  /** 世界座標是否落在 Jelly 上；沒命中的 `pointerdown` 不當 Grab（交給相機層）。 */
-  hitTest?: (world: Point) => boolean;
-  /** 轉發給 `ToolRouter`（issue #67）——場上目前的電風扇幾何，供拖曳既有風扇的判定用。 */
-  getFan?: () => FanState | null;
-  /** 轉發給 `ToolRouter`（issue #69 / #123）——場上目前的 Pin，供撒 Pin 間距與拔模式用。 */
-  listPins?: () => readonly PinInfo[];
-  /** 轉發給 `ToolRouter`（issue #97 / #124）——Jelly 工具左鍵點一下（生成）。 */
-  onJellyClick?: (world: Point) => void;
-  /** 轉發給 `ToolRouter`（issue #124）——Jelly 工具右鍵單擊點中某塊 Jelly（開選單）。 */
-  onJellyContextMenu?: (world: Point, screen: Point) => void;
-  /** 轉發給 `ToolRouter`（issue #149）——背景圖工具的點選判定。 */
-  backdropHitTest?: ToolRouterOptions['backdropHitTest'];
-  /** 轉發給 `ToolRouter`（issue #149）——背景圖工具的指令出口（不是 `applyInput`）。 */
-  onBackdropCommand?: ToolRouterOptions['onBackdropCommand'];
-  config?: Partial<GestureConfig>;
   /** 時鐘來源（測試可注入）。預設 `performance.now`。 */
   now?: () => number;
 }
 
 export class PointerInput {
   private readonly target: HTMLElement;
-  private readonly tracker: ToolRouter;
+  private readonly router: ToolRouter;
   private readonly now: () => number;
   /** 瀏覽器 `pointerId` → 這次手勢的合成 id；手勢結束（up/cancel）就刪掉。 */
   private readonly sessionIds = new Map<number, number>();
   private nextSessionId = 1;
 
-  constructor(target: HTMLElement, opts: PointerInputOptions) {
+  constructor(target: HTMLElement, router: ToolRouter, opts: PointerInputOptions = {}) {
     this.target = target;
+    this.router = router;
     this.now = opts.now ?? (() => performance.now());
-    this.tracker = new ToolRouter({
-      screenToWorld: opts.screenToWorld,
-      emit: opts.applyInput,
-      hitTest: opts.hitTest,
-      getFan: opts.getFan,
-      listPins: opts.listPins,
-      onJellyClick: opts.onJellyClick,
-      onJellyContextMenu: opts.onJellyContextMenu,
-      backdropHitTest: opts.backdropHitTest,
-      onBackdropCommand: opts.onBackdropCommand,
-      config: opts.config,
-    });
 
     target.addEventListener('pointerdown', this.onDown);
     target.addEventListener('pointermove', this.onMove);
@@ -101,113 +63,6 @@ export class PointerInput {
     this.target.removeEventListener('pointercancel', this.onCancel);
   }
 
-  get activeCount(): number {
-    return this.tracker.activeCount;
-  }
-
-  /** 轉發給 `ToolRouter`（issue #65）——`ControlPanel` 的「目前工具」選擇器變更時呼叫。 */
-  setActiveTool(tool: ToolId): void {
-    this.tracker.setActiveTool(tool);
-  }
-
-  /** 轉發給 `ToolRouter.setFanParams`（issue #67）——面板電風扇滑桿變更時呼叫。 */
-  setFanParams(params: Partial<FanParams>): void {
-    this.tracker.setFanParams(params);
-  }
-
-  /** 轉發給 `ToolRouter.setPinBrushParams`（issue #123）——面板 Pin 筆刷半徑／撒 Pin 間距變更時呼叫。 */
-  setPinBrushParams(params: Partial<PinBrushParams>): void {
-    this.tracker.setPinBrushParams(params);
-  }
-
-  /** 轉發給 `ToolRouter.setHandfulParams`（issue #113）——面板大把抓取半徑拉霸變更時呼叫。 */
-  setHandfulParams(params: Partial<HandfulParams>): void {
-    this.tracker.setHandfulParams(params);
-  }
-
-  /** 轉發給 `ToolRouter.setFormationParams`（issue #135）——面板「每個點用大把抓」開關變更時呼叫。 */
-  setFormationParams(params: Partial<FormationParams>): void {
-    this.tracker.setFormationParams(params);
-  }
-
-  /** 每點大把開關目前的狀態（issue #135）——範圍圈要不要畫在編隊點上。 */
-  get perPointHandful(): boolean {
-    return this.tracker.perPointHandful;
-  }
-
-  /**
-   * 轉發給 `ToolRouter.adjustActiveValue`（issue #114 的調半徑，issue #122 推廣）——按住
-   * 右鍵＋滾輪調目前模式的數值。
-   */
-  adjustActiveValue(steps: number): ModeValue | null {
-    return this.tracker.adjustActiveValue(steps);
-  }
-
-  /** 轉發給 `ToolRouter.adjustBackdrop`（issue #150）——背景圖工具的右鍵＋滾輪。 */
-  adjustBackdrop(steps: number, screenX: number, screenY: number): boolean {
-    return this.tracker.adjustBackdrop(steps, screenX, screenY);
-  }
-
-  /** 目前模式的數值（游標標籤用，issue #122）。 */
-  get activeValue(): ModeValue | null {
-    return this.tracker.activeValue;
-  }
-
-  /** 轉發給 `ToolRouter` 的模式介面（issue #122）——參數卡模式鈕、中鍵單擊、游標標籤。 */
-  modeOf<T extends ModalToolId>(tool: T): ToolModeOf<T>;
-  modeOf(tool: ToolId): ToolMode | null;
-  modeOf(tool: ToolId): ToolMode | null {
-    return this.tracker.modeOf(tool);
-  }
-
-  setMode<T extends ModalToolId>(tool: T, mode: ToolModeOf<T>): void {
-    this.tracker.setMode(tool, mode);
-  }
-
-  cycleMode(): ToolMode | null {
-    return this.tracker.cycleMode();
-  }
-
-  /**
-   * 轉發給 `ToolRouter.rightClick`（issue #124）——畫布上的右鍵單擊（`CameraInput` 判定）
-   * 交給目前工具。
-   */
-  rightClick(world: Point, screenX: number, screenY: number): void {
-    this.tracker.rightClick(world, screenX, screenY);
-  }
-
-  /** 已定義的編隊形狀（issue #122：游標標籤要知道「尚未設定形狀」）。 */
-  get formationShape(): readonly Point[] | null {
-    return this.tracker.formationShape;
-  }
-
-  /** 轉發給 `ToolRouter`（issue #68）——面板「開始設定形狀」／「完成設定」按鈕呼叫。 */
-  beginFormationDefine(): void {
-    this.tracker.beginFormationDefine();
-  }
-
-  endFormationDefine(): void {
-    this.tracker.endFormationDefine();
-  }
-
-  /** 供 `FormationOverlay` 每幀讀（issue #68）——`JellySandbox.frame` 用來投影成螢幕座標。 */
-  get isDefiningFormation(): boolean {
-    return this.tracker.isDefiningFormation;
-  }
-
-  get formationDefinePreview(): readonly Point[] {
-    return this.tracker.formationDefinePreview;
-  }
-
-  get formationActiveGroups(): ToolRouter['formationActiveGroups'] {
-    return this.tracker.formationActiveGroups;
-  }
-
-  /** 轉發給 `ToolRouter.formationPreviewAt`（issue #79）——閒置時跟著游標的形狀預覽。 */
-  formationPreviewAt(anchor: Point): readonly Point[] {
-    return this.tracker.formationPreviewAt(anchor);
-  }
-
   private localXY(ev: PointerEvent): [number, number] {
     const r = this.target.getBoundingClientRect();
     return [ev.clientX - r.left, ev.clientY - r.top];
@@ -220,14 +75,14 @@ export class PointerInput {
     const id = this.nextSessionId++;
     this.sessionIds.set(ev.pointerId, id);
     const [x, y] = this.localXY(ev);
-    this.tracker.down(id, x, y, this.now());
+    this.router.down(id, x, y, this.now());
   };
 
   private onMove = (ev: PointerEvent): void => {
     const id = this.sessionIds.get(ev.pointerId);
     if (id === undefined) return;
     const [x, y] = this.localXY(ev);
-    this.tracker.move(id, x, y);
+    this.router.move(id, x, y);
   };
 
   private onUp = (ev: PointerEvent): void => {
@@ -235,7 +90,7 @@ export class PointerInput {
     this.sessionIds.delete(ev.pointerId);
     if (id !== undefined) {
       const [x, y] = this.localXY(ev);
-      this.tracker.up(id, x, y, this.now());
+      this.router.up(id, x, y, this.now());
     }
     this.releaseCapture(ev.pointerId);
   };
@@ -243,7 +98,7 @@ export class PointerInput {
   private onCancel = (ev: PointerEvent): void => {
     const id = this.sessionIds.get(ev.pointerId);
     this.sessionIds.delete(ev.pointerId);
-    if (id !== undefined) this.tracker.cancel(id);
+    if (id !== undefined) this.router.cancel(id);
     this.releaseCapture(ev.pointerId);
   };
 

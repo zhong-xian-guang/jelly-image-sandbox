@@ -33,7 +33,7 @@
  *
  * 主迴圈用 `FixedStepAccumulator`（+ 250ms clamp）把真實時間切成 60Hz 固定步推進
  * 求解器；每幀再用**真實**幀時距（clamp 到 100ms）呼叫純函式 `updateCamera` 推進
- * 相機（平滑是視覺的、不進物理）。所有影響模擬的輸入都經 `PointerInput` →
+ * 相機（平滑是視覺的、不進物理）。所有影響模擬的輸入都經 `PointerInput` → `ToolRouter` →
  * `world.applyInput`；所有相機手動輸入都經 `CameraInput` → 收集成 `CameraCommand[]`
  * 每幀餵給 `updateCamera`（ADR-0005：兩條輸入流都不繞過各自的窄介面）。
  *
@@ -176,6 +176,7 @@ import {
   HANDFUL_RADIUS_RANGE,
   PIN_BRUSH_RADIUS_RANGE,
   PointerInput,
+  ToolRouter,
 } from '../input';
 import {
   buildSimMesh,
@@ -340,6 +341,11 @@ export class JellySandbox {
   /** 多塊 Jelly 的模擬容器（issue #95）——沙盒唯一的模擬入口，契約與 `SimCore` 同形。 */
   private readonly world: World;
   private readonly renderer: JellyRenderer;
+  /**
+   * 工具路由（issue #159）：沙盒直接持有——目前工具、模式、參數、編隊查詢、右鍵、
+   * 右鍵＋滾輪都直接對它；`input` 只是把 DOM 指標事件接進它的 adapter。
+   */
+  private readonly router: ToolRouter;
   private readonly input: PointerInput;
   private readonly cameraInput: CameraInput;
   private readonly dropImportInput: DropImportInput;
@@ -450,7 +456,7 @@ export class JellySandbox {
   private boundaryFrame: BoundaryFrame | null = null;
   /**
    * 目前工具（issue #65；issue #122 起是側欄工具列的五個工具 grab／pin／fan／jelly／backdrop，ADR-0016）
-   * ——`PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠這個判定。
+   * ——`ToolRouter` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠這個判定。
    */
   private activeTool: ToolId = DEFAULT_TOOL;
   /**
@@ -481,7 +487,7 @@ export class JellySandbox {
   };
   /**
    * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿目前值（issue #67）
-   * ——`PointerInput` 沒有 getter，這裡另存一份供：(a) 面板初始值、
+   * ——`ToolRouter` 沒有 getter，這裡另存一份供：(a) 面板初始值、
    * (b) `updateLiveFan` 組出更新場上目前風扇要用的完整 `setFan` 事件（該事件
    * 是整包覆蓋，缺任何一個欄位都不行）。
    */
@@ -490,7 +496,7 @@ export class JellySandbox {
   private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
   private fanFrequency = DEFAULT_FAN_FREQUENCY;
   /**
-   * 「Pin 筆刷半徑」（issue #123）／「撒 Pin 間距」（issue #69）拉霸目前值——`PointerInput`
+   * 「Pin 筆刷半徑」（issue #123）／「撒 Pin 間距」（issue #69）拉霸目前值——`ToolRouter`
    * 沒有 getter，這裡另存一份供：(a) 面板初始值、(b) `frame()` 每幀把半徑換算
    * 成螢幕像素餵給筆刷圓圈游標（`BrushCursor`）。
    */
@@ -591,9 +597,11 @@ export class JellySandbox {
     this.lastBbox = this.world.bbox()!;
     this.cameraState = createCameraState({ bbox: this.lastBbox }, this.canvasSize());
 
-    ({ input: this.input, cameraInput: this.cameraInput } = this.attachInputHandlers(
-      renderer.canvas,
-    ));
+    ({
+      router: this.router,
+      input: this.input,
+      cameraInput: this.cameraInput,
+    } = this.attachInputHandlers(renderer.canvas));
 
     this.renderer.setCamera(this.cameraState.transform);
     window.addEventListener('resize', this.onResize);
@@ -630,10 +638,10 @@ export class JellySandbox {
       initial: {
         activeTool: this.activeTool,
         toolModes: {
-          grab: this.input.modeOf('grab'),
-          pin: this.input.modeOf('pin'),
-          fan: this.input.modeOf('fan'),
-          backdrop: this.input.modeOf('backdrop'),
+          grab: this.router.modeOf('grab'),
+          pin: this.router.modeOf('pin'),
+          fan: this.router.modeOf('fan'),
+          backdrop: this.router.modeOf('backdrop'),
         },
         showCursorLabel: this.showCursorLabel,
         boundary: this.boundaryMode,
@@ -656,7 +664,7 @@ export class JellySandbox {
         spraySpacing: this.spraySpacing,
         handfulRadius: this.handfulRadius,
         showHandfulRange: this.hintIntent.handfulRange,
-        formationPerPointHandful: this.input.perPointHandful,
+        formationPerPointHandful: this.router.perPointHandful,
         hideHintsDuringPlayback: this.hideHintsDuringPlayback,
         importSize: this.importSize,
         meshDensity: this.meshDensity,
@@ -687,7 +695,7 @@ export class JellySandbox {
       onFanFalloffChange: (falloffExponent) => this.setFanFalloffExponent(falloffExponent),
       onFanFrequencyChange: (frequency) => this.setFanFrequency(frequency),
       onFormationDefineStart: () => this.beginFormationDefine(),
-      onFormationDefineEnd: () => this.input.endFormationDefine(),
+      onFormationDefineEnd: () => this.router.endFormationDefine(),
       onShowFormationHintChange: (visible) => this.setHintVisible('formation', visible),
       onPinBrushRadiusChange: (radius) => this.setPinBrushRadius(radius),
       onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
@@ -695,7 +703,7 @@ export class JellySandbox {
       onShowHandfulRangeChange: (visible) => this.setHintVisible('handfulRange', visible),
       // 每點大把（issue #135）：只影響下一次按下；範圍圈與游標標籤每幀自己重算。
       onFormationPerPointHandfulChange: (enabled) =>
-        this.input.setFormationParams({ perPointHandful: enabled }),
+        this.router.setFormationParams({ perPointHandful: enabled }),
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onImportSizeChange: (size) => this.setImportSize(size),
       onMeshDensityChange: (density) => this.setMeshDensity(density),
@@ -1353,14 +1361,14 @@ export class JellySandbox {
 
   /**
    * 目前工具變更（issue #65 / V2 T3-1）——側欄工具列（`onToolChange`，issue #122 起，ADR-0016）
-   * 與數字鍵 1–5（issue #126）都走這裡。轉發給 `PointerInput.setActiveTool`（只影響下一次按下）；
-   * `activeTool` 另外存一份，因為 `PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠它
+   * 與數字鍵 1–5（issue #126）都走這裡。交給 `ToolRouter.setActiveTool`（只影響下一次按下）；
+   * `activeTool` 另外存一份，因為 `ToolRouter` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠它
    * 判定。工具列高亮與參數卡也在這裡同步（從工具列按下時面板自己已經切過，重設一次無妨）。切工具
    * 會改變游標／標記／圓圈的視覺回饋，所以要跟著重算。
    */
   private setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
-    this.input.setActiveTool(tool);
+    this.router.setActiveTool(tool);
     this.controlPanel.setActiveTool(tool);
     this.contextMenu.close(); // Jelly 右鍵選單在切換工具時關閉（issue #124）
     this.applyToolVisuals();
@@ -1372,10 +1380,10 @@ export class JellySandbox {
    * 回饋（大把抓取範圍圈、Pin 筆刷圓圈顏色與標記脈動）。游標標籤每幀自己重算，不必在這裡推。
    */
   private setToolMode(tool: ModalToolId, mode: ToolMode): void {
-    this.input.setMode(tool, mode);
+    this.router.setMode(tool, mode);
     // 定義編隊形狀途中抓取工具鎖在編隊（issue #135，見 `ToolRouter.writeMode`）：模式鈕
     // 按了也切不走，面板高亮照實際的模式回填。
-    this.controlPanel.setToolMode(tool, this.input.modeOf(tool));
+    this.controlPanel.setToolMode(tool, this.router.modeOf(tool));
     this.applyToolVisuals();
   }
 
@@ -1384,7 +1392,7 @@ export class JellySandbox {
    * `cycleMode` 回 `null`，什麼都不做。
    */
   private cycleMode(): void {
-    const mode = this.input.cycleMode();
+    const mode = this.router.cycleMode();
     if (mode === null) return;
     const tool = this.activeTool as ModalToolId;
     this.controlPanel.setToolMode(tool, mode);
@@ -1393,12 +1401,12 @@ export class JellySandbox {
 
   /** 目前是不是抓取工具的這個模式（issue #122：範圍圈與編隊提示只在各自的模式出現）。 */
   private isGrabMode(mode: GrabMode): boolean {
-    return this.activeTool === 'grab' && this.input.modeOf('grab') === mode;
+    return this.activeTool === 'grab' && this.router.modeOf('grab') === mode;
   }
 
   /** 目前是不是 Pin 工具的這個模式（issue #123：標記脈動只在拔模式、圓圈顏色隨模式）。 */
   private isPinMode(mode: PinMode): boolean {
-    return this.activeTool === 'pin' && this.input.modeOf('pin') === mode;
+    return this.activeTool === 'pin' && this.router.modeOf('pin') === mode;
   }
 
   /**
@@ -1408,7 +1416,7 @@ export class JellySandbox {
    */
   private beginFormationDefine(): void {
     if (!this.isGrabMode('formation')) this.setToolMode('grab', 'formation');
-    this.input.beginFormationDefine();
+    this.router.beginFormationDefine();
   }
 
   /**
@@ -1418,7 +1426,7 @@ export class JellySandbox {
    */
   private updateFormationDefineHint(): void {
     this.formationDefineHint.setVisible(
-      this.input.isDefiningFormation &&
+      this.router.isDefiningFormation &&
         this.isGrabMode('formation') &&
         !this.hintsSuppressed &&
         !this.cleanView.isActive,
@@ -1455,9 +1463,9 @@ export class JellySandbox {
    */
   private updateCursorLabel(): void {
     const tool = this.activeTool;
-    const mode = this.input.modeOf(tool);
-    const shape = this.input.formationShape;
-    const formation: FormationShapeState = this.input.isDefiningFormation
+    const mode = this.router.modeOf(tool);
+    const shape = this.router.formationShape;
+    const formation: FormationShapeState = this.router.isDefiningFormation
       ? 'defining'
       : shape && shape.length > 0
         ? 'ready'
@@ -1471,13 +1479,13 @@ export class JellySandbox {
    * 目前的縮放或透明度；其餘工具是 `ToolRouter` 自己的數值。
    */
   private cursorLabelValue(): number | string | null {
-    if (this.activeTool !== 'backdrop') return this.input.activeValue?.value ?? null;
+    if (this.activeTool !== 'backdrop') return this.router.activeValue?.value ?? null;
     const point = this.canvasHover.point;
     const at = point
       ? screenToWorld(this.cameraState.transform, this.canvasSize(), point.x, point.y)
       : null;
     const target = this.backdropAdjustTarget(at);
-    const property = this.input.modeOf('backdrop');
+    const property = this.router.modeOf('backdrop');
     return target ? backdropValueText(property, target[property]) : null;
   }
 
@@ -1498,7 +1506,7 @@ export class JellySandbox {
    */
   private brushFor(): { variant: BrushVariant; radius: number } | null {
     if (this.activeTool !== 'pin') return null;
-    const variant = this.input.modeOf('pin') === 'place' ? 'spray' : 'erase';
+    const variant = this.router.modeOf('pin') === 'place' ? 'spray' : 'erase';
     return { variant, radius: this.pinBrushRadius };
   }
 
@@ -1654,19 +1662,19 @@ export class JellySandbox {
   /** 「Pin 筆刷半徑」拉霸（issue #123）——撒 Pin 與橡皮擦的範圍，同時是筆刷圓圈的大小。 */
   private setPinBrushRadius(radius: number): void {
     this.pinBrushRadius = radius;
-    this.input.setPinBrushParams({ radius });
+    this.router.setPinBrushParams({ radius });
   }
 
   /** 「撒 Pin 間距」拉霸（issue #69）——越小越密，見 `ToolRouter.sprayAt`。 */
   private setSpraySpacing(spacing: number): void {
     this.spraySpacing = spacing;
-    this.input.setPinBrushParams({ spacing });
+    this.router.setPinBrushParams({ spacing });
   }
 
   /** 「大把抓取半徑」拉霸（issue #113）——下一次按下用，同時是範圍圈的大小。 */
   private setHandfulRadius(radius: number): void {
     this.handfulRadius = radius;
-    this.input.setHandfulParams({ radius });
+    this.router.setHandfulParams({ radius });
   }
 
   /**
@@ -1677,7 +1685,7 @@ export class JellySandbox {
    * 回傳 `false`（沒有數值，例如單點、沒開每點大把的編隊模式）時相機照舊縮放。
    */
   private adjustModeValue(steps: number): boolean {
-    const adjusted = this.input.adjustActiveValue(steps);
+    const adjusted = this.router.adjustActiveValue(steps);
     if (!adjusted) return false;
     const { key, value } = adjusted;
     const setValue: Record<ModeValueKey, (v: number) => void> = {
@@ -1744,7 +1752,7 @@ export class JellySandbox {
    * 把「目前場上的風扇（若有）」也一併更新。
    */
   private applyFanParamChange(patch: Partial<FanParams>): void {
-    this.input.setFanParams(patch);
+    this.router.setFanParams(patch);
     this.updateLiveFan();
   }
 
@@ -1777,8 +1785,8 @@ export class JellySandbox {
   /**
    * 所有「沙盒自己發的模擬事件」的單一出口（issue #95 收攏）：送進 `world.applyInput`，
    * 同時 `trackRecorder.record`（no-op 除非正在錄製）——ADR-0005「所有影響模擬的輸入
-   * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件（`PointerInput`
-   * 的 `applyInput`，見 `attachInputHandlers`）也直接走這裡——issue #123 起 Pin 工具由
+   * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件（`ToolRouter`
+   * 的 `emit`，見 `attachInputHandlers`）也直接走這裡——issue #123 起 Pin 工具由
    * `ToolRouter` 直送，不再另經 Pin 工具轉接。
    */
   private dispatchInput(event: InputEvent): void {
@@ -2347,8 +2355,9 @@ export class JellySandbox {
     this.clip.fromClipPart(clip); // Track／群組／片段初始 Pin／兩個流水號（同步側欄由 Clip 回呼）
   }
 
-  /** `PointerInput` + `CameraInput` 都吃同一組 project／hitTest（picking 走 `World.pick`，跨所有塊）。 */
+  /** `ToolRouter` + `CameraInput` 都吃同一組 project／hitTest（picking 走 `World.pick`，跨所有塊）。 */
   private attachInputHandlers(canvas: HTMLCanvasElement): {
+    router: ToolRouter;
     input: PointerInput;
     cameraInput: CameraInput;
   } {
@@ -2356,7 +2365,7 @@ export class JellySandbox {
       screenToWorld(this.cameraState.transform, this.canvasSize(), sx, sy);
     const hitTest = (world: { x: number; y: number }) => this.world.pick(world.x, world.y) != null;
 
-    const input = new PointerInput(canvas, {
+    const router = new ToolRouter({
       screenToWorld: project,
       hitTest,
       getFan: () => this.world.fanState(),
@@ -2372,8 +2381,9 @@ export class JellySandbox {
       onBackdropCommand: (cmd) => this.runBackdropCommand(cmd),
       // 進 World + no-op 除非正在錄製（issue #29）。Pin 工具直接送 pin／unpin（issue #123），
       // 不再經 `routeForPinTool` 轉換。
-      applyInput: (event) => this.dispatchInput(event),
+      emit: (event) => this.dispatchInput(event),
     });
+    const input = new PointerInput(canvas, router);
     const cameraInput = new CameraInput(canvas, {
       screenToWorld: project,
       // 觸控在背景上拖曳＝平移相機；背景圖工具下按在 Backdrop 上是拖那張圖，不算背景（issue #149）。
@@ -2383,12 +2393,12 @@ export class JellySandbox {
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
       // 背景圖工具調的是場上某張 Backdrop（issue #150），其餘工具調自己的數值。
       adjustModeValue: (steps, sx, sy) =>
-        input.adjustBackdrop(steps, sx, sy) || this.adjustModeValue(steps),
+        router.adjustBackdrop(steps, sx, sy) || this.adjustModeValue(steps),
       onMiddleClick: () => this.cycleMode(), // 中鍵單擊輪替模式（issue #122）
       // 右鍵單擊交給目前工具（issue #124 / #125）：Jelly 開選單、電風扇點在風扇上＝移除。
-      onRightClick: (world, sx, sy) => input.rightClick(world, sx, sy),
+      onRightClick: (world, sx, sy) => router.rightClick(world, sx, sy),
     });
-    return { input, cameraInput };
+    return { router, input, cameraInput };
   }
 
   private createDropHint(): HTMLDivElement {
@@ -2610,7 +2620,7 @@ export class JellySandbox {
       radiusPx: radius * scale,
     });
     const hover = this.canvasHover.point;
-    const active = this.input.formationActiveGroups;
+    const active = this.router.formationActiveGroups;
     const circles: HandfulRangeCircle[] = [];
     for (const group of active) {
       const radius = group.handfulRadius;
@@ -2618,11 +2628,11 @@ export class JellySandbox {
     }
     if (this.isGrabMode('handful')) {
       if (hover) circles.push({ x: hover.x, y: hover.y, radiusPx: this.handfulRadius * scale });
-    } else if (this.isGrabMode('formation') && this.input.perPointHandful && active.length === 0) {
-      const points = this.input.isDefiningFormation
-        ? this.input.formationDefinePreview
+    } else if (this.isGrabMode('formation') && this.router.perPointHandful && active.length === 0) {
+      const points = this.router.isDefiningFormation
+        ? this.router.formationDefinePreview
         : hover
-          ? this.input.formationPreviewAt(
+          ? this.router.formationPreviewAt(
               screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y),
             )
           : [];
@@ -2652,19 +2662,19 @@ export class JellySandbox {
   private formationOverlayGroups(canvasSize: CanvasSize): FormationOverlayGroup[] {
     const project = (p: Point) => worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
     // 進行中的編隊手勢照畫到放開為止：按下之後才切走模式，這一組仍被抓著（issue #122）。
-    const active = this.input.formationActiveGroups;
+    const active = this.router.formationActiveGroups;
     if (active.length > 0) {
       return active.map((g) => ({ points: g.points.map(project) }));
     }
     // 定義中的點與懸停預覽只在編隊模式出現（issue #122）。
     if (!this.isGrabMode('formation')) return [];
-    if (this.input.isDefiningFormation) {
-      return [{ points: this.input.formationDefinePreview.map(project) }];
+    if (this.router.isDefiningFormation) {
+      return [{ points: this.router.formationDefinePreview.map(project) }];
     }
     const hover = this.canvasHover.point;
     if (!hover) return [];
     const anchor = screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y);
-    const preview = this.input.formationPreviewAt(anchor);
+    const preview = this.router.formationPreviewAt(anchor);
     return preview.length > 0 ? [{ points: preview.map(project) }] : [];
   }
 
