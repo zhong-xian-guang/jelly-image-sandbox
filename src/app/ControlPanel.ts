@@ -306,7 +306,7 @@ export interface ControlPanelOptions {
    */
   onModeChange: (tool: ModalToolId, mode: ToolMode) => void;
   /**
-   * 「顯示游標標籤」開關（issue #122）——游標標籤不是提示（CONTEXT.md「提示」），不受
+   * 「顯示游標標籤」開關（issue #122）——游標標籤不是提示（GLOSSARY.md「提示」），不受
    * 「播放時隱藏提示」影響、也不被播放／錄製鎖住，只聽這一顆。
    */
   onShowCursorLabelChange: (visible: boolean) => void;
@@ -374,20 +374,20 @@ export interface ControlPanelOptions {
    */
   onHideHintsDuringPlaybackChange: (enabled: boolean) => void;
   /**
-   * 「匯入尺寸」拉霸變更（issue #88 / V3 T1-1，見 CONTEXT.md「匯入尺寸」）——
+   * 「匯入尺寸」拉霸變更（issue #88 / V3 T1-1，見 GLOSSARY.md「匯入尺寸」）——
    * 只影響**下一次**匯入的果凍最長邊有多少世界單位，場上的果凍不跟著變，所以
    * 這條拉霸刻意不被 `setPlaybackControlsEnabled`／`setRecordingActive` 鎖住，
    * 也不因載入片段而被改寫（拉霸永遠代表「下一次」的意圖）。
    */
   onImportSizeChange: (size: number) => void;
   /**
-   * 「網格密度」拉霸變更（issue #89 / V3 T1-2，見 CONTEXT.md「網格密度」）——下一次
+   * 「網格密度」拉霸變更（issue #89 / V3 T1-2，見 GLOSSARY.md「網格密度」）——下一次
    * 匯入的 `targetParticleCount`。同 `onImportSizeChange`：只管「下一次」，不鎖、不因
    * 載入片段而改寫。效能退路壓拉霸走 `setMeshDensity`（只動顯示），不會回到這裡。
    */
   onMeshDensityChange: (density: number) => void;
   /**
-   * 「全部重建」按鈕被按（issue #90 / V3 T1-3，見 CONTEXT.md「重建」）——對場上
+   * 「全部重建」按鈕被按（issue #90 / V3 T1-3，見 GLOSSARY.md「重建」）——對場上
    * **每一塊**用它自己的來源圖＋目前兩條拉霸重新生成網格（位置不變、Pin 掉光）。
    * 跟兩條拉霸不同，這顆**會**被 `setPlaybackControlsEnabled`／`setRecordingActive`
    * 鎖住（比照片段初始 Pin 兩顆鈕）：重建只改 Scene、不是 Track 事件（ADR-0013），

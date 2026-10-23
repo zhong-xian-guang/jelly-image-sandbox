@@ -20,7 +20,7 @@ export interface ContextMenuItem<Id extends string> {
   disabledReason: string | null;
 }
 
-/** Jelly 右鍵選單的項目（CONTEXT.md「重建」「移除 Jelly」）。 */
+/** Jelly 右鍵選單的項目（GLOSSARY.md「重建」「移除 Jelly」）。 */
 export type JellyMenuItemId = 'rebuild' | 'remove';
 
 /**

@@ -1,6 +1,6 @@
 /**
  * Track（軌）的型別（issue #29 / V2 T1a 起，issue #33 / V2 T1-1 依 ADR-0007
- * 改為拆軌模型）。見 CONTEXT.md「Track」「Action Track」「Camera Track」詞條。
+ * 改為拆軌模型）。見 GLOSSARY.md「Track」「Action Track」「Camera Track」詞條。
  *
  * 一個 Track 是一段錄下的事件流，跟 Demo 共用同一種「sim-step → 事件」排程格式
  * （`DemoStep`）——錄好的 Track 可以直接丟給 `DemoRunner.start()` 精準重播，不需要

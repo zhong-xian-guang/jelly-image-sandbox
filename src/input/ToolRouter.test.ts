@@ -678,7 +678,7 @@ describe('ToolRouter — 編隊形狀的懸停預覽（issue #79 / V2 T3-8）', 
     ]);
   });
 
-  // 「拖曳時整組偏移量不隨方向旋轉、只整體跟著指標平移」（CONTEXT.md 編隊抓取）
+  // 「拖曳時整組偏移量不隨方向旋轉、只整體跟著指標平移」（GLOSSARY.md 編隊抓取）
   // ——預覽是那個行為的事前呈現，換個主點只能是整組平移。
   it('換一個主點 → 整組平移，點與點的相對關係完全不變', () => {
     const { router } = withShape();
@@ -1495,7 +1495,7 @@ describe('ToolRouter — 電風扇的模式、滾輪調參數與右鍵移除（i
   });
 });
 
-describe('ToolRouter — 編隊抓取的每點大把（issue #135；CONTEXT.md「每點大把」）', () => {
+describe('ToolRouter — 編隊抓取的每點大把（issue #135；GLOSSARY.md「每點大把」）', () => {
   /** 編隊模式、「主點 + 右 10」兩點形狀；`perPointHandful` 決定開關。 */
   function withShape(perPointHandful: boolean, extra?: Partial<ToolRouterOptions>) {
     const made = makeRouter(undefined, undefined, extra);
