@@ -5,7 +5,7 @@
  * 以前同一個值在側欄拉霸、`JellySandbox`、`ToolRouter` 各存一份，靠逐參數 setter 鏈同步。
  * 現在只有這裡存：
  *
- * - 側欄拉霸寫入（`set`）、右鍵＋滾輪寫入（`step`，經 `ToolRouter.adjustActiveValue`）；
+ * - 側欄拉霸寫入（`set`）、右鍵＋滾輪寫入（`step`，經 `ToolRouter.wheel` 的退路）；
  * - `ToolRouter` 只在按下（或每一輪撒／擦）時讀值，並回報目前工具＋模式要調哪個 key；
  * - 游標標籤、Pin 筆刷圓圈、大把範圍圈讀值；
  * - 沙盒訂閱單一變更通知（`subscribe`），在那裡更新場上風扇、同步拉霸。

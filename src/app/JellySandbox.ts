@@ -1449,23 +1449,10 @@ export class JellySandbox {
       : shape && shape.length > 0
         ? 'ready'
         : 'none';
-    this.cursorLabel.setText(cursorLabelText({ mode, value: this.cursorLabelValue(), formation }));
+    // 數值由目前的工具回答（issue #161）：背景圖是右鍵＋滾輪會調的那張的值，其餘是工具參數。
+    const value = this.router.cursorValue(this.canvasHover.point);
+    this.cursorLabel.setText(cursorLabelText({ mode, value, formation }));
     this.cursorLabel.setPosition(this.canvasHover.point);
-  }
-
-  /**
-   * 游標標籤上的數值：背景圖工具（issue #150）是右鍵＋滾輪會調的那張（選中的，沒有就游標下的）
-   * 目前的縮放或透明度；其餘工具是 `ToolRouter` 自己的數值。
-   */
-  private cursorLabelValue(): number | string | null {
-    if (this.activeTool !== 'backdrop') return this.router.activeValue?.value ?? null;
-    const point = this.canvasHover.point;
-    const at = point
-      ? screenToWorld(this.cameraState.transform, this.canvasSize(), point.x, point.y)
-      : null;
-    const target = this.backdropAdjustTarget(at);
-    const property = this.router.modeOf('backdrop');
-    return target ? backdropValueText(property, target[property]) : null;
   }
 
   /**
@@ -1636,17 +1623,6 @@ export class JellySandbox {
     this.meshDensity = reduced;
     this.controlPanel.setMeshDensity(reduced);
     this.showNotice(`效能不足，已把網格密度降到 ${reduced}；下一次匯入／重建生效`);
-  }
-
-  /**
-   * 按住右鍵＋滾輪（issue #114，`CameraInput` 呼叫；issue #122 從「調工具半徑」推廣成
-   * 「調目前模式的數值」）：目前模式有數值就由 `ToolRouter` 在 `ToolParams` 上增減並夾在
-   * 範圍內（issue #160）——同步拉霸、即時套用到場上的風扇（錄製中照樣錄進 Track）都在
-   * `onToolParamChange`，跟拖拉霸同一條路。回傳 `false`（沒有數值，例如單點、沒開每點大把
-   * 的編隊模式）時相機照舊縮放。
-   */
-  private adjustModeValue(steps: number): boolean {
-    return this.router.adjustActiveValue(steps) !== null;
   }
 
   /**
@@ -2304,6 +2280,11 @@ export class JellySandbox {
       // 背景圖工具（issue #149）：判定與指令都是 `BackdropBoard` 的事，不經 `World`，也不錄進 Track。
       backdropHitTest: (world) => this.backdrops.hitTest(world),
       onBackdropCommand: (cmd) => this.runBackdropCommand(cmd),
+      // 游標標籤：右鍵＋滾輪此刻會調的那張（選中的，沒有就游標下的）目前的縮放或透明度（issue #150）。
+      backdropCursorValue: (property, at) => {
+        const target = this.backdropAdjustTarget(at);
+        return target ? backdropValueText(property, target[property]) : null;
+      },
       // 進 World + no-op 除非正在錄製（issue #29）。Pin 工具直接送 pin／unpin（issue #123），
       // 不再經 `routeForPinTool` 轉換。
       emit: (event) => this.dispatchInput(event),
@@ -2312,13 +2293,13 @@ export class JellySandbox {
     const cameraInput = new CameraInput(canvas, {
       screenToWorld: project,
       // 觸控在背景上拖曳＝平移相機；背景圖工具下按在 Backdrop 上是拖那張圖，不算背景（issue #149）。
-      hitTest: (world) =>
-        hitTest(world) ||
-        (this.activeTool === 'backdrop' && this.backdrops.hitTest(world) !== null),
+      // 歸不歸工具由目前的 adapter 回答（issue #161）。
+      hitTest: (world) => hitTest(world) || router.ownsPointerAt(world),
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
-      // 背景圖工具調的是場上某張 Backdrop（issue #150），其餘工具調自己的數值。
-      adjustModeValue: (steps, sx, sy) =>
-        router.adjustBackdrop(steps, sx, sy) || this.adjustModeValue(steps),
+      // 右鍵＋滾輪的退路在 `ToolRouter.wheel`（issue #161）：工具自己處理（背景圖調場上那張）
+      // → 目前模式的工具參數 → 都沒有回 false，相機照舊縮放。同步拉霸、即時更新場上風扇
+      // （錄製中照樣錄進 Track）都在 `onToolParamChange`，跟拖拉霸同一條路。
+      adjustModeValue: (steps, sx, sy) => router.wheel(steps, sx, sy),
       onMiddleClick: () => this.cycleMode(), // 中鍵單擊輪替模式（issue #122）
       // 右鍵單擊交給目前工具（issue #124 / #125）：Jelly 開選單、電風扇點在風扇上＝移除。
       onRightClick: (world, sx, sy) => router.rightClick(world, sx, sy),

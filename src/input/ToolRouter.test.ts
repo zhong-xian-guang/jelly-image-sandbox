@@ -1800,9 +1800,9 @@ describe('ToolRouter — 背景圖工具：右鍵＋滾輪、中鍵切模式、�
 
   it('右鍵＋滾輪依模式送出調整（帶游標的世界座標），回報已處理', () => {
     const { router, commands, events } = makeBackdropRouter();
-    expect(router.adjustBackdrop(1, 10, 20)).toBe(true);
+    expect(router.wheel(1, 10, 20)).toBe(true);
     router.cycleMode();
-    expect(router.adjustBackdrop(-2, 30, 40)).toBe(true);
+    expect(router.wheel(-2, 30, 40)).toBe(true);
     expect(commands).toEqual([
       { type: 'adjust', property: 'scale', steps: 1, at: { x: 1010, y: 1020 } },
       { type: 'adjust', property: 'opacity', steps: -2, at: { x: 1030, y: 1040 } },
@@ -1810,10 +1810,10 @@ describe('ToolRouter — 背景圖工具：右鍵＋滾輪、中鍵切模式、�
     expect(events).toEqual([]);
   });
 
-  it('別的工具下 adjustBackdrop 不處理（照舊縮放相機／調該工具的數值）', () => {
+  it('別的工具下 wheel 不送 Backdrop 調整（照舊縮放相機／調該工具的數值）', () => {
     const { router, commands } = makeBackdropRouter();
     router.setActiveTool('grab');
-    expect(router.adjustBackdrop(1, 10, 20)).toBe(false);
+    expect(router.wheel(1, 10, 20)).toBe(false);
     expect(commands).toEqual([]);
   });
 
@@ -1861,5 +1861,77 @@ describe('ToolRouter — 背景圖工具：多指同時拖同一張（#152 驗�
     router.down(2, 0, 0, 20);
     router.move(2, 5, 0);
     expect(commands.at(-1)).toEqual({ type: 'move', id: 'bd', dx: 5, dy: 0 });
+  });
+});
+
+describe('ToolRouter — 滾輪退路、指標歸屬、游標標籤數值（issue #161）', () => {
+  function makeFullRouter() {
+    const commands: BackdropCommand[] = [];
+    const made = makeRouter(undefined, undefined, {
+      backdropHitTest: (world: Point) => (world.x < 1100 ? 'bd' : null),
+      onBackdropCommand: (cmd) => commands.push(cmd),
+      backdropCursorValue: (property, at) => (at === null ? null : `${property}@${at.x},${at.y}`),
+    });
+    return { ...made, commands };
+  }
+
+  it('wheel：背景圖工具由它自己處理（送 adjust），不動工具參數', () => {
+    const { router, commands } = makeFullRouter();
+    router.setActiveTool('backdrop');
+    expect(router.wheel(1, 10, 20)).toBe(true);
+    expect(commands).toEqual([
+      { type: 'adjust', property: 'scale', steps: 1, at: { x: 1010, y: 1020 } },
+    ]);
+    expect(router.params.get('handfulRadius')).toBe(140);
+  });
+
+  it('wheel：沒有工具自己處理時依目前模式增減工具參數，回報已處理', () => {
+    const { router } = makeFullRouter();
+    selectGrab(router, 'handful');
+    expect(router.wheel(1, 0, 0)).toBe(true);
+    expect(router.params.get('handfulRadius')).toBe(150);
+    router.setActiveTool('fan');
+    expect(router.wheel(2, 0, 0)).toBe(true);
+    expect(router.params.get('fanWidth')).toBe(160);
+  });
+
+  it('wheel：都沒有數值（單點、Jelly）回 false，交還相機縮放', () => {
+    const { router, commands, events } = makeFullRouter();
+    selectGrab(router, 'single');
+    expect(router.wheel(1, 0, 0)).toBe(false);
+    router.setActiveTool('jelly');
+    expect(router.wheel(1, 0, 0)).toBe(false);
+    expect(commands).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('ownsPointerAt：只有背景圖工具下、落在 Backdrop 上才歸工具（相機不拖）', () => {
+    const { router } = makeFullRouter();
+    router.setActiveTool('backdrop');
+    expect(router.ownsPointerAt({ x: 1010, y: 0 })).toBe(true);
+    expect(router.ownsPointerAt({ x: 1500, y: 0 })).toBe(false);
+    for (const tool of ['grab', 'pin', 'fan', 'jelly'] as const) {
+      router.setActiveTool(tool);
+      expect(router.ownsPointerAt({ x: 1010, y: 0 })).toBe(false);
+    }
+  });
+
+  it('cursorValue：背景圖工具問 Backdrop 的值（游標換成世界座標、帶目前模式）', () => {
+    const { router } = makeFullRouter();
+    router.setActiveTool('backdrop');
+    expect(router.cursorValue({ x: 5, y: 6 })).toBe('scale@1005,1006');
+    router.cycleMode();
+    expect(router.cursorValue(null)).toBeNull();
+    expect(router.cursorValue({ x: 1, y: 2 })).toBe('opacity@1001,1002');
+  });
+
+  it('cursorValue：其他工具是目前模式的工具參數值，沒有數值回 null', () => {
+    const { router } = makeFullRouter();
+    selectGrab(router, 'single');
+    expect(router.cursorValue({ x: 0, y: 0 })).toBeNull();
+    selectGrab(router, 'handful');
+    expect(router.cursorValue({ x: 0, y: 0 })).toBe(140);
+    router.setActiveTool('fan');
+    expect(router.cursorValue(null)).toBe(150);
   });
 });
