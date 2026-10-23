@@ -63,7 +63,7 @@
  *   單擊不當橡皮擦：不然點一下就會清掉一整圈，「精準地拔一顆」做不到。
  *
  * 撒 Pin 與橡皮擦共用一條 Pin 筆刷半徑（`pinBrushRadius`，GLOSSARY.md「Pin 筆刷半徑」），
- * 撒 Pin 間距另外一條（`spraySpacing`），都由 `setPinBrushParams` 即時寫入。
+ * 撒 Pin 間距另外一條（`spraySpacing`），都住在 `ToolParams`（issue #160），每一輪撒／擦讀目前值。
  *
  * 撒點用經典的 dart throwing：用注入的 `random`（預設 `Math.random`——**執行期**隨機，
  * 每次撒的分佈都不一樣；重播的決定性不靠這裡，見下段）在圓內反覆生成候選點，跟「這一筆
@@ -106,7 +106,7 @@
  * Jelly 上才算，同 `hitTest`）→ `grab{handfulRadius}`、`move` → `moveGrab`、`up` →
  * 快速按放（`isTap`，同一組門檻）先送 `tap{radius}`（打在按下點）再 `release`，
  * `cancel` 只 `release`。id 直接用指標 id（`PointerInput` 每次按下都配新的），多指各自
- * 一把。半徑存在 `handfulRadius`（`setHandfulParams`，面板拉霸即時寫入），**按下
+ * 一把。半徑存在 `handfulRadius`（`ToolParams`，面板拉霸即時寫入），**按下
  * 當下**拍進 session——之後改半徑只影響下一把。把 N 顆展開的工作不在這裡：輸入層只
  * 送一個 `handfulRadius`，求解器依它決定性地挑出同一把（重播才一致）。進行中的 session
  * 跟「點一下」一樣先於 `activeTool` 分支處理：按住途中切走工具，這一把仍照常跟隨、放開。
@@ -118,7 +118,7 @@
  * 「放置新風扇」（`FanPlaceSession`，原 issue #66 行為：`move` 不 emit，只
  * 更新內部預覽終點，`up` 用原點→放開點的位移算 `dirX`/`dirY`（正規化單位
  * 向量）與 `length`，連同目前的 `width`／`strength`／`falloffExponent`／
- * `frequency`——`setFanParams`，issue #67：面板四個滑桿即時寫入——送一次
+ * `frequency`——讀 `ToolParams`，issue #67：面板四個滑桿即時寫入——送一次
  * `setFan`，取代
  * 場上既有的風扇，ADR-0010：整包覆蓋，不用先送 `clearFan`）。位移為 0（點一
  * 下沒拖曳）時退回 `(1, 0)` 當方向，避免除以 0；風扇這時 `length` 也是 0，
@@ -145,8 +145,8 @@
  *
  * **電風扇的模式與右鍵**（issue #125 / V4 T4；spec #121「電風扇」）：模式不改左鍵——放置
  * 與搬移完全不變——而是「按住右鍵＋滾輪要調哪個參數」：寬度／強度／衰減／頻率
- * （`adjustActiveValue`，一格＝該拉霸的 step，夾在範圍內，寫進的就是 `setFanParams` 那四個
- * 欄位，所以同時是下一次放置的參數；場上風扇的即時更新照舊歸呼叫端）。右鍵單擊
+ * （`adjustActiveValue`，一格＝該拉霸的 step，夾在範圍內，寫進的就是 `ToolParams` 那四個
+ * 值，所以同時是下一次放置的參數；場上風扇的即時更新照舊歸呼叫端）。右鍵單擊
  * （`rightClick`）落在場上風扇的矩形內就 emit `clearFan`——跟「移除風扇」按鈕同一個事件、
  * 經同一個 `emit`（呼叫端接到 `applyInput` + 錄製），所以錄製中照樣錄進 Track。按住右鍵
  * 期間滾過滾輪不算右鍵單擊（判定在 `CameraInput`），在風扇上調參數不會誤刪。
@@ -183,6 +183,7 @@ import {
   type GestureStart,
   type GestureTrackerOptions,
 } from './GestureTracker';
+import { ToolParams, type ModeValueKey } from './ToolParams';
 
 /**
  * 工具列上的工具（issue #122 / V4 T1；ADR-0016）。一般操作、大把抓取、編隊抓取合成
@@ -263,30 +264,6 @@ function usesGestureTracker(behavior: Behavior): boolean {
   return behavior === 'single';
 }
 
-/** 電風扇矩形的初始預設值（issue #66）——`setFanParams`（issue #67）可在執行期間覆寫。 */
-export const DEFAULT_FAN_WIDTH = 150;
-export const DEFAULT_FAN_STRENGTH = 4000;
-/** 沿用 `SimCore.doTap` 既有的正規化距離冪次衰減慣例（`(1 − d/R)²`）。 */
-export const DEFAULT_FAN_FALLOFF_EXPONENT = 2;
-/** 平均每秒陣風次數（issue #67 事後檢視追加，見 `SimCore.applyFan`）。 */
-export const DEFAULT_FAN_FREQUENCY = 2;
-
-/** `setFanParams` 接受的部分更新——四個欄位皆可選，只覆寫有帶到的欄位。 */
-export interface FanParams {
-  width: number;
-  strength: number;
-  falloffExponent: number;
-  frequency: number;
-}
-
-/**
- * Pin 筆刷半徑的預設值（issue #123；撒 Pin 與橡皮擦共用，GLOSSARY.md「Pin 筆刷半徑」），
- * 世界單位——`setPinBrushParams` 可在執行期間覆寫。先取 120，試手感後再調（spec #121）。
- */
-export const DEFAULT_PIN_BRUSH_RADIUS = 120;
-/** 撒 Pin 最小間距的預設值（issue #69）——`setPinBrushParams` 可在執行期間覆寫。 */
-export const DEFAULT_SPRAY_SPACING = 36;
-
 /**
  * 拔模式單擊「點掉最近一顆」的判定半徑，**螢幕像素**（issue #14 的點掉特定 Pin，issue #123
  * 從 `JellySandbox` 搬進來）——跟 `.jelly-pin-marker` 的 CSS 直徑（16px）同數量級。換算
@@ -303,77 +280,6 @@ export const PIN_REMOVE_RADIUS_PX = 16;
 const SPRAY_ATTEMPTS_PER_SLOT = 12;
 const MAX_SPRAY_ATTEMPTS = 1500;
 export const MAX_SPRAY_PINS_PER_STROKE = 200;
-
-/**
- * 拉霸的範圍（issue #114 起的半徑拉霸；issue #125 加上電風扇四個參數）——面板拉霸與
- * 「右鍵＋滾輪調目前模式的數值」共用同一份。
- */
-export interface ValueRange {
-  min: number;
-  max: number;
-  step: number;
-}
-
-/**
- * 電風扇四個拉霸的範圍（issue #67；issue #125 從 `JellySandbox` 搬進來，右鍵＋滾輪要夾在
- * 同一個範圍內）。事後檢視把推力模型從連續力場改成陣風——見 `SimCore.applyFan`：
- * `strength` 從「每秒加速度」變成「單次陣風的瞬間速度衝量」，範圍跟著重新校準。
- * `frequency` 是平均每秒陣風次數；下限 0.2（約 5 秒一陣，稀疏陣風）、上限 10（幾乎連續的
- * 密集陣風，配合高 `strength` 就是颶風）。寬度／衰減程度中點對應 `DEFAULT_FAN_WIDTH`／
- * `DEFAULT_FAN_FALLOFF_EXPONENT`，拉霸沒被動過時中點顯示的值要跟實際生效的一致。衰減程度
- * 下限 0.2（避免趨近 0 次方讓衰減幾乎消失、矩形內外力道落差過於突兀）、上限 5（明顯集中在
- * 風扇正前方）。
- */
-export const FAN_WIDTH_RANGE: ValueRange = { min: 20, max: 280, step: 5 };
-export const FAN_STRENGTH_RANGE: ValueRange = { min: 200, max: 60000, step: 200 };
-export const FAN_FALLOFF_RANGE: ValueRange = { min: 0.2, max: 5, step: 0.1 };
-export const FAN_FREQUENCY_RANGE: ValueRange = { min: 0.2, max: 10, step: 0.1 };
-
-/**
- * Pin 筆刷半徑拉霸的範圍（issue #123；沿用原本撒 Pin／移除 Pin 半徑的範圍），世界座標
- * 單位。上限 400 ≈ 一般匯入果凍的尺度，一下蓋住整隻。
- */
-export const PIN_BRUSH_RADIUS_RANGE: ValueRange = { min: 20, max: 400, step: 10 };
-
-/** `setPinBrushParams` 接受的部分更新（issue #123）——兩個欄位皆可選。 */
-export interface PinBrushParams {
-  /** Pin 筆刷半徑：撒 Pin 與橡皮擦的世界座標作用半徑（圓心 = 指標目前位置）。 */
-  radius: number;
-  /** 撒 Pin 時任兩顆 Pin（含場上既有的）之間的最小世界座標距離——越小越密。 */
-  spacing: number;
-}
-
-/**
- * 大把抓取半徑的預設值（issue #113；世界單位）——`setHandfulParams` 可在執行期間覆寫。
- * 跟撒 Pin 同一個預設，拉霸範圍也相同（spec #112）。
- */
-export const DEFAULT_HANDFUL_RADIUS = 140;
-
-/** 大把抓取半徑拉霸的範圍（issue #113），世界單位——跟撒 Pin 一致（spec #112）。 */
-export const HANDFUL_RADIUS_RANGE: ValueRange = { min: 20, max: 400, step: 10 };
-
-/**
- * 「按住右鍵＋滾輪」能調的數值（issue #114 的「工具半徑」由 issue #122 推廣成「目前模式
- * 的數值」）：抓取／大把的大把抓取半徑、Pin 工具兩個模式共用的 Pin 筆刷半徑（issue #123）、
- * 電風扇四個模式各自的參數（issue #125）。
- */
-export type ModeValueKey =
-  | 'handfulRadius'
-  | 'pinBrushRadius'
-  | 'fanWidth'
-  | 'fanStrength'
-  | 'fanFalloffExponent'
-  | 'fanFrequency';
-
-/** 各數值的拉霸範圍——面板拉霸與「右鍵＋滾輪」共用同一份。 */
-export const MODE_VALUE_RANGES: Readonly<Record<ModeValueKey, ValueRange>> = {
-  handfulRadius: HANDFUL_RADIUS_RANGE,
-  pinBrushRadius: PIN_BRUSH_RADIUS_RANGE,
-  fanWidth: FAN_WIDTH_RANGE,
-  fanStrength: FAN_STRENGTH_RANGE,
-  fanFalloffExponent: FAN_FALLOFF_RANGE,
-  fanFrequency: FAN_FREQUENCY_RANGE,
-};
 
 /**
  * 模式以外、會決定「右鍵＋滾輪有沒有數值可調」的開關（issue #135）：編隊模式的每點大把。
@@ -411,23 +317,10 @@ const MODE_VALUE_KEYS: {
   backdrop: {},
 };
 
-/** 一個可用右鍵＋滾輪調的數值：範圍＋讀寫 `ToolRouter` 內那一個欄位。 */
-interface ModeValueSlot {
-  readonly range: ValueRange;
-  get(): number;
-  set(value: number): void;
-}
-
 /** 目前模式的數值（issue #122）：哪一個、現在多少。 */
 export interface ModeValue {
   key: ModeValueKey;
   value: number;
-}
-
-/** `setHandfulParams` 接受的部分更新（issue #113）——目前只有半徑一個欄位。 */
-export interface HandfulParams {
-  /** 抓取範圍的世界座標半徑（圓心 = 按下處）。 */
-  radius: number;
 }
 
 /** `setFormationParams` 接受的部分更新（issue #135）。 */
@@ -482,6 +375,12 @@ export interface ToolRouterOptions extends GestureTrackerOptions {
   backdropHitTest?: (world: Point) => string | null;
   /** 背景圖工具的指令出口（issue #149）——獨立於 `emit`，不會進求解器也不會被錄進 Track。 */
   onBackdropCommand?: (cmd: BackdropCommand) => void;
+  /**
+   * 工具參數（issue #160）：電風扇四個參數、Pin 筆刷半徑、撒 Pin 間距、大把抓取半徑的唯一
+   * 擁有者，`ToolRouter` 只在按下（與每一輪撒／擦）時讀值、右鍵＋滾輪時 `step`。沙盒建立它
+   * 傳進來；不帶就自己建一份預設值的。
+   */
+  params?: ToolParams;
 }
 
 /** 放置新風扇進行中的狀態：世界座標原點 + 目前（拖曳中或放開時）的終點。 */
@@ -626,27 +525,11 @@ export class ToolRouter {
   /** 進行中的編隊抓取手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly formationSessions = new Map<PointerId, FormationSession>();
   private nextFormationSession = 1;
-  /**
-   * 下一次電風扇放置要用的寬度／強度／衰減冪次（issue #67）——`setFanParams`
-   * 由面板滑桿即時寫入；`emitFan` 每次 `up` 讀目前值，不需要等下一次 `setActiveTool`。
-   */
-  private fanWidth = DEFAULT_FAN_WIDTH;
-  private fanStrength = DEFAULT_FAN_STRENGTH;
-  private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
-  private fanFrequency = DEFAULT_FAN_FREQUENCY;
-  /**
-   * Pin 筆刷半徑（撒 Pin 與橡皮擦共用）與撒 Pin 最小間距（issue #123）——面板兩條拉霸與
-   * 右鍵＋滾輪即時寫入，每一輪撒／擦都讀目前值（拖曳途中調也立刻反映在還沒走到的那段）。
-   */
-  private pinBrushRadius = DEFAULT_PIN_BRUSH_RADIUS;
-  private spraySpacing = DEFAULT_SPRAY_SPACING;
   /** 撒出的 Pin 合成 id 流水號（`spray:<n>`）——跨多筆遞增，各顆身分互不相干。 */
   private nextSprayPin = 1;
   /** 進行中的 Pin 放／拔手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
   private readonly pinPlaceSessions = new Map<PointerId, PinPlaceSession>();
   private readonly pinRemoveSessions = new Map<PointerId, PinRemoveSession>();
-  /** 大把抓取半徑（issue #113）——面板拉霸即時寫入，按下當下拍進 session。 */
-  private handfulRadius = DEFAULT_HANDFUL_RADIUS;
   /** 編隊抓取的每點大把開關（issue #135）——面板開關即時寫入，按下當下拍進 session。 */
   private formationPerPointHandful = false;
   /** 進行中的大把抓取手勢，鍵為指標 `id`（`up`/`cancel` 後移除）。 */
@@ -660,6 +543,8 @@ export class ToolRouter {
    * （同一個來源與同一套預設值，不是第二套設定）。
    */
   private readonly config: GestureConfig;
+  /** 工具參數（issue #160）——見 `ToolRouterOptions.params`。 */
+  readonly params: ToolParams;
 
   constructor(opts: ToolRouterOptions) {
     this.gestureTracker = new GestureTracker(opts);
@@ -674,6 +559,7 @@ export class ToolRouter {
     this.backdropHitTest = opts.backdropHitTest;
     this.onBackdropCommand = opts.onBackdropCommand;
     this.config = resolveGestureConfig(opts.config);
+    this.params = opts.params ?? new ToolParams();
   }
 
   setActiveTool(tool: ToolId): void {
@@ -811,34 +697,6 @@ export class ToolRouter {
     }));
   }
 
-  /**
-   * 面板三個電風扇滑桿的即時寫入口（issue #67）——只覆寫有帶到的欄位。影響
-   * **下一次**放置（`emitFan` 讀這幾個欄位）；「即時反映到場上目前的風扇」
-   * 由呼叫端（`JellySandbox`）另外對 `sim.applyInput` 補送一次帶新參數、原幾何
-   * 不變的 `setFan`——`ToolRouter` 不知道場上是否已有風扇，這件事不歸它管。
-   */
-  setFanParams(params: Partial<FanParams>): void {
-    if (params.width !== undefined) this.fanWidth = params.width;
-    if (params.strength !== undefined) this.fanStrength = params.strength;
-    if (params.falloffExponent !== undefined) this.fanFalloffExponent = params.falloffExponent;
-    if (params.frequency !== undefined) this.fanFrequency = params.frequency;
-  }
-
-  /**
-   * 面板「Pin 筆刷半徑」「撒 Pin 間距」兩條拉霸的即時寫入口（issue #123）——只覆寫有帶到
-   * 的欄位。每一輪撒（`sprayAt`）／擦（`eraseAt`）都讀目前值，所以拖曳途中調也會立刻
-   * 反映在還沒走到的那段路徑上。比照 `setFanParams`。
-   */
-  setPinBrushParams(params: Partial<PinBrushParams>): void {
-    if (params.radius !== undefined) this.pinBrushRadius = params.radius;
-    if (params.spacing !== undefined) this.spraySpacing = params.spacing;
-  }
-
-  /** 面板「大把抓取半徑」拉霸的即時寫入口（issue #113）——只影響**下一次**按下。 */
-  setHandfulParams(params: Partial<HandfulParams>): void {
-    if (params.radius !== undefined) this.handfulRadius = params.radius;
-  }
-
   /** 面板「每個點用大把抓」開關的即時寫入口（issue #135）——只影響**下一次**按下。 */
   setFormationParams(params: Partial<FormationParams>): void {
     if (params.perPointHandful !== undefined) {
@@ -857,52 +715,10 @@ export class ToolRouter {
   };
 
   /**
-   * 每個數值的範圍與讀寫口（issue #125：取代原本 `activeValueKey`／`adjustActiveValue`／
-   * `valueOf` 三處 if 串接）——加新的可調數值只要在 `ModeValueKey`、`MODE_VALUE_RANGES`、
-   * `MODE_VALUE_KEYS` 與這張表各補一行。寫入的就是面板拉霸（`setXParams`）寫的同一個欄位。
+   * 目前工具＋模式用右鍵＋滾輪調的是哪一個工具參數（issue #122；issue #125 改查表；issue #135
+   * 加上條件格；issue #160 公開）；沒有數值回 `null`。值本身住在 `ToolParams`。
    */
-  private readonly modeValues: { readonly [K in ModeValueKey]: ModeValueSlot } = {
-    handfulRadius: this.slot(
-      'handfulRadius',
-      () => this.handfulRadius,
-      (v) => (this.handfulRadius = v),
-    ),
-    pinBrushRadius: this.slot(
-      'pinBrushRadius',
-      () => this.pinBrushRadius,
-      (v) => (this.pinBrushRadius = v),
-    ),
-    fanWidth: this.slot(
-      'fanWidth',
-      () => this.fanWidth,
-      (v) => (this.fanWidth = v),
-    ),
-    fanStrength: this.slot(
-      'fanStrength',
-      () => this.fanStrength,
-      (v) => (this.fanStrength = v),
-    ),
-    fanFalloffExponent: this.slot(
-      'fanFalloffExponent',
-      () => this.fanFalloffExponent,
-      (v) => (this.fanFalloffExponent = v),
-    ),
-    fanFrequency: this.slot(
-      'fanFrequency',
-      () => this.fanFrequency,
-      (v) => (this.fanFrequency = v),
-    ),
-  };
-
-  private slot(key: ModeValueKey, get: () => number, set: (value: number) => void): ModeValueSlot {
-    return { range: MODE_VALUE_RANGES[key], get, set };
-  }
-
-  /**
-   * 目前工具＋模式的數值是哪一個（issue #122；issue #125 改查表；issue #135 加上條件格）；
-   * 沒有數值回 `null`。
-   */
-  private activeValueKey(): ModeValueKey | null {
+  get activeValueKey(): ModeValueKey | null {
     const tool = this.activeTool;
     if (!isModalTool(tool)) return null;
     const keys: Partial<Record<ToolMode, ModeValueEntry>> = MODE_VALUE_KEYS[tool];
@@ -914,24 +730,21 @@ export class ToolRouter {
 
   /** 目前模式的數值與它現在的值（游標標籤用）；沒有數值回 `null`。 */
   get activeValue(): ModeValue | null {
-    const key = this.activeValueKey();
-    return key === null ? null : { key, value: this.modeValues[key].get() };
+    const key = this.activeValueKey;
+    return key === null ? null : { key, value: this.params.get(key) };
   }
 
   /**
    * 「右鍵＋滾輪」調整目前模式的數值（issue #114 的調半徑，issue #122 推廣）：`steps` 格
    * （正 = 放大），每格一個拉霸 step，夾在該拉霸範圍內，回報新值讓呼叫端同步面板與
    * 圓圈。沒有數值的模式回 `null`（「不處理」——呼叫端照舊縮放相機）。跟拉霸一樣只影響
-   * **下一次**按下：進行中的大把抓取 session 已經在按下時記下自己的半徑。電風扇的參數
-   * （issue #125）同理只寫進下一次放置用的欄位；場上風扇的即時更新歸呼叫端（同 `setFanParams`）。
+   * **下一次**按下：進行中的大把抓取 session 已經在按下時記下自己的半徑。寫進的是
+   * `ToolParams`（issue #160）——同步拉霸、即時更新場上風扇由訂閱它變更通知的呼叫端負責。
    */
   adjustActiveValue(steps: number): ModeValue | null {
-    const key = this.activeValueKey();
+    const key = this.activeValueKey;
     if (key === null) return null;
-    const slot = this.modeValues[key];
-    const value = stepValue(slot.get(), steps, slot.range);
-    slot.set(value);
-    return { key, value };
+    return { key, value: this.params.step(key, steps) };
   }
 
   /**
@@ -962,7 +775,7 @@ export class ToolRouter {
     if (behavior === 'handful') {
       const world = this.screenToWorld(screenX, screenY);
       if (this.hitTest && !this.hitTest(world)) return; // 背景拖曳 → 不歸求解器
-      const radius = this.handfulRadius;
+      const radius = this.params.get('handfulRadius');
       this.handfulSessions.set(id, {
         startX: screenX,
         startY: screenY,
@@ -1007,7 +820,7 @@ export class ToolRouter {
       const session = this.nextFormationSession++;
       // 每點大把（issue #135）：開關與半徑在按下當下定下；每個點的 `grab` 帶同一個
       // `handfulRadius`（沿用大把抓取的欄位，不新增事件種類），各自只抓落點那塊 Jelly。
-      const handfulRadius = this.formationPerPointHandful ? this.handfulRadius : null;
+      const handfulRadius = this.formationPerPointHandful ? this.params.get('handfulRadius') : null;
       const attached: { offset: Point; id: string }[] = [];
       this.formationOffsets.forEach((offset, index) => {
         const point = { x: world.x + offset.x, y: world.y + offset.y };
@@ -1367,9 +1180,9 @@ export class ToolRouter {
    */
   private sprayAt(center: Point, session: PinPlaceSession): void {
     if (session.sprayed >= MAX_SPRAY_PINS_PER_STROKE) return;
-    const radius = Math.max(0, this.pinBrushRadius);
+    const radius = Math.max(0, this.params.get('pinBrushRadius'));
     // 間距 0（或負）會讓「還能塞幾顆」變成無限大，用一個極小正值收斂成「幾乎不限」。
-    const spacing = Math.max(this.spraySpacing, 1e-6);
+    const spacing = Math.max(this.params.get('spraySpacing'), 1e-6);
     const existing = (this.listPins?.() ?? []).map((pin) => pin.point);
     const slots = (radius / spacing) ** 2;
     const attempts = Math.min(MAX_SPRAY_ATTEMPTS, Math.ceil(SPRAY_ATTEMPTS_PER_SLOT * slots));
@@ -1409,7 +1222,7 @@ export class ToolRouter {
    * 見 `emitUnpin`），跟筆刷半徑無關。
    */
   private eraseAt(center: Point, session: PinRemoveSession, matchRadius: number): void {
-    const radius = Math.max(0, this.pinBrushRadius);
+    const radius = Math.max(0, this.params.get('pinBrushRadius'));
     const hits: PinInfo[] = [];
     for (const pin of this.listPins?.() ?? []) {
       if (session.erasedPinIds.has(pin.id)) continue;
@@ -1488,10 +1301,10 @@ export class ToolRouter {
       dirX,
       dirY,
       length,
-      width: this.fanWidth,
-      strength: this.fanStrength,
-      falloffExponent: this.fanFalloffExponent,
-      frequency: this.fanFrequency,
+      width: this.params.get('fanWidth'),
+      strength: this.params.get('fanStrength'),
+      falloffExponent: this.params.get('fanFalloffExponent'),
+      frequency: this.params.get('fanFrequency'),
     });
   }
 
@@ -1519,24 +1332,4 @@ export class ToolRouter {
 /** `point` 是否距離 `others` 裡任何一點不到 `minDistance`（撒 Pin 的間距判定）。 */
 function isWithin(point: Point, others: readonly Point[], minDistance: number): boolean {
   return others.some((o) => Math.hypot(o.x - point.x, o.y - point.y) < minDistance);
-}
-
-/**
- * 數值往上／下走 `steps` 格拉霸 step，夾在範圍內（issue #114 的調半徑；issue #125 推廣）。
- * 結果對齊拉霸的格點（`min + k·step`）並捨到 step 的小數位數：電風扇衰減／頻率的 step 是
- * 0.1，連續相加會累積浮點誤差（0.2 + 0.1 = 0.30000000000000004），游標標籤會顯示出來、
- * 也會跟拉霸自己對齊後的值對不上。
- */
-function stepValue(value: number, steps: number, range: ValueRange): number {
-  const clamped = Math.min(range.max, Math.max(range.min, value + steps * range.step));
-  const snapped = range.min + Math.round((clamped - range.min) / range.step) * range.step;
-  const rounded = Number(snapped.toFixed(decimalsOf(range.step)));
-  return Math.min(range.max, Math.max(range.min, rounded));
-}
-
-/** `step` 的小數位數（`0.1` → 1、`10` → 0）。 */
-function decimalsOf(step: number): number {
-  const text = String(step);
-  const dot = text.indexOf('.');
-  return dot < 0 ? 0 : text.length - dot - 1;
 }

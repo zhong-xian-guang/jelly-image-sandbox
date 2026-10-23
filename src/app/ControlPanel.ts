@@ -67,7 +67,7 @@ import {
   modesOf,
   TOOL_IDS,
   type ModalToolId,
-  type ModeValueKey,
+  type ToolParamKey,
   type ToolId,
   type ToolMode,
   type ToolModeOf,
@@ -573,8 +573,11 @@ export class ControlPanel {
   private readonly boundarySelect: HTMLSelectElement;
   /** 「網格密度」拉霸——效能退路 `setMeshDensity` 連同旁邊的數值一起更新（issue #89）。 */
   private readonly meshDensitySlider: RangeSlider;
-  /** 「右鍵＋滾輪」調得到的數值拉霸（issue #114；issue #122 推廣）——經 `setModeValue` 灌回。 */
-  private readonly valueSliders: Record<ModeValueKey, RangeSlider>;
+  /**
+   * 工具參數的拉霸（issue #114；issue #122 推廣；issue #160 加上撒 Pin 間距）——值住在
+   * `ToolParams`，變了之後經 `setToolParam` 灌回。
+   */
+  private readonly valueSliders: Record<ToolParamKey, RangeSlider>;
 
   constructor(opts: ControlPanelOptions) {
     this.onTrackStartTimeChange = opts.onTrackStartTimeChange;
@@ -707,15 +710,16 @@ export class ControlPanel {
       opts.initial.pinBrushRadius,
       opts.onPinBrushRadiusChange,
     );
+    const spraySpacingRow = createRangeSlider(
+      '撒 Pin 間距（越小越密）',
+      opts.spraySpacingRange,
+      opts.initial.spraySpacing,
+      opts.onSpraySpacingChange,
+    );
     const pinParams = this.toolParams('Pin', [
       this.modeRow('pin', opts.initial.toolModes.pin, opts.onModeChange),
       pinBrushRadiusRow.row,
-      createRangeSlider(
-        '撒 Pin 間距（越小越密）',
-        opts.spraySpacingRange,
-        opts.initial.spraySpacing,
-        opts.onSpraySpacingChange,
-      ).row,
+      spraySpacingRow.row,
     ]);
 
     // 抓取工具的參數卡（issue #122：一般操作／大把抓取／編隊抓取合成抓取工具）——模式鈕、
@@ -751,6 +755,7 @@ export class ControlPanel {
 
     this.valueSliders = {
       pinBrushRadius: pinBrushRadiusRow,
+      spraySpacing: spraySpacingRow,
       handfulRadius: handfulRadiusRow,
       fanWidth,
       fanStrength,
@@ -1247,10 +1252,11 @@ export class ControlPanel {
   }
 
   /**
-   * 「按住右鍵＋滾輪」調過數值後把新值灌回對應的拉霸（issue #114；issue #122 推廣）。
-   * 同 `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、不回呼 `onXChange`。
+   * 工具參數變了之後把新值灌回對應的拉霸（issue #114；issue #122 推廣；issue #160 改成每次
+   * `ToolParams` 變更都灌回）。同 `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、
+   * 不回呼 `onXChange`。
    */
-  setModeValue(key: ModeValueKey, value: number): void {
+  setToolParam(key: ToolParamKey, value: number): void {
     setRangeSliderValue(this.valueSliders[key], value);
   }
 

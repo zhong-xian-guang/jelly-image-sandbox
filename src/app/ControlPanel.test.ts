@@ -1609,23 +1609,23 @@ describe('ControlPanel — 大把抓取控制項（issue #113；issue #122 併�
 });
 
 describe('ControlPanel — 右鍵＋滾輪調數值的拉霸同步（issue #114；issue #122 推廣）', () => {
-  it('setModeValue 只動對應數值的拉霸，不觸發 onChange 回呼', () => {
+  it('setToolParam 只動對應數值的拉霸，不觸發 onChange 回呼', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const pinBrush = findRangeInputByLabel(panel, 'Pin 筆刷半徑');
     const handful = findRangeInputByLabel(panel, '大把抓取半徑');
     const before = handful.value;
 
-    panel.setModeValue('pinBrushRadius', 230);
+    panel.setToolParam('pinBrushRadius', 230);
     expect([pinBrush.value, handful.value]).toEqual(['230', before]);
-    panel.setModeValue('handfulRadius', 310);
+    panel.setToolParam('handfulRadius', 310);
     expect([pinBrush.value, handful.value]).toEqual(['230', '310']);
 
     expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
     expect(opts.onHandfulRadiusChange).not.toHaveBeenCalled();
   });
 
-  it('電風扇四個參數（issue #125）：setModeValue 各自灌回對應的拉霸，不觸發回呼', () => {
+  it('電風扇四個參數（issue #125）：setToolParam 各自灌回對應的拉霸，不觸發回呼', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const cases = [
@@ -1635,7 +1635,7 @@ describe('ControlPanel — 右鍵＋滾輪調數值的拉霸同步（issue #114�
       ['fanFrequency', '風扇頻率', 0.7],
     ] as const;
     for (const [key, label, value] of cases) {
-      panel.setModeValue(key, value);
+      panel.setToolParam(key, value);
       expect(findRangeInputByLabel(panel, label).value).toBe(String(value));
     }
     expect(opts.onFanWidthChange).not.toHaveBeenCalled();
@@ -2406,8 +2406,8 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
     panel.setTapStrength(3000);
     panel.setGravity(1200);
     panel.setMeshDensity(170);
-    panel.setModeValue('pinBrushRadius', 230);
-    panel.setModeValue('handfulRadius', 310);
+    panel.setToolParam('pinBrushRadius', 230);
+    panel.setToolParam('handfulRadius', 310);
 
     expect(valueOf(findRangeInputByLabel(panel, '軟硬度'))).toBe('25%');
     expect(valueOf(findRangeInputByLabel(panel, '輕拍力道'))).toBe('3000');
@@ -2428,7 +2428,7 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
     }
   });
 
-  it('電風扇四條拉霸（issue #125 的右鍵＋滾輪）：setModeValue 同步數值顯示、不觸發回呼', () => {
+  it('電風扇四條拉霸（issue #125 的右鍵＋滾輪）：setToolParam 同步數值顯示、不觸發回呼', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const cases = [
@@ -2438,7 +2438,7 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
       ['fanFrequency', '風扇頻率', 0.7, '0.7'],
     ] as const;
     for (const [key, label, value, shown] of cases) {
-      panel.setModeValue(key, value);
+      panel.setToolParam(key, value);
       expect(valueOf(findRangeInputByLabel(panel, label)), label).toBe(shown);
     }
     expect(opts.onFanWidthChange).not.toHaveBeenCalled();

@@ -11,8 +11,10 @@ import { nearestPinWithin, type InputEvent, type PinInfo, type Point } from '../
 import {
   DEFAULT_PIN_BRUSH_RADIUS,
   DEFAULT_SPRAY_SPACING,
-  MAX_SPRAY_PINS_PER_STROKE,
   PIN_BRUSH_RADIUS_RANGE,
+} from './ToolParams';
+import {
+  MAX_SPRAY_PINS_PER_STROKE,
   PIN_REMOVE_RADIUS_PX,
   ToolRouter,
   modesOf,
@@ -125,9 +127,9 @@ describe('Pin 工具 — 模式與數值', () => {
     expect(router.adjustActiveValue(100)).toEqual({ key: 'pinBrushRadius', value: 400 });
   });
 
-  it('拉霸寫入的半徑（setPinBrushParams）也是滾輪調的那一個', () => {
+  it('拉霸寫入的半徑（ToolParams）也是滾輪調的那一個', () => {
     const { router } = makePinRouter();
-    router.setPinBrushParams({ radius: 200 });
+    router.params.set('pinBrushRadius', 200);
     expect(router.activeValue).toEqual({ key: 'pinBrushRadius', value: 200 });
   });
 });
@@ -196,12 +198,12 @@ describe('Pin 工具 — 放模式', () => {
     }
   });
 
-  it('間距拉霸（setPinBrushParams spacing）調小 → 撒得更密', () => {
+  it('間距拉霸（ToolParams spraySpacing）調小 → 撒得更密', () => {
     const sparse = makePinRouter();
-    sparse.router.setPinBrushParams({ spacing: 60 });
+    sparse.router.params.set('spraySpacing', 60);
     drag(sparse.router, 1, [0, 0], [300, 0], 30);
     const dense = makePinRouter();
-    dense.router.setPinBrushParams({ spacing: 20 });
+    dense.router.params.set('spraySpacing', 20);
     drag(dense.router, 1, [0, 0], [300, 0], 30);
     expect(minPairDistance(dense.pinPoints())).toBeGreaterThanOrEqual(20);
     expect(minPairDistance(sparse.pinPoints())).toBeGreaterThanOrEqual(60);
@@ -219,7 +221,7 @@ describe('Pin 工具 — 放模式', () => {
 
   it('撒出的 Pin 都落在路徑上某個指標位置的筆刷半徑內', () => {
     const { router, pinPoints } = makePinRouter();
-    router.setPinBrushParams({ radius: 50 });
+    router.params.set('pinBrushRadius', 50);
     drag(router, 1, [0, 0], [300, 0], 30);
     const placed = pinPoints();
     expect(placed.length).toBeGreaterThan(3);
@@ -232,7 +234,8 @@ describe('Pin 工具 — 放模式', () => {
 
   it('一筆的數量有上限：半徑極大、間距極小也不會無限撒', () => {
     const { router, pinPoints } = makePinRouter();
-    router.setPinBrushParams({ radius: 400, spacing: 0 });
+    router.params.set('pinBrushRadius', 400);
+    router.params.set('spraySpacing', 0);
     drag(router, 1, [0, 0], [300, 0], 60);
     expect(pinPoints().length).toBeLessThanOrEqual(MAX_SPRAY_PINS_PER_STROKE + 1);
   });
@@ -308,7 +311,7 @@ describe('Pin 工具 — 拔模式', () => {
       live: false,
     });
     router.setMode('pin', 'remove');
-    router.setPinBrushParams({ radius: 60 });
+    router.params.set('pinBrushRadius', 60);
     drag(router, 1, [0, 0], [300, 0], 30);
     expect(unpinnedIds().sort()).toEqual(['on-path-a', 'on-path-b']);
     expect(events.every((e) => e.type === 'unpin')).toBe(true);
@@ -353,7 +356,7 @@ describe('Pin 工具 — 拔模式', () => {
       pins: [{ id: 'p', point: { x: 1100, y: 1010 } }],
     });
     router.setMode('pin', 'remove');
-    router.setPinBrushParams({ radius: 60 });
+    router.params.set('pinBrushRadius', 60);
     drag(router, 1, [0, 0], [300, 0], 30);
     expect(events).toEqual([{ type: 'unpin', x: 1100, y: 1010, radius: PIN_REMOVE_RADIUS_PX }]);
   });

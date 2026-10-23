@@ -79,7 +79,7 @@ function recordLive(perPointHandful: boolean): {
   }
   router.endFormationDefine();
   router.setFormationParams({ perPointHandful });
-  router.setHandfulParams({ radius: 20 });
+  router.params.set('handfulRadius', 20);
 
   recorder.start('action');
   let steps = 0;
