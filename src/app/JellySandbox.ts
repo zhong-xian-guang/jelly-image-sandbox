@@ -145,8 +145,6 @@ import {
   worldToScreen,
 } from '../camera';
 import {
-  type BackdropCommand,
-  type BackdropMode,
   DEFAULT_TOOL,
   type GrabMode,
   type ModalToolId,
@@ -201,33 +199,17 @@ import {
   type ClipState,
 } from './clipFile';
 import { Clip } from './Clip';
-import {
-  type Backdrop,
-  BackdropBoard,
-  backdropNumber,
-  stepBackdropValue,
-  worldRectOf,
-  type WorldRect,
-} from './BackdropBoard';
+import { BackdropBoard, type WorldRect } from './BackdropBoard';
+import { Backdrops, browserBackdropCodec } from './Backdrops';
 import { BackgroundPanel } from './BackgroundPanel';
 import { BackgroundStore, DEFAULT_BACKGROUND_COLOR, openIndexedDbStore } from './backgroundStore';
 import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { CanvasHover } from './CanvasHover';
 import { CleanView } from './CleanView';
 import { coveredInsets, visibleRect } from './fitInsets';
-import {
-  backdropMenuItems,
-  ContextMenu,
-  jellyMenuItems,
-  type JellyMenuItemId,
-} from './ContextMenu';
+import { ContextMenu, jellyMenuItems, type JellyMenuItemId } from './ContextMenu';
 import { ControlPanel } from './ControlPanel';
-import {
-  backdropValueText,
-  CursorLabel,
-  cursorLabelText,
-  type FormationShapeState,
-} from './CursorLabel';
+import { CursorLabel, cursorLabelText, type FormationShapeState } from './CursorLabel';
 import { KeyboardShortcuts } from './KeyboardShortcuts';
 import { canvasToPng, drawDefaultTexture } from './defaultJelly';
 import { DEMOS, isCameraCommand, STEP_SECONDS, stepToSeconds, type DemoEvent } from './demos';
@@ -288,11 +270,6 @@ const IMPORT_SIZE_RANGE = { min: 128, max: 1024, step: 16 };
 const DEFAULT_IMPORT_SIZE = 512;
 /** 內建預設果凍在來源圖庫裡的 id（啟動時、「清空全部」後都重新註冊成它）。 */
 const DEFAULT_SOURCE_ID = 'src/1';
-/**
- * Backdrop 圖片長邊上限（issue #148；spec #146 US38），像素——超過就等比縮小再存。4096 是
- * 幾乎所有 WebGL 裝置都保證支援的貼圖尺寸，再大有的 GPU 會直接顯示失敗。
- */
-const MAX_BACKDROP_SIZE = 4096;
 
 /**
  * 這幾層提示是 DOM 覆蓋層，每幀要把世界座標投影成螢幕座標才畫得出來——都看不到
@@ -383,21 +360,13 @@ export class JellySandbox {
   private readonly backgroundPanel: BackgroundPanel;
   /** 背景色與 Backdrop 的儲存（issue #147；IndexedDB，不能用時只在本次有效）。 */
   private readonly backgroundStore: BackgroundStore;
-  /** 場上的 Backdrop（issue #148）——純邏輯，持久化在它裡面。 */
-  private readonly backdrops: BackdropBoard;
+  /**
+   * 場上的 Backdrop（issue #148；issue #165 收成 module）：清單、貼圖、縮圖、匯入轉檔、選單
+   * 指令都在裡面，沙盒每幀只拿繪製清單（`flush`）、把背景圖工具的指令轉給它。
+   */
+  private readonly backdrops: Backdrops<ImageBitmap>;
   /** 「匯入背景圖…」的隱藏檔案輸入（issue #148）：瀏覽器解得開的圖都收。 */
   private readonly backdropFileInput: HiddenFileInput;
-  /** 每張 Backdrop 解碼好的貼圖（issue #148）；還在解碼或解不開的不在這裡，先不畫。 */
-  private readonly backdropTextures = new Map<string, ImageBitmap>();
-  /** 正在解碼的 Backdrop id（還原時非同步解碼，避免同一張重複解）。 */
-  private readonly backdropDecoding = new Set<string>();
-  /** 清單縮圖的 object URL（issue #148），Backdrop 刪掉時釋放。 */
-  private readonly backdropThumbs = new Map<string, string>();
-  /**
-   * Backdrop 清單變了、還沒同步到 Renderer 與側欄清單（issue #148）。`BackdropBoard` 每次變動
-   * 都設起來，`frame()` 每幀最多同步一次——拖曳中一格多次移動只重畫一次。
-   */
-  private backdropsDirty = true;
   /** 鍵盤快捷鍵（issue #126）：1–5 切工具、播放中空白鍵暫停／繼續。在 window 上聽，`destroy` 要解掉。 */
   private readonly keyboardShortcuts: KeyboardShortcuts;
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
@@ -532,8 +501,10 @@ export class JellySandbox {
     this.root = root;
     this.renderer = renderer;
     this.backgroundStore = background.store;
-    this.backdrops = background.backdrops;
-    this.backdrops.onChange(() => (this.backdropsDirty = true));
+    this.backdrops = new Backdrops(background.backdrops, {
+      codec: browserBackdropCodec,
+      notify: (message) => this.showNotice(message),
+    });
     this.renderer.setBackgroundColor(colorToNumber(background.color));
     // `World` 的 `meshProvider` 綁到沙盒的 `meshFor`（來源圖庫 + memo），所以在這裡建。
     // 跨塊碰撞的摩擦係數沿用牆／地板的 app 層常數（issue #96；其餘碰撞參數用求解器預設）。
@@ -712,7 +683,7 @@ export class JellySandbox {
     // 「背景」分區（issue #147）：背景色；Backdrop 匯入與清單（issue #148）。
     this.backdropFileInput = new HiddenFileInput(root.ownerDocument, 'image/*', (files) => {
       const file = files[0];
-      if (file) void this.importBackdrop(file);
+      if (file) void this.backdrops.import(file, this.visibleWorldRect());
     });
     this.backgroundPanel = new BackgroundPanel({
       initialColor: background.color,
@@ -724,13 +695,7 @@ export class JellySandbox {
       onMoveBackdropUp: (id) => this.backdrops.moveUp(id),
       onMoveBackdropDown: (id) => this.backdrops.moveDown(id),
       onSelectBackdrop: (id) => this.backdrops.select(id),
-      onBackdropFieldChange: (id, field, value) => {
-        const b = this.backdrops.get(id);
-        if (!b) return;
-        if (field === 'centerX') this.backdrops.setCenter(id, value, b.centerY);
-        else if (field === 'centerY') this.backdrops.setCenter(id, b.centerX, value);
-        else this.setBackdropValue(id, field, value);
-      },
+      onBackdropFieldChange: (id, field, value) => this.backdrops.setField(id, field, value),
     });
     this.controlPanel.sectionBody('background').appendChild(this.backgroundPanel.element);
     // 畫布上的播放控制條（底部中央）與相機按鈕（右下角）——issue #129；只吃自己範圍內的點擊。
@@ -835,8 +800,7 @@ export class JellySandbox {
     this.fileImportInput.destroy();
     this.clipFileInput.destroy();
     this.backdropFileInput.destroy();
-    for (const bitmap of this.backdropTextures.values()) bitmap.close();
-    for (const url of this.backdropThumbs.values()) URL.revokeObjectURL(url);
+    this.backdrops.dispose();
     this.dropHint.remove();
     this.importHint.removeEventListener('click', this.onImportHintClick);
     this.importHint.remove();
@@ -1130,70 +1094,8 @@ export class JellySandbox {
    * 選取本身不受切工具影響，切回來外框就回來。選中那張被隱藏時也不畫。
    */
   private applyBackdropOutline(): void {
-    const id = this.backdrops.selectedId;
-    const b = id === null ? undefined : this.backdrops.get(id);
-    const show =
-      b !== undefined && b.visible && this.activeTool === 'backdrop' && !this.cleanView.isActive;
-    this.renderer.setBackdropOutline(show ? worldRectOf(b) : null);
-  }
-
-  /**
-   * 背景圖工具的指令（issue #149；issue #150 加右鍵＋滾輪與右鍵選單）——直接改
-   * `BackdropBoard`，不經 `World`、不錄進 Track。
-   */
-  private runBackdropCommand(cmd: BackdropCommand): void {
-    switch (cmd.type) {
-      case 'select':
-        this.backdrops.select(cmd.id);
-        return;
-      case 'move':
-        this.backdrops.move(cmd.id, cmd.dx, cmd.dy);
-        return;
-      case 'adjust': {
-        const target = this.backdropAdjustTarget(cmd.at);
-        if (!target) return;
-        const next = stepBackdropValue(cmd.property, target[cmd.property], cmd.steps);
-        this.setBackdropValue(target.id, cmd.property, next);
-        return;
-      }
-      case 'contextMenu':
-        this.openBackdropMenu(cmd.id, cmd.screen);
-        return;
-    }
-  }
-
-  /** 設某張 Backdrop 的縮放或透明度（右鍵＋滾輪與清單數字欄位共用）。 */
-  private setBackdropValue(id: string, property: BackdropMode, value: number): void {
-    if (property === 'scale') this.backdrops.setScale(id, value);
-    else this.backdrops.setOpacity(id, value);
-  }
-
-  /**
-   * 右鍵＋滾輪調的是哪一張（issue #150）：選中那張；沒有選中時是 `at`（游標下）最上層、顯示中
-   * 那張。游標標籤顯示的也是它的值。
-   */
-  private backdropAdjustTarget(at: Point | null): Readonly<Backdrop> | undefined {
-    const selected = this.backdrops.selectedId;
-    if (selected !== null) return this.backdrops.get(selected);
-    const hit = at && this.backdrops.hitTest(at);
-    return hit ? this.backdrops.get(hit) : undefined;
-  }
-
-  /**
-   * Backdrop 右鍵選單（issue #150）：先選中點到的那張（外框標出選單作用在哪一張），再在游標處
-   * 開「刪除／移到最上層／移到最下層」。跟 Jelly 選單共用同一個 `ContextMenu`。
-   */
-  private openBackdropMenu(id: string, screen: Point): void {
-    this.backdrops.select(id);
-    const items = backdropMenuItems({
-      isTop: this.backdrops.isTop(id),
-      isBottom: this.backdrops.isBottom(id),
-    });
-    this.contextMenu.open(screen, items, (item) => {
-      if (item === 'delete') this.backdrops.remove(id);
-      else if (item === 'bringToFront') this.backdrops.bringToFront(id);
-      else this.backdrops.sendToBack(id);
-    });
+    const show = this.activeTool === 'backdrop' && !this.cleanView.isActive;
+    this.renderer.setBackdropOutline(show ? this.backdrops.selectedRect() : null);
   }
 
   /**
@@ -1382,48 +1284,6 @@ export class JellySandbox {
     this.backgroundStore.saveColor(color);
   }
 
-  /**
-   * 「匯入背景圖…」選到一個檔案（issue #148）：瀏覽器原生解碼（不經 mesh pipeline，不受
-   * ADR-0009 的格式清單限制）。長邊超過 `MAX_BACKDROP_SIZE` 先等比縮小再存並提示；解不開就
-   * 只提示，現有的 Backdrop 不受影響。新的一張 cover 擺放在目前畫面上、疊在最上面。
-   */
-  private async importBackdrop(file: Blob): Promise<void> {
-    let bitmap: ImageBitmap;
-    try {
-      bitmap = await createImageBitmap(file);
-    } catch (err) {
-      console.warn('背景圖解碼失敗', err);
-      this.showNotice('讀不出這張背景圖：檔案可能壞掉，或瀏覽器不支援這個格式');
-      return;
-    }
-    let blob = file;
-    let { width, height } = bitmap;
-    const longest = Math.max(width, height);
-    if (longest > MAX_BACKDROP_SIZE) {
-      const k = MAX_BACKDROP_SIZE / longest;
-      width = Math.max(1, Math.round(width * k));
-      height = Math.max(1, Math.round(height * k));
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      canvas.getContext('2d')?.drawImage(bitmap, 0, 0, width, height);
-      bitmap.close();
-      // WebP 有透明度又比 PNG 小得多；不支援編碼 WebP 的瀏覽器（Safari）會自動退回 PNG。
-      const resized = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob(resolve, 'image/webp', 0.92),
-      );
-      if (!resized) {
-        this.showNotice('背景圖太大，縮小時失敗了');
-        return;
-      }
-      blob = resized;
-      bitmap = await createImageBitmap(canvas);
-      this.showNotice(`背景圖太大，已等比縮小到長邊 ${MAX_BACKDROP_SIZE} px`);
-    }
-    const backdrop = this.backdrops.add({ blob, width, height }, this.visibleWorldRect());
-    this.backdropTextures.set(backdrop.id, bitmap);
-  }
-
   /** 目前畫布看得到的世界範圍（issue #148：新 Backdrop 的 cover 擺放用）。 */
   private visibleWorldRect(): WorldRect {
     const { x, y, scale } = this.cameraState.transform;
@@ -1432,69 +1292,14 @@ export class JellySandbox {
   }
 
   /**
-   * Backdrop 清單同步到 Renderer 與側欄（issue #148）——`frame()` 在清單變了之後呼叫一次。
-   * 還沒有貼圖的（啟動時從儲存還原的）先開始解碼，解好再同步一次；解不開的就一直不畫，
-   * 清單上照樣列著、可以刪掉。刪掉的那張釋放貼圖與縮圖網址。
+   * Backdrop 有變動就同步到 Renderer 與側欄清單（issue #148；issue #165 起合併與繪製清單由
+   * `Backdrops` 算）——`frame()` 每幀呼叫一次，沒變動什麼都不做。
    */
   private syncBackdrops(): void {
-    this.backdropsDirty = false;
-    const list = this.backdrops.list();
-    const alive = new Set(list.map((b) => b.id));
-    for (const [id, bitmap] of this.backdropTextures) {
-      if (alive.has(id)) continue;
-      this.backdropTextures.delete(id);
-      bitmap.close();
-    }
-    for (const [id, url] of this.backdropThumbs) {
-      if (alive.has(id)) continue;
-      this.backdropThumbs.delete(id);
-      URL.revokeObjectURL(url);
-    }
-    for (const b of list) {
-      if (!this.backdropThumbs.has(b.id) && typeof URL.createObjectURL === 'function') {
-        this.backdropThumbs.set(b.id, URL.createObjectURL(b.image.blob));
-      }
-      if (this.backdropTextures.has(b.id) || this.backdropDecoding.has(b.id)) continue;
-      if (typeof createImageBitmap !== 'function') continue;
-      this.backdropDecoding.add(b.id);
-      createImageBitmap(b.image.blob).then(
-        (bitmap) => {
-          this.backdropDecoding.delete(b.id);
-          if (!this.backdrops.get(b.id)) {
-            bitmap.close();
-            return;
-          }
-          this.backdropTextures.set(b.id, bitmap);
-          this.backdropsDirty = true;
-        },
-        (err) => {
-          this.backdropDecoding.delete(b.id);
-          console.warn('背景圖還原失敗', err);
-        },
-      );
-    }
-    this.renderer.setBackdrops(
-      list.flatMap((b) => {
-        const source = this.backdropTextures.get(b.id);
-        if (!source) return [];
-        return [{ id: b.id, source, ...worldRectOf(b), alpha: b.opacity, visible: b.visible }];
-      }),
-    );
-    this.backgroundPanel.setBackdrops(
-      list.map((b) => ({
-        id: b.id,
-        label: `背景圖 ${backdropNumber(b.id)}`,
-        thumbnailUrl: this.backdropThumbs.get(b.id) ?? '',
-        visible: b.visible,
-        isTop: this.backdrops.isTop(b.id),
-        isBottom: this.backdrops.isBottom(b.id),
-        selected: b.id === this.backdrops.selectedId,
-        centerX: b.centerX,
-        centerY: b.centerY,
-        scale: b.scale,
-        opacity: b.opacity,
-      })),
-    );
+    const out = this.backdrops.flush();
+    if (!out) return;
+    this.renderer.setBackdrops(out.sprites);
+    this.backgroundPanel.setBackdrops(out.rows);
     this.applyBackdropOutline();
   }
 
@@ -2180,12 +1985,13 @@ export class JellySandbox {
       onJellyContextMenu: (world, screen) => this.openJellyMenu(world, screen),
       // 背景圖工具（issue #149）：判定與指令都是 `BackdropBoard` 的事，不經 `World`，也不錄進 Track。
       backdropHitTest: (world) => this.backdrops.hitTest(world),
-      onBackdropCommand: (cmd) => this.runBackdropCommand(cmd),
-      // 游標標籤：右鍵＋滾輪此刻會調的那張（選中的，沒有就游標下的）目前的縮放或透明度（issue #150）。
-      backdropCursorValue: (property, at) => {
-        const target = this.backdropAdjustTarget(at);
-        return target ? backdropValueText(property, target[property]) : null;
+      onBackdropCommand: (cmd) => {
+        const menu = this.backdrops.command(cmd);
+        // 右鍵選單跟 Jelly 選單共用同一個 `ContextMenu`。
+        if (menu) this.contextMenu.open(menu.screen, menu.items, menu.pick);
       },
+      // 游標標籤：右鍵＋滾輪此刻會調的那張（選中的，沒有就游標下的）目前的縮放或透明度（issue #150）。
+      backdropCursorValue: (property, at) => this.backdrops.cursorValue(property, at),
       // 進 World + no-op 除非正在錄製（issue #29）。Pin 工具直接送 pin／unpin（issue #123），
       // 不再經 `routeForPinTool` 轉換。
       emit: (event) => this.dispatchInput(event),
@@ -2275,7 +2081,7 @@ export class JellySandbox {
     // 游標不該落後指標，所以一樣排在暫停守衛之前。
     this.applyCanvasCursor();
     // Backdrop（issue #148）不跟著暫停：暫停中照樣可以匯入、刪除。
-    if (this.backdropsDirty) this.syncBackdrops();
+    this.syncBackdrops();
 
     // 暫停中（issue #34）：略過固定步迴圈、PerfMonitor 取樣與相機更新——果凍
     // 定格在當下形變、播放秒數不動、鏡頭不動、排定事件不觸發——只重畫這一格。
