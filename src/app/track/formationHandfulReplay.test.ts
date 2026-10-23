@@ -68,7 +68,7 @@ function recordLive(perPointHandful: boolean): {
   router.setActiveTool('grab');
   router.setMode('grab', 'formation');
   // 兩點相距 16、半徑 20：兩把的範圍重疊（ADR-0014：重疊處被兩邊一起拉）；第三點落在果凍外。
-  router.beginFormationDefine();
+  router.formation.beginDefine();
   for (const [x, y] of [
     [40, 48],
     [56, 48],
@@ -77,8 +77,8 @@ function recordLive(perPointHandful: boolean): {
     router.down(1, x, y, 0);
     router.up(1, x, y, 10);
   }
-  router.endFormationDefine();
-  router.setFormationParams({ perPointHandful });
+  router.formation.endDefine();
+  router.formation.setParams({ perPointHandful });
   router.params.set('handfulRadius', 20);
 
   recorder.start('action');

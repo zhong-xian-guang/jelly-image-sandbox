@@ -8,6 +8,8 @@ export type {
   ToolId,
   ToolRouterOptions,
   FormationParams,
+  FormationControls,
+  FormationActiveGroup,
   ModalToolId,
   ToolMode,
   ToolModeOf,

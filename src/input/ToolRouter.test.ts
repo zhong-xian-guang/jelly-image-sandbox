@@ -501,10 +501,10 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
   it('定義兩點後在果凍上拖曳 → 兩個 grab（id 相異）+ 同步的 moveGrab + 兩個 release', () => {
     const { router, events } = makeRouter();
     selectGrab(router, 'formation');
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(1, 0, 0, 0); // 世界座標 (1000, 1000)：主點，偏移 (0,0)
     router.down(1, 10, 0, 0); // 世界座標 (1010, 1000)：偏移 (10, 0)
-    router.endFormationDefine();
+    router.formation.endDefine();
 
     router.down(2, 100, 100, 0); // 世界座標 (1100, 1100)
     router.move(2, 120, 100);
@@ -523,7 +523,7 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
   it('定義中的 down 不 emit 任何事件（只記點）', () => {
     const { router, events } = makeRouter();
     selectGrab(router, 'formation');
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(1, 0, 0, 0);
     router.down(1, 10, 0, 0);
     router.down(1, 20, 0, 0);
@@ -540,10 +540,10 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
       hitTest: (w) => w.x < 1110,
     });
     selectGrab(router, 'formation');
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(1, 0, 0, 0); // (1000, 1000)
     router.down(1, 10, 0, 0); // (1010, 1000) → 偏移 (10, 0)
-    router.endFormationDefine();
+    router.formation.endDefine();
 
     router.down(2, 100, 100, 0); // 世界座標 (1100, 1100)：主點在內、偏移點 (1110,1100) 在外
     // 按久一點（> tapMaxMs）避免同時觸發編隊輕拍（issue #81）——這一則只管
@@ -559,10 +559,10 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
   it('偏移量在拖曳中固定、不隨方向旋轉——不管往哪個方向拖，兩點的相對位移都一致', () => {
     const { router, events } = makeRouter();
     selectGrab(router, 'formation');
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(1, 0, 0, 0);
     router.down(1, 10, 0, 0); // 偏移 (10, 0)
-    router.endFormationDefine();
+    router.formation.endDefine();
 
     router.down(2, 0, 0, 0); // (1000, 1000)
     router.move(2, 5, 30); // 世界座標 (1005, 1030)：往斜下方拖
@@ -578,10 +578,10 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
   it('cancel → 對已附著的每個點送 release（跟一般 Grab 的 cancel 一樣，是活著的約束要真的放開）', () => {
     const { router, events } = makeRouter();
     selectGrab(router, 'formation');
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(1, 0, 0, 0);
     router.down(1, 10, 0, 0);
-    router.endFormationDefine();
+    router.formation.endDefine();
 
     router.down(2, 0, 0, 0);
     router.cancel(2);
@@ -593,21 +593,21 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
   it('重新設定形狀（再呼叫一次 begin/end）→ 覆蓋掉舊形狀', () => {
     const { router, events } = makeRouter();
     selectGrab(router, 'formation');
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(1, 0, 0, 0);
     router.down(1, 10, 0, 0);
-    router.endFormationDefine();
-    expect(router.formationShape).toEqual([
+    router.formation.endDefine();
+    expect(router.formation.shape).toEqual([
       { x: 0, y: 0 },
       { x: 10, y: 0 },
     ]);
 
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(1, 0, 0, 0);
     router.down(1, 0, 20, 0);
     router.down(1, 0, -20, 0);
-    router.endFormationDefine();
-    expect(router.formationShape).toEqual([
+    router.formation.endDefine();
+    expect(router.formation.shape).toEqual([
       { x: 0, y: 0 },
       { x: 0, y: 20 },
       { x: 0, y: -20 },
@@ -619,22 +619,22 @@ describe('ToolRouter — 編隊抓取（issue #68 / V2 T3-4）', () => {
 
   it('endFormationDefine 沒記到任何點 → 保留舊形狀不動', () => {
     const { router } = makeRouter();
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(1, 0, 0, 0);
-    router.endFormationDefine();
-    const shape = router.formationShape;
+    router.formation.endDefine();
+    const shape = router.formation.shape;
 
-    router.beginFormationDefine();
-    router.endFormationDefine(); // 沒有任何 down
-    expect(router.formationShape).toEqual(shape);
+    router.formation.beginDefine();
+    router.formation.endDefine(); // 沒有任何 down
+    expect(router.formation.shape).toEqual(shape);
   });
 
   it('切回一般操作 → 編隊抓取的 down 不再作用；切回編隊抓取後形狀仍在，恢復正常', () => {
     const { router, events } = makeRouter();
     selectGrab(router, 'formation');
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(1, 0, 0, 0);
-    router.endFormationDefine();
+    router.formation.endDefine();
 
     selectGrab(router, 'single');
     router.down(2, 0, 0, 0); // 一般操作的 grab
@@ -659,22 +659,22 @@ describe('ToolRouter — 編隊形狀的懸停預覽（issue #79 / V2 T3-8）', 
   function withShape() {
     const made = makeRouter();
     selectGrab(made.router, 'formation');
-    made.router.beginFormationDefine();
+    made.router.formation.beginDefine();
     made.router.down(1, 0, 0, 0);
     made.router.down(1, 10, 0, 0);
     made.router.down(1, 0, 20, 0);
-    made.router.endFormationDefine();
+    made.router.formation.endDefine();
     return made;
   }
 
   it('還沒定義過形狀 → 沒有預覽點（沒有東西可預覽）', () => {
     const { router } = makeRouter();
-    expect(router.formationPreviewAt({ x: 500, y: 500 })).toEqual([]);
+    expect(router.formation.previewAt({ x: 500, y: 500 })).toEqual([]);
   });
 
   it('已定義形狀 → 以傳入的世界座標為主點，套上各偏移量', () => {
     const { router } = withShape();
-    expect(router.formationPreviewAt({ x: 500, y: 300 })).toEqual([
+    expect(router.formation.previewAt({ x: 500, y: 300 })).toEqual([
       { x: 500, y: 300 },
       { x: 510, y: 300 },
       { x: 500, y: 320 },
@@ -685,18 +685,18 @@ describe('ToolRouter — 編隊形狀的懸停預覽（issue #79 / V2 T3-8）', 
   // ——預覽是那個行為的事前呈現，換個主點只能是整組平移。
   it('換一個主點 → 整組平移，點與點的相對關係完全不變', () => {
     const { router } = withShape();
-    const a = router.formationPreviewAt({ x: 0, y: 0 });
-    const b = router.formationPreviewAt({ x: -40, y: 70 });
+    const a = router.formation.previewAt({ x: 0, y: 0 });
+    const b = router.formation.previewAt({ x: -40, y: 70 });
     expect(b).toEqual(a.map((p) => ({ x: p.x - 40, y: p.y + 70 })));
   });
 
   it('重新設定形狀 → 預覽跟著換成新形狀', () => {
     const { router } = withShape();
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(1, 0, 0, 0);
     router.down(1, -5, -5, 0);
-    router.endFormationDefine();
-    expect(router.formationPreviewAt({ x: 100, y: 100 })).toEqual([
+    router.formation.endDefine();
+    expect(router.formation.previewAt({ x: 100, y: 100 })).toEqual([
       { x: 100, y: 100 },
       { x: 95, y: 95 },
     ]);
@@ -706,8 +706,8 @@ describe('ToolRouter — 編隊形狀的懸停預覽（issue #79 / V2 T3-8）', 
   it('讀預覽不送出任何 InputEvent', () => {
     const { router, events } = withShape();
     const before = events.length;
-    router.formationPreviewAt({ x: 1, y: 2 });
-    router.formationPreviewAt({ x: 3, y: 4 });
+    router.formation.previewAt({ x: 1, y: 2 });
+    router.formation.previewAt({ x: 3, y: 4 });
     expect(events.length).toBe(before);
   });
 });
@@ -717,10 +717,10 @@ describe('ToolRouter — 編隊抓取的輕拍（issue #81 / V2 T3-9）', () => 
   function withShape(extra?: Partial<ToolRouterOptions>) {
     const made = makeRouter(undefined, undefined, extra);
     selectGrab(made.router, 'formation');
-    made.router.beginFormationDefine();
+    made.router.formation.beginDefine();
     made.router.down(1, 0, 0, 0);
     made.router.down(1, 10, 0, 0);
-    made.router.endFormationDefine();
+    made.router.formation.endDefine();
     made.events.length = 0; // 定義階段不 emit，清掉以防萬一
     return made;
   }
@@ -780,9 +780,9 @@ describe('ToolRouter — 編隊抓取的輕拍（issue #81 / V2 T3-9）', () => 
   it('沿用注入的 GestureConfig 門檻（與一般操作同一組）', () => {
     const made = makeRouter({ tapMaxMs: 50 });
     selectGrab(made.router, 'formation');
-    made.router.beginFormationDefine();
+    made.router.formation.beginDefine();
     made.router.down(1, 0, 0, 0);
-    made.router.endFormationDefine();
+    made.router.formation.endDefine();
     made.events.length = 0;
 
     made.router.down(2, 0, 0, 0);
@@ -824,7 +824,7 @@ describe('ToolRouter — 編隊抓取的輕拍（issue #81 / V2 T3-9）', () => 
     const count = events.length;
     router.up(2, 100, 100, 150);
     expect(events.length).toBe(count);
-    expect(router.formationActiveGroups).toEqual([]);
+    expect(router.formation.activeGroups).toEqual([]);
   });
 });
 
@@ -1269,10 +1269,10 @@ describe('ToolRouter — 工具與模式（issue #122 / V4 T1；ADR-0016）', ()
   it('編隊模式 = 原本的編隊抓取：每個偏移點各一個 grab，放開各自 release', () => {
     const { router, events } = makeRouter();
     router.setMode('grab', 'formation');
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(9, 0, 0, 0);
     router.down(10, 10, 0, 0);
-    router.endFormationDefine();
+    router.formation.endDefine();
     router.down(1, 100, 100, 0);
     router.up(1, 100, 100, 500);
     expect(events).toEqual([
@@ -1323,10 +1323,10 @@ describe('ToolRouter — 工具與模式（issue #122 / V4 T1；ADR-0016）', ()
   it('拖曳中切模式（編隊 → 單點）：這一組照舊整組跟隨、整組放開', () => {
     const { router, events } = makeRouter();
     router.setMode('grab', 'formation');
-    router.beginFormationDefine();
+    router.formation.beginDefine();
     router.down(9, 0, 0, 0);
     router.down(10, 10, 0, 0);
-    router.endFormationDefine();
+    router.formation.endDefine();
     router.down(1, 0, 0, 0);
     router.cycleMode(); // → 單點
     router.move(1, 5, 0);
@@ -1503,18 +1503,18 @@ describe('ToolRouter — 編隊抓取的每點大把（issue #135；GLOSSARY.md�
   function withShape(perPointHandful: boolean, extra?: Partial<ToolRouterOptions>) {
     const made = makeRouter(undefined, undefined, extra);
     selectGrab(made.router, 'formation');
-    made.router.beginFormationDefine();
+    made.router.formation.beginDefine();
     made.router.down(1, 0, 0, 0);
     made.router.down(1, 10, 0, 0);
-    made.router.endFormationDefine();
-    made.router.setFormationParams({ perPointHandful });
+    made.router.formation.endDefine();
+    made.router.formation.setParams({ perPointHandful });
     made.events.length = 0;
     return made;
   }
 
   it('開關預設關閉', () => {
     const { router } = makeRouter();
-    expect(router.perPointHandful).toBe(false);
+    expect(router.formation.perPointHandful).toBe(false);
   });
 
   it('關閉：編隊的 grab 不帶 handfulRadius（跟原本的編隊抓取一樣）', () => {
@@ -1584,7 +1584,7 @@ describe('ToolRouter — 編隊抓取的每點大把（issue #135；GLOSSARY.md�
     const { router, events } = withShape(true);
     router.params.set('handfulRadius', 60);
     router.down(2, 100, 100, 0);
-    router.setFormationParams({ perPointHandful: false });
+    router.formation.setParams({ perPointHandful: false });
     router.params.set('handfulRadius', 200);
     router.up(2, 100, 100, 100);
     expect(events.filter((e) => e.type === 'tap')).toEqual([
@@ -1600,7 +1600,7 @@ describe('ToolRouter — 編隊抓取的每點大把（issue #135；GLOSSARY.md�
   it('按下後才打開開關：進行中這一抓仍是單點編隊（tap 不帶 radius）', () => {
     const { router, events } = withShape(false);
     router.down(2, 100, 100, 0);
-    router.setFormationParams({ perPointHandful: true });
+    router.formation.setParams({ perPointHandful: true });
     router.up(2, 100, 100, 100);
     expect(events.filter((e) => e.type === 'tap')).toEqual([
       { type: 'tap', x: 1100, y: 1100 },
@@ -1614,11 +1614,11 @@ describe('ToolRouter — 編隊抓取的每點大把（issue #135；GLOSSARY.md�
     on.router.params.set('handfulRadius', 70);
     on.router.down(2, 100, 100, 0);
     on.router.params.set('handfulRadius', 300);
-    expect(on.router.formationActiveGroups.map((g) => g.handfulRadius)).toEqual([70]);
+    expect(on.router.formation.activeGroups.map((g) => g.handfulRadius)).toEqual([70]);
 
     const off = withShape(false);
     off.router.down(2, 100, 100, 0);
-    expect(off.router.formationActiveGroups.map((g) => g.handfulRadius)).toEqual([null]);
+    expect(off.router.formation.activeGroups.map((g) => g.handfulRadius)).toEqual([null]);
   });
 
   it('右鍵＋滾輪：開關開啟時編隊模式調大把半徑（跟大把模式同一條）；關閉時回報「不處理」', () => {
@@ -1627,7 +1627,7 @@ describe('ToolRouter — 編隊抓取的每點大把（issue #135；GLOSSARY.md�
     expect(router.adjustActiveValue(1)).toBeNull();
     expect(router.activeValue).toBeNull();
 
-    router.setFormationParams({ perPointHandful: true });
+    router.formation.setParams({ perPointHandful: true });
     expect(router.activeValue).toEqual({ key: 'handfulRadius', value: 140 });
     expect(router.adjustActiveValue(2)).toEqual({
       key: 'handfulRadius',
@@ -1643,7 +1643,7 @@ describe('ToolRouter — 編隊抓取的每點大把（issue #135；GLOSSARY.md�
 
   it('開關只影響編隊模式：單點模式照舊沒有數值', () => {
     const { router } = makeRouter();
-    router.setFormationParams({ perPointHandful: true });
+    router.formation.setParams({ perPointHandful: true });
     expect(router.adjustActiveValue(1)).toBeNull();
   });
 });
@@ -1652,7 +1652,7 @@ describe('ToolRouter — 定義編隊形狀途中鎖住抓取工具的模式（i
   function defining() {
     const made = makeRouter();
     selectGrab(made.router, 'formation');
-    made.router.beginFormationDefine();
+    made.router.formation.beginDefine();
     return made;
   }
 
@@ -1660,7 +1660,7 @@ describe('ToolRouter — 定義編隊形狀途中鎖住抓取工具的模式（i
     const { router } = defining();
     expect(router.cycleMode()).toBeNull();
     expect(router.modeOf('grab')).toBe('formation');
-    router.endFormationDefine();
+    router.formation.endDefine();
     expect(router.cycleMode()).toBe('single');
   });
 
@@ -1671,7 +1671,7 @@ describe('ToolRouter — 定義編隊形狀途中鎖住抓取工具的模式（i
     router.down(1, 0, 0, 0);
     router.up(1, 0, 0, 50);
     expect(events).toEqual([]);
-    expect(router.formationDefinePreview).toEqual([{ x: 1000, y: 1000 }]);
+    expect(router.formation.definePreview).toEqual([{ x: 1000, y: 1000 }]);
   });
 
   it('別的工具的模式不受影響', () => {

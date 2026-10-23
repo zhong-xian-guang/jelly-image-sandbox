@@ -639,7 +639,7 @@ export class JellySandbox {
         spraySpacing: this.toolParams.get('spraySpacing'),
         handfulRadius: this.toolParams.get('handfulRadius'),
         showHandfulRange: this.hintIntent.handfulRange,
-        formationPerPointHandful: this.router.perPointHandful,
+        formationPerPointHandful: this.router.formation.perPointHandful,
         hideHintsDuringPlayback: this.hideHintsDuringPlayback,
         importSize: this.importSize,
         meshDensity: this.meshDensity,
@@ -672,7 +672,7 @@ export class JellySandbox {
         this.toolParams.set('fanFalloffExponent', falloffExponent),
       onFanFrequencyChange: (frequency) => this.toolParams.set('fanFrequency', frequency),
       onFormationDefineStart: () => this.beginFormationDefine(),
-      onFormationDefineEnd: () => this.router.endFormationDefine(),
+      onFormationDefineEnd: () => this.router.formation.endDefine(),
       onShowFormationHintChange: (visible) => this.setHintVisible('formation', visible),
       onPinBrushRadiusChange: (radius) => this.toolParams.set('pinBrushRadius', radius),
       onSpraySpacingChange: (spacing) => this.toolParams.set('spraySpacing', spacing),
@@ -680,7 +680,7 @@ export class JellySandbox {
       onShowHandfulRangeChange: (visible) => this.setHintVisible('handfulRange', visible),
       // 每點大把（issue #135）：只影響下一次按下；範圍圈與游標標籤每幀自己重算。
       onFormationPerPointHandfulChange: (enabled) =>
-        this.router.setFormationParams({ perPointHandful: enabled }),
+        this.router.formation.setParams({ perPointHandful: enabled }),
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onImportSizeChange: (size) => this.setImportSize(size),
       onMeshDensityChange: (density) => this.setMeshDensity(density),
@@ -1395,7 +1395,7 @@ export class JellySandbox {
    */
   private beginFormationDefine(): void {
     if (!this.isGrabMode('formation')) this.setToolMode('grab', 'formation');
-    this.router.beginFormationDefine();
+    this.router.formation.beginDefine();
   }
 
   /**
@@ -1405,7 +1405,7 @@ export class JellySandbox {
    */
   private updateFormationDefineHint(): void {
     this.formationDefineHint.setVisible(
-      this.router.isDefiningFormation &&
+      this.router.formation.isDefining &&
         this.isGrabMode('formation') &&
         !this.hintsSuppressed &&
         !this.cleanView.isActive,
@@ -1443,8 +1443,8 @@ export class JellySandbox {
   private updateCursorLabel(): void {
     const tool = this.activeTool;
     const mode = this.router.modeOf(tool);
-    const shape = this.router.formationShape;
-    const formation: FormationShapeState = this.router.isDefiningFormation
+    const shape = this.router.formation.shape;
+    const formation: FormationShapeState = this.router.formation.isDefining
       ? 'defining'
       : shape && shape.length > 0
         ? 'ready'
@@ -2511,7 +2511,7 @@ export class JellySandbox {
    *
    * - **大把模式**：一顆，在游標處；拖曳中 `canvasHover` 照樣更新，圈跟著游標。
    * - **編隊拖曳中**：每個這一抓真的抓到的點各一顆，半徑是按下當下的那個
-   *   （`formationActiveGroups[].handfulRadius`；單點編隊的那一抓不畫）。按下之後才切走
+   *   （`formation.activeGroups[].handfulRadius`；單點編隊的那一抓不畫）。按下之後才切走
    *   模式或關掉開關，這一抓仍照畫到放開——跟 `formationOverlayGroups` 同一條規則。
    * - **編隊＋每點大把、沒有進行中的一抓**：定義形狀中畫在已經點下的每個點上；否則畫在
    *   游標＋各偏移的位置（跟形狀預覽同一組點）。
@@ -2527,7 +2527,7 @@ export class JellySandbox {
     });
     const hover = this.canvasHover.point;
     const handfulRadius = this.toolParams.get('handfulRadius');
-    const active = this.router.formationActiveGroups;
+    const active = this.router.formation.activeGroups;
     const circles: HandfulRangeCircle[] = [];
     for (const group of active) {
       const radius = group.handfulRadius;
@@ -2535,11 +2535,15 @@ export class JellySandbox {
     }
     if (this.isGrabMode('handful')) {
       if (hover) circles.push({ x: hover.x, y: hover.y, radiusPx: handfulRadius * scale });
-    } else if (this.isGrabMode('formation') && this.router.perPointHandful && active.length === 0) {
-      const points = this.router.isDefiningFormation
-        ? this.router.formationDefinePreview
+    } else if (
+      this.isGrabMode('formation') &&
+      this.router.formation.perPointHandful &&
+      active.length === 0
+    ) {
+      const points = this.router.formation.isDefining
+        ? this.router.formation.definePreview
         : hover
-          ? this.router.formationPreviewAt(
+          ? this.router.formation.previewAt(
               screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y),
             )
           : [];
@@ -2553,7 +2557,7 @@ export class JellySandbox {
    * ——三種狀態依序優先，任一時刻只會是其中一種：
    *
    * 1. **定義形狀中**：畫已經點下的那幾個點（還在累積，尚未成為形狀）。
-   * 2. **拖曳中**：畫每個作用中手勢真正抓到的點（`formationActiveGroups` 只列
+   * 2. **拖曳中**：畫每個作用中手勢真正抓到的點（`formation.activeGroups` 只列
    *    `attached`，落在果凍外被跳過的偏移點不畫——issue #68 原設計）。
    * 3. **閒置**：形狀已定義、指標在畫布上 → 以指標處為主點畫整組形狀，按下去
    *    之前就看得到「這一下會抓哪幾點」。少了這一段，那顆顯示開關在平常什麼
@@ -2562,26 +2566,26 @@ export class JellySandbox {
    *
    * 按下的瞬間 3 換成 2：兩者都以指標為主點、偏移量相同，視覺上是同一組點接手，
    * 不會跳位。唯一的例外是「按下時整組點**一個都沒命中**果凍」——那時
-   * `ToolRouter` 根本不建立 session（沒有任何 `grab` 送出去），`formationActiveGroups`
+   * 編隊 adapter 根本不建立 session（沒有任何 `grab` 送出去），`formation.activeGroups`
    * 是空的，於是落回 3 繼續畫預覽跟著游標。這是刻意的：那一下什麼都沒抓到，
    * 讓形狀繼續顯示才看得出「剛才那下落在果凍外了」，畫面整個空掉反而像壞了。
    */
   private formationOverlayGroups(canvasSize: CanvasSize): FormationOverlayGroup[] {
     const project = (p: Point) => worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
     // 進行中的編隊手勢照畫到放開為止：按下之後才切走模式，這一組仍被抓著（issue #122）。
-    const active = this.router.formationActiveGroups;
+    const active = this.router.formation.activeGroups;
     if (active.length > 0) {
       return active.map((g) => ({ points: g.points.map(project) }));
     }
     // 定義中的點與懸停預覽只在編隊模式出現（issue #122）。
     if (!this.isGrabMode('formation')) return [];
-    if (this.router.isDefiningFormation) {
-      return [{ points: this.router.formationDefinePreview.map(project) }];
+    if (this.router.formation.isDefining) {
+      return [{ points: this.router.formation.definePreview.map(project) }];
     }
     const hover = this.canvasHover.point;
     if (!hover) return [];
     const anchor = screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y);
-    const preview = this.router.formationPreviewAt(anchor);
+    const preview = this.router.formation.previewAt(anchor);
     return preview.length > 0 ? [{ points: preview.map(project) }] : [];
   }
 
