@@ -8,9 +8,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CleanView } from './CleanView';
-import { ControlPanel, type ControlPanelOptions, type TrackListRow } from './ControlPanel';
+import { clipAllows, type ClipPhase } from './Clip';
+import {
+  ControlPanel,
+  type ClipStatus,
+  type ControlPanelOptions,
+  type TrackListRow,
+} from './ControlPanel';
+import type { ToolParamKey } from '../input';
 import { TOOL_HELP_LINES } from './helpText';
 import { PANEL_LAYOUT_STORAGE_KEY, type KeyValueStorage } from './panelLayout';
+
+/** `setClipStatus` 的參數：某個 phase 下 `Clip` 會交給面板的狀態（許可規則用真的那份）。 */
+function clipStatus(phase: ClipPhase, paused = false): ClipStatus {
+  return { phase, paused, allows: (action) => clipAllows(phase, action) };
+}
 
 /** 記憶體版的 `localStorage`（issue #128）——每個測試各拿一份，展開狀態不會跨測試殘留。 */
 function memoryStorage(initial: Record<string, string> = {}): KeyValueStorage {
@@ -86,16 +98,10 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onRemoveFan: vi.fn(),
     onShowFanRangeChange: vi.fn(),
     onShowFanIconChange: vi.fn(),
-    onFanWidthChange: vi.fn(),
-    onFanStrengthChange: vi.fn(),
-    onFanFalloffChange: vi.fn(),
-    onFanFrequencyChange: vi.fn(),
+    onToolParamChange: vi.fn(),
     onFormationDefineStart: vi.fn(),
     onFormationDefineEnd: vi.fn(),
     onShowFormationHintChange: vi.fn(),
-    onPinBrushRadiusChange: vi.fn(),
-    onSpraySpacingChange: vi.fn(),
-    onHandfulRadiusChange: vi.fn(),
     onShowHandfulRangeChange: vi.fn(),
     onFormationPerPointHandfulChange: vi.fn(),
     onHideHintsDuringPlaybackChange: vi.fn(),
@@ -278,7 +284,7 @@ describe('ControlPanel — 依群組分區的 Track 清單（issue #43）', () =
     panel.setGroups(groupRows());
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
     panel.setPlayableTrackCount(1);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
 
     const controls = [
       ...panel.element.querySelectorAll('.jelly-group-section input, .jelly-group-section button'),
@@ -286,7 +292,7 @@ describe('ControlPanel — 依群組分區的 Track 清單（issue #43）', () =
     expect(controls.length).toBeGreaterThan(0);
     expect(controls.every((c) => c.disabled)).toBe(true);
 
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(controls.every((c) => !c.disabled)).toBe(true);
   });
 
@@ -344,14 +350,14 @@ describe('ControlPanel — 片段初始 Pin 列（issue #39）', () => {
   it('錄製中 / 播放中 → 兩顆鈕變灰，結束後解鎖（不受 Track 數量影響）', () => {
     expect(buttons().every((b) => !b.disabled)).toBe(true);
 
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(buttons().every((b) => b.disabled)).toBe(true);
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(buttons().every((b) => !b.disabled)).toBe(true);
 
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(buttons().every((b) => b.disabled)).toBe(true);
-    panel.setPlaybackControlsEnabled(true);
+    panel.setClipStatus(clipStatus('idle'));
     expect(buttons().every((b) => !b.disabled)).toBe(true);
   });
 });
@@ -401,12 +407,12 @@ describe('ControlPanel — 「設為初始位置」（issue #155）', () => {
     panel.setGroups(groupRows());
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
     poseButton().click();
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(poseButton().disabled).toBe(true);
     expect(poseButton().textContent).toBe('設為初始位置');
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(poseButton().disabled).toBe(false);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(poseButton().disabled).toBe(true);
   });
 });
@@ -460,17 +466,17 @@ describe('ControlPanel — Track 清單內改名（issue #54 / V2 T2-1）', () =
 
   it('錄製中 → 名稱欄位一併鎖住，結束後解鎖', () => {
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(labelInput().disabled).toBe(true);
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(labelInput().disabled).toBe(false);
   });
 
   it('播放中 → 名稱欄位一併鎖住', () => {
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(labelInput().disabled).toBe(true);
-    panel.setPlaybackControlsEnabled(true);
+    panel.setClipStatus(clipStatus('idle'));
     expect(labelInput().disabled).toBe(false);
   });
 });
@@ -496,8 +502,8 @@ describe('ControlPanel — 匯入圖片按鈕（issue #56）', () => {
       b.textContent?.includes('匯入圖片'),
     )!;
 
-    panel.setPlaybackControlsEnabled(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('recording'));
 
     expect(button.disabled).toBe(false);
     button.click();
@@ -526,8 +532,8 @@ describe('ControlPanel — 儲存片段按鈕（issue #57 / V2 T2-4）', () => {
       (b) => b.textContent === '儲存片段',
     )!;
 
-    panel.setPlaybackControlsEnabled(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('recording'));
 
     expect(button.disabled).toBe(false);
     button.click();
@@ -556,8 +562,8 @@ describe('ControlPanel — 載入片段按鈕（issue #58 / V2 T2-5）', () => {
       b.textContent?.includes('載入片段'),
     )!;
 
-    panel.setPlaybackControlsEnabled(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('recording'));
 
     expect(button.disabled).toBe(false);
     button.click();
@@ -811,10 +817,10 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
       ([...panel.element.querySelectorAll('.jelly-toolbar button')] as HTMLButtonElement[])
         .filter((b) => b.disabled)
         .map((b) => b.dataset.tool);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(disabled()).toEqual([]);
-    panel.setPlaybackControlsEnabled(true);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('idle'));
+    panel.setClipStatus(clipStatus('recording'));
     expect(disabled()).toEqual([]);
   });
 });
@@ -1025,8 +1031,8 @@ describe('ControlPanel — 顯示游標標籤開關（issue #122）', () => {
     const panel = new ControlPanel(makeOptions());
     const checkbox = cursorLabelCheckbox(panel);
     expect(checkbox.closest('.jelly-tool-section')).toBeNull();
-    panel.setPlaybackControlsEnabled(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('recording'));
     expect(checkbox.disabled).toBe(false);
   });
 });
@@ -1122,7 +1128,7 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(opts.onShowFanIconChange).toHaveBeenCalledWith(true);
   });
 
-  it('「風扇寬度」滑桿初始值來自 initial.fanWidth，拖動觸發 onFanWidthChange', () => {
+  it('「風扇寬度」滑桿初始值來自 initial.fanWidth，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '風扇寬度');
@@ -1130,10 +1136,10 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(Number(input.value)).toBe(opts.initial.fanWidth);
     input.value = '300';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onFanWidthChange).toHaveBeenCalledWith(300);
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('fanWidth', 300);
   });
 
-  it('「風扇強度」滑桿初始值來自 initial.fanStrength，拖動觸發 onFanStrengthChange', () => {
+  it('「風扇強度」滑桿初始值來自 initial.fanStrength，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '風扇強度');
@@ -1141,10 +1147,10 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(Number(input.value)).toBe(opts.initial.fanStrength);
     input.value = '9000';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onFanStrengthChange).toHaveBeenCalledWith(9000);
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('fanStrength', 9000);
   });
 
-  it('「風扇衰減程度」滑桿初始值來自 initial.fanFalloffExponent，拖動觸發 onFanFalloffChange', () => {
+  it('「風扇衰減程度」滑桿初始值來自 initial.fanFalloffExponent，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '風扇衰減程度');
@@ -1152,10 +1158,10 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(Number(input.value)).toBe(opts.initial.fanFalloffExponent);
     input.value = '0.5';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onFanFalloffChange).toHaveBeenCalledWith(0.5);
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('fanFalloffExponent', 0.5);
   });
 
-  it('「風扇頻率」滑桿初始值來自 initial.fanFrequency，拖動觸發 onFanFrequencyChange', () => {
+  it('「風扇頻率」滑桿初始值來自 initial.fanFrequency，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '風扇頻率');
@@ -1163,7 +1169,7 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(Number(input.value)).toBe(opts.initial.fanFrequency);
     input.value = '5';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onFanFrequencyChange).toHaveBeenCalledWith(5);
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('fanFrequency', 5);
   });
 });
 
@@ -1296,18 +1302,18 @@ describe('ControlPanel — Pin 工具（issue #123 / V4 T2）', () => {
     expect(Number(input.value)).toBe(120);
     input.value = '300';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onPinBrushRadiusChange).toHaveBeenCalledWith(300);
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('pinBrushRadius', 300);
   });
 
-  it('「撒 Pin 間距」拉霸初始值來自 initial.spraySpacing，拖動觸發 onSpraySpacingChange', () => {
+  it('「撒 Pin 間距」拉霸初始值來自 initial.spraySpacing，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '撒 Pin 間距');
     expect(Number(input.value)).toBe(opts.initial.spraySpacing);
     input.value = '20';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onSpraySpacingChange).toHaveBeenCalledWith(20);
-    expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('spraySpacing', 20);
+    expect(opts.onToolParamChange).not.toHaveBeenCalledWith('pinBrushRadius', expect.anything());
   });
 });
 
@@ -1345,11 +1351,11 @@ describe('ControlPanel — 播放時隱藏提示（issue #71 / V2 T3-7）', () =
 
   // 驗收條件：這個開關「本身不受播放狀態影響、隨時可切換」——播放中鎖住的是
   // Demo／錄製／Track 清單那一批，不包含它。
-  it('播放中／錄製中仍可切換（不被 setPlaybackControlsEnabled／setRecordingActive 鎖住）', () => {
+  it('播放中／錄製中仍可切換（不被錄製／播放鎖住）', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
-    panel.setPlaybackControlsEnabled(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('recording'));
 
     const checkbox = findHideHintsCheckbox(panel);
     expect(checkbox.disabled).toBe(false);
@@ -1408,10 +1414,10 @@ describe('ControlPanel — 匯入區塊：匯入尺寸拉霸（issue #88 / V3 T1
   it('不受播放／錄製鎖定影響（拉霸只管「下一次」匯入）', () => {
     const panel = new ControlPanel(makeOptions());
     const input = findRangeInputByLabel(panel, '匯入尺寸');
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(input.disabled).toBe(false);
-    panel.setRecordingActive(false);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('idle'));
+    panel.setClipStatus(clipStatus('playing'));
     expect(input.disabled).toBe(false);
   });
 });
@@ -1454,10 +1460,10 @@ describe('ControlPanel — 匯入區塊：網格密度拉霸（issue #89 / V3 T1
   it('不受播放／錄製鎖定影響（拉霸只管「下一次」匯入）', () => {
     const panel = new ControlPanel(makeOptions());
     const input = findRangeInputByLabel(panel, '網格密度');
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(input.disabled).toBe(false);
-    panel.setRecordingActive(false);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('idle'));
+    panel.setClipStatus(clipStatus('playing'));
     expect(input.disabled).toBe(false);
   });
 });
@@ -1485,22 +1491,22 @@ describe('ControlPanel — 匯入區塊：「全部重建」按鈕（issue #90 /
     const button = rebuildButton(panel);
     expect(button.disabled).toBe(false);
 
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(button.disabled).toBe(true);
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(button.disabled).toBe(false);
 
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(button.disabled).toBe(true);
-    panel.setPlaybackControlsEnabled(true);
+    panel.setClipStatus(clipStatus('idle'));
     expect(button.disabled).toBe(false);
 
     // 有 Track 也一樣：鎖與解鎖只看錄製／播放狀態。
     panel.setGroups(groupRows());
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(button.disabled).toBe(true);
-    panel.setPlaybackControlsEnabled(true);
+    panel.setClipStatus(clipStatus('idle'));
     expect(button.disabled).toBe(false);
   });
 });
@@ -1527,13 +1533,13 @@ describe('ControlPanel — 「清空全部」按鈕（issue #95 / V3 T3-2；ADR-
     const panel = new ControlPanel(makeOptions());
     const button = clearAllButton(panel);
     expect(button.disabled).toBe(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(button.disabled).toBe(true);
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(button.disabled).toBe(false);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(button.disabled).toBe(true);
-    panel.setPlaybackControlsEnabled(true);
+    panel.setClipStatus(clipStatus('idle'));
     expect(button.disabled).toBe(false);
   });
 });
@@ -1555,7 +1561,7 @@ describe('ControlPanel — 大把抓取控制項（issue #113；issue #122 併�
     expect(handfulParams(panel).hidden).toBe(true);
   });
 
-  it('「大把抓取半徑」拉霸範圍與初始值來自 options，拖動觸發 onHandfulRadiusChange', () => {
+  it('「大把抓取半徑」拉霸範圍與初始值來自 options，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions({ initial: { ...makeOptions().initial, handfulRadius: 180 } });
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '大把抓取半徑');
@@ -1564,8 +1570,8 @@ describe('ControlPanel — 大把抓取控制項（issue #113；issue #122 併�
 
     input.value = '260';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onHandfulRadiusChange).toHaveBeenCalledWith(260);
-    expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('handfulRadius', 260);
+    expect(opts.onToolParamChange).not.toHaveBeenCalledWith('pinBrushRadius', expect.anything());
   });
 
   it('「顯示大把抓取範圍」checkbox 初始值來自 initial.showHandfulRange，切換觸發回呼', () => {
@@ -1609,23 +1615,22 @@ describe('ControlPanel — 大把抓取控制項（issue #113；issue #122 併�
 });
 
 describe('ControlPanel — 右鍵＋滾輪調數值的拉霸同步（issue #114；issue #122 推廣）', () => {
-  it('setModeValue 只動對應數值的拉霸，不觸發 onChange 回呼', () => {
+  it('setToolParam 只動對應數值的拉霸，不觸發 onChange 回呼', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const pinBrush = findRangeInputByLabel(panel, 'Pin 筆刷半徑');
     const handful = findRangeInputByLabel(panel, '大把抓取半徑');
     const before = handful.value;
 
-    panel.setModeValue('pinBrushRadius', 230);
+    panel.setToolParam('pinBrushRadius', 230);
     expect([pinBrush.value, handful.value]).toEqual(['230', before]);
-    panel.setModeValue('handfulRadius', 310);
+    panel.setToolParam('handfulRadius', 310);
     expect([pinBrush.value, handful.value]).toEqual(['230', '310']);
 
-    expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
-    expect(opts.onHandfulRadiusChange).not.toHaveBeenCalled();
+    expect(opts.onToolParamChange).not.toHaveBeenCalled();
   });
 
-  it('電風扇四個參數（issue #125）：setModeValue 各自灌回對應的拉霸，不觸發回呼', () => {
+  it('電風扇四個參數（issue #125）：setToolParam 各自灌回對應的拉霸，不觸發回呼', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const cases = [
@@ -1635,13 +1640,10 @@ describe('ControlPanel — 右鍵＋滾輪調數值的拉霸同步（issue #114�
       ['fanFrequency', '風扇頻率', 0.7],
     ] as const;
     for (const [key, label, value] of cases) {
-      panel.setModeValue(key, value);
+      panel.setToolParam(key, value);
       expect(findRangeInputByLabel(panel, label).value).toBe(String(value));
     }
-    expect(opts.onFanWidthChange).not.toHaveBeenCalled();
-    expect(opts.onFanStrengthChange).not.toHaveBeenCalled();
-    expect(opts.onFanFalloffChange).not.toHaveBeenCalled();
-    expect(opts.onFanFrequencyChange).not.toHaveBeenCalled();
+    expect(opts.onToolParamChange).not.toHaveBeenCalled();
   });
 });
 
@@ -1718,6 +1720,17 @@ describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () =>
     expect(expandedSections(panel)).toEqual(['physics']);
     expect(sectionHeader(panel, 'physics').getAttribute('aria-expanded')).toBe('true');
     expect(sectionHeader(panel, 'import').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('Demo 按鈕：不允許播放時（錄製中、播放中）鎖住，回到閒置解鎖（issue #164）', () => {
+    const panel = new ControlPanel(makeOptions({ demos: [{ id: 'd1', label: 'Demo 一' }] }));
+    const demo = buttonByText(panel, 'Demo 一') as HTMLButtonElement;
+    panel.setClipStatus(clipStatus('recording'));
+    expect(demo.disabled).toBe(true);
+    panel.setClipStatus(clipStatus('playing'));
+    expect(demo.disabled).toBe(true);
+    panel.setClipStatus(clipStatus('idle'));
+    expect(demo.disabled).toBe(false);
   });
 
   it('各控制落在表格指定的區', () => {
@@ -1920,7 +1933,7 @@ describe('ControlPanel — 側欄收起（issue #128 / V4 U1）', () => {
   it('收起側欄不影響播放／錄製鎖定規則', () => {
     const panel = new ControlPanel(makeOptions());
     panel.setSidebarCollapsed(true);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(buttonByText(panel, '全部重建').disabled).toBe(true);
     expect(buttonByText(panel, '清空全部').disabled).toBe(true);
     panel.setSidebarCollapsed(false);
@@ -2022,13 +2035,13 @@ describe('ControlPanel — 畫布上的播放控制條（issue #129 / V4 U2）',
 
   it('錄製中：錄製鈕變「■ 停止錄製」且脈動（仍可按），播放鎖住；停止錄製後還原', () => {
     const panel = panelWithTrack();
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     const record = barButton(panel, 'record');
     expect(record.textContent).toBe('■ 停止錄製');
     expect(record.classList.contains('jelly-recording-active')).toBe(true);
     expect(barEnabled(panel)).toEqual([true, false, false, true]);
 
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(record.textContent).toBe('● 錄製');
     expect(record.classList.contains('jelly-recording-active')).toBe(false);
     expect(barEnabled(panel)).toEqual([true, true, false, true]);
@@ -2036,42 +2049,39 @@ describe('ControlPanel — 畫布上的播放控制條（issue #129 / V4 U2）',
 
   it('播放中：錄製、播放鎖住，暫停、停止可按；播完回到閒置', () => {
     const panel = panelWithTrack();
-    panel.setPlaybackControlsEnabled(false);
-    panel.setPlaybackActive(true);
+    panel.setClipStatus(clipStatus('playing'));
     expect(barEnabled(panel)).toEqual([false, false, true, true]);
 
-    panel.setPlaybackControlsEnabled(true);
-    panel.setPlaybackActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(barEnabled(panel)).toEqual([true, true, false, true]);
   });
 
   it('暫停中：暫停鈕變「▶ 繼續」並變色；新一輪播放開始時還原', () => {
     const panel = panelWithTrack();
-    panel.setPlaybackControlsEnabled(false);
-    panel.setPlaybackActive(true);
-    panel.setPaused(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('playing', true));
     const pause = barButton(panel, 'pause');
     expect(pause.textContent).toBe('▶ 繼續');
     expect(pause.classList.contains('jelly-paused-active')).toBe(true);
     expect(barEnabled(panel)).toEqual([false, false, true, true]);
 
-    panel.setPaused(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(pause.textContent).toBe('⏸ 暫停');
     expect(pause.classList.contains('jelly-paused-active')).toBe(false);
 
-    panel.setPaused(true);
-    panel.setPlaybackActive(false);
-    panel.setPlaybackActive(true);
+    panel.setClipStatus(clipStatus('playing', true));
+    panel.setClipStatus(clipStatus('idle'));
+    panel.setClipStatus(clipStatus('playing'));
     expect(pause.textContent).toBe('⏸ 暫停');
   });
 
   it('時間讀數：播放中跟著 setPlaybackTime 走，播完歸零', () => {
     const panel = panelWithTrack();
     const time = panel.playbackBar.querySelector('.jelly-playback-time')!;
-    panel.setPlaybackActive(true);
+    panel.setClipStatus(clipStatus('playing'));
     panel.setPlaybackTime(1.234);
     expect(time.textContent).toBe('1.23 秒');
-    panel.setPlaybackActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(time.textContent).toBe('0.00 秒');
   });
 
@@ -2080,8 +2090,7 @@ describe('ControlPanel — 畫布上的播放控制條（issue #129 / V4 U2）',
     const panel = panelWithTrack(opts);
     barButton(panel, 'record').click();
     barButton(panel, 'play').click();
-    panel.setPlaybackControlsEnabled(false);
-    panel.setPlaybackActive(true);
+    panel.setClipStatus(clipStatus('playing'));
     barButton(panel, 'pause').click();
     barButton(panel, 'stop').click();
     expect(opts.onToggleRecording).toHaveBeenCalledTimes(1);
@@ -2161,8 +2170,8 @@ describe('ControlPanel — 畫布右下角的相機按鈕（issue #129 / V4 U2�
 
   it('播放中／錄製中相機按鈕照常可按（運鏡本來就可錄）', () => {
     const panel = new ControlPanel(makeOptions());
-    panel.setRecordingActive(true);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('recording'));
+    panel.setClipStatus(clipStatus('playing'));
     expect(cameraButton(panel, 'follow-lock').disabled).toBe(false);
     expect(cameraButton(panel, 'frame').disabled).toBe(false);
   });
@@ -2265,17 +2274,17 @@ describe('ControlPanel — 再按一次確認（issue #131 / V4 U4）', () => {
       it('待確認時被鎖住（錄製中／播放中）→ 取消待確認，解鎖後要重新按兩下', () => {
         const { opts, panel, button } = setup();
         button.click();
-        panel.setRecordingActive(true);
+        panel.setClipStatus(clipStatus('recording'));
         expect(button.disabled).toBe(true);
         expect(button.textContent).toBe(label);
         expect(button.classList.contains('jelly-confirm-pending')).toBe(false);
-        panel.setRecordingActive(false);
+        panel.setClipStatus(clipStatus('idle'));
         button.click();
         expect(opts[callback]).not.toHaveBeenCalled();
 
-        panel.setPlaybackControlsEnabled(false);
+        panel.setClipStatus(clipStatus('playing'));
         expect(button.textContent).toBe(label);
-        panel.setPlaybackControlsEnabled(true);
+        panel.setClipStatus(clipStatus('idle'));
         button.click();
         expect(opts[callback]).not.toHaveBeenCalled();
         button.click();
@@ -2381,13 +2390,6 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
       ['重力', 'onGravityChange', 0],
       ['匯入尺寸', 'onImportSizeChange', 512],
       ['網格密度', 'onMeshDensityChange', 350],
-      ['風扇寬度', 'onFanWidthChange', 150],
-      ['風扇強度', 'onFanStrengthChange', 4000],
-      ['風扇衰減程度', 'onFanFalloffChange', 2],
-      ['風扇頻率', 'onFanFrequencyChange', 2],
-      ['Pin 筆刷半徑', 'onPinBrushRadiusChange', 120],
-      ['撒 Pin 間距', 'onSpraySpacingChange', 36],
-      ['大把抓取半徑', 'onHandfulRadiusChange', 140],
     ];
     for (const [text, callback, value] of cases) {
       const input = findRangeInputByLabel(panel, text);
@@ -2396,6 +2398,23 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
       dblclick(input);
       expect(Number(input.value), text).toBe(value);
       expect(opts[callback], text).toHaveBeenLastCalledWith(value);
+    }
+    const toolParamCases: [string, ToolParamKey, number][] = [
+      ['風扇寬度', 'fanWidth', 150],
+      ['風扇強度', 'fanStrength', 4000],
+      ['風扇衰減程度', 'fanFalloffExponent', 2],
+      ['風扇頻率', 'fanFrequency', 2],
+      ['Pin 筆刷半徑', 'pinBrushRadius', 120],
+      ['撒 Pin 間距', 'spraySpacing', 36],
+      ['大把抓取半徑', 'handfulRadius', 140],
+    ];
+    for (const [text, key, value] of toolParamCases) {
+      const input = findRangeInputByLabel(panel, text);
+      input.value = input.max;
+      input.dispatchEvent(new Event('input'));
+      dblclick(input);
+      expect(Number(input.value), text).toBe(value);
+      expect(opts.onToolParamChange, text).toHaveBeenLastCalledWith(key, value);
     }
   });
 
@@ -2406,8 +2425,8 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
     panel.setTapStrength(3000);
     panel.setGravity(1200);
     panel.setMeshDensity(170);
-    panel.setModeValue('pinBrushRadius', 230);
-    panel.setModeValue('handfulRadius', 310);
+    panel.setToolParam('pinBrushRadius', 230);
+    panel.setToolParam('handfulRadius', 310);
 
     expect(valueOf(findRangeInputByLabel(panel, '軟硬度'))).toBe('25%');
     expect(valueOf(findRangeInputByLabel(panel, '輕拍力道'))).toBe('3000');
@@ -2421,14 +2440,13 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
       'onTapStrengthChange',
       'onGravityChange',
       'onMeshDensityChange',
-      'onPinBrushRadiusChange',
-      'onHandfulRadiusChange',
+      'onToolParamChange',
     ] as const) {
       expect(opts[callback], callback).not.toHaveBeenCalled();
     }
   });
 
-  it('電風扇四條拉霸（issue #125 的右鍵＋滾輪）：setModeValue 同步數值顯示、不觸發回呼', () => {
+  it('電風扇四條拉霸（issue #125 的右鍵＋滾輪）：setToolParam 同步數值顯示、不觸發回呼', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const cases = [
@@ -2438,13 +2456,10 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
       ['fanFrequency', '風扇頻率', 0.7, '0.7'],
     ] as const;
     for (const [key, label, value, shown] of cases) {
-      panel.setModeValue(key, value);
+      panel.setToolParam(key, value);
       expect(valueOf(findRangeInputByLabel(panel, label)), label).toBe(shown);
     }
-    expect(opts.onFanWidthChange).not.toHaveBeenCalled();
-    expect(opts.onFanStrengthChange).not.toHaveBeenCalled();
-    expect(opts.onFanFalloffChange).not.toHaveBeenCalled();
-    expect(opts.onFanFrequencyChange).not.toHaveBeenCalled();
+    expect(opts.onToolParamChange).not.toHaveBeenCalled();
   });
 
   it('外部灌值不改預設值：雙擊仍回到建立時的值', () => {

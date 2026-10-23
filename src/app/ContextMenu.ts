@@ -13,6 +13,8 @@
  * 點另一塊就直接換成那一塊的選單，中鍵照樣平移相機。
  */
 
+import type { ClipPhase } from './Clip';
+
 /** 選單的一個項目：`disabledReason` 非 `null` ＝ 變灰，並顯示這段原因。 */
 export interface ContextMenuItem<Id extends string> {
   id: Id;
@@ -24,22 +26,20 @@ export interface ContextMenuItem<Id extends string> {
 export type JellyMenuItemId = 'rebuild' | 'remove';
 
 /**
- * Jelly 右鍵選單的項目與鎖定原因（issue #124），沿用原本三個 Jelly 工具的鎖法：播放中
- * 移除與重建都不行（Scene 快照不該把 Track 正在播、播完就消失的塊收進去）；錄製中不能
- * 重建（重建只改 Scene、不是可以錄的事件——移除則照樣錄成 `remove` 事件，ADR-0013）。
+ * Jelly 右鍵選單的項目與鎖定原因（issue #124）。哪幾項變灰由呼叫端給的 `allows` 決定
+ * （沙盒傳 `clip.allows`，規則見 `clipAllows`：播放中移除與重建都不行——Scene 快照不該把
+ * Track 正在播、播完就消失的塊收進去；錄製中不能重建——重建只改 Scene、不是可以錄的事件，
+ * 移除則照樣錄成 `remove` 事件，ADR-0013）。`phase` 只用來挑原因的措辭。
  */
 export function jellyMenuItems(state: {
-  playing: boolean;
-  recording: boolean;
+  allows: (action: 'rebuildJelly' | 'removeJelly') => boolean;
+  phase: ClipPhase;
 }): ContextMenuItem<JellyMenuItemId>[] {
-  const playing = state.playing ? '播放中不能重建或移除——先按「停止／重設」' : null;
+  const reason =
+    state.phase === 'playing' ? '播放中不能重建或移除——先按「停止／重設」' : '錄製中不能重建';
   return [
-    {
-      id: 'rebuild',
-      label: '重建',
-      disabledReason: playing ?? (state.recording ? '錄製中不能重建' : null),
-    },
-    { id: 'remove', label: '移除', disabledReason: playing },
+    { id: 'rebuild', label: '重建', disabledReason: state.allows('rebuildJelly') ? null : reason },
+    { id: 'remove', label: '移除', disabledReason: state.allows('removeJelly') ? null : reason },
   ];
 }
 

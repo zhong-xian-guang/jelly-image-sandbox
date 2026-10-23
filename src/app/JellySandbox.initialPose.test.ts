@@ -26,7 +26,6 @@ interface SandboxInternals {
   world: World;
   setInitialPose(): void;
   resetSim(): void;
-  toggleRecording(): void;
   commitSceneUnlessRecording(): void;
 }
 
@@ -50,6 +49,13 @@ function moveJelly(world: World, angle: number, dx: number, dy: number): number[
     p[2 * i + 1] = sin * x + cos * y + cy + dy;
   }
   return Array.from(p);
+}
+
+/** 畫布播放控制條上的「● 錄製／■ 停止錄製」鈕（使用者實際按的那顆）。 */
+function recordButton(): HTMLButtonElement {
+  const button = document.querySelector('.jelly-playback-bar button[data-action="record"]');
+  if (!(button instanceof HTMLButtonElement)) throw new Error('找不到錄製鈕');
+  return button;
 }
 
 function expectPositions(world: World, expected: readonly number[]): void {
@@ -109,10 +115,10 @@ describe('JellySandbox — 設為初始位置（issue #155）', () => {
 
   it('錄製中不作用', () => {
     const rest = Array.from(s.world.jellies()[0]!.mesh.positions);
-    s.toggleRecording();
+    recordButton().click();
     moveJelly(s.world, 0.5, 100, 0);
     s.setInitialPose();
-    s.toggleRecording();
+    recordButton().click();
     expect(s.world.sceneSnapshot()[0]!.rotation ?? 0).toBe(0);
     s.resetSim();
     expectPositions(s.world, rest);

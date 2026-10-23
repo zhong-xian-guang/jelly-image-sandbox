@@ -33,7 +33,7 @@
  *
  * 主迴圈用 `FixedStepAccumulator`（+ 250ms clamp）把真實時間切成 60Hz 固定步推進
  * 求解器；每幀再用**真實**幀時距（clamp 到 100ms）呼叫純函式 `updateCamera` 推進
- * 相機（平滑是視覺的、不進物理）。所有影響模擬的輸入都經 `PointerInput` →
+ * 相機（平滑是視覺的、不進物理）。所有影響模擬的輸入都經 `PointerInput` → `ToolRouter` →
  * `world.applyInput`；所有相機手動輸入都經 `CameraInput` → 收集成 `CameraCommand[]`
  * 每幀餵給 `updateCamera`（ADR-0005：兩條輸入流都不繞過各自的窄介面）。
  *
@@ -76,40 +76,34 @@
  * 聯集 bbox（`World.bbox()`）展開 Walled 範圍／貼齊 Floor；空場時維持上一次的值
  * （`lastBbox`）。
  *
- * **Demo**（issue #15 / T14 追加）：`./demos` 提供純函式腳本（`DEMOS`）+
- * `DemoRunner`（依 sim-step 計數排定事件，見該檔說明）。主迴圈每跑一個固定
- * step 前先呼叫 `demoRunner.advance(...)`，把該 step 排定的 `InputEvent` 一樣
- * 經 `world.applyInput` 送進去——跟即時輸入同一條窄介面，不繞道。Demo 腳本吃
+ * **Demo**（issue #15 / T14 追加）：`./demos` 提供純函式腳本（`DEMOS`），算好的排程交給
+ * `clip.playDemo`。主迴圈每跑一個固定 step 前先呼叫 `clip.step(dispatch)`，把該 step 排定的
+ * `InputEvent` 一樣經 `world.applyInput` 送進去——跟即時輸入同一條窄介面，不繞道。Demo 腳本吃
  * 場上**所有塊**串接起來的 Particle 位置（對目前 Scene 執行，spec #87 US52）。
- * 「停止／重設」按鈕（`resetSim`）先停 Demo 排程再 `world.reset()`，避免重設後殘留
+ * 「停止／重設」按鈕（`resetSim`）先停播放再 `world.reset()`，避免重設後殘留
  * 事件繼續觸發；匯入圖片也會中斷播放（新塊加進 Scene 的時機要乾淨，見
- * `importImage`）。播放中鎖住所有 Demo 按鈕（`setPlaybackLocked`），
- * 擋掉「疊加播放另一個 Demo」——`DemoRunner.start` 只換排程、不會回頭釋放前一個
- * Demo 已經建立的 Pin/Grab，疊加播放會留下一個沒人記得、永遠釘住的 Pin。
+ * `importImage`）。播放中不能再播（`clip.allows('play')`），擋掉「疊加播放另一個 Demo」
+ * ——疊加播放會留下一個沒人記得、永遠釘住的 Pin。
  *
  * **Track 錄製 + 疊加播放**（issue #29 / V2 T1a，issue #33 / V2 T1-1 依 ADR-0007
- * 改為多動作軌，issue #36 / V2 T1-4 加相機軌）：`./track` 提供 `TrackRecorder`
- * ——跟 `DemoRunner` 互補的純類別，依 sim-step 排程「錄」而非「播」事件。攔截點
- * 是 `attachInputHandlers` 裡既有的兩個派送點（`world.applyInput(routed)` 之前、
- * `cameraInput` 的 `emit` 推進 `cameraCommands` 之前）＋ `emitCamera`（「框住果凍」
- * ／「鎖定跟隨」按鈕）——錄製開啟時額外把同一個事件轉呼叫進
- * `trackRecorder.record()`，不新增輸入路徑（ADR-0005）。主迴圈每個固定 step
- * 呼叫一次 `trackRecorder.tick()`，讓錄下的時間戳記跟 `DemoRunner` 重播時的
- * step 計數對得上。
+ * 改為多動作軌，issue #36 / V2 T1-4 加相機軌；issue #164 生命週期收進 `Clip`）：攔截點是
+ * 兩個派送點 `dispatchInput`（所有模擬事件）與 `emitCamera`（所有相機指令）——每個事件
+ * 同時交給 `clip.record()`（錄製中才真的記下），不新增輸入路徑（ADR-0005）。主迴圈每個
+ * 固定 step 呼叫一次 `clip.step()`，錄下的時間戳記跟重播時的 step 計數才對得上。
  *
- * 停止錄製時 `TrackRecorder.stop()` 依事件種類把錄到的內容拆成 `{ action, camera }`
- * 兩份 ＋ 錄製起點鏡頭快照 `startCamera`（ADR-0007 的拆軌模型）。「錄製目標」為
+ * 停止錄製時 `Clip` 依事件種類把錄到的內容拆成動作軌／相機軌
+ * ＋ 錄製起點鏡頭快照 `startCamera`（ADR-0007 的拆軌模型）。「錄製目標」為
  * `both` 時兩份都消化——各非空就新增一列（一條動作軌 + 一條相機軌）；單頻道
  * 只消化被選那一份，另一路的操作即時生效但不錄進去。「▶ 播放全部」把清單裡
  * 所有 Track 依各自的 `startStep`／頭尾修剪用 `mergeTracks`（`demos/overlay.ts`
  * 純函式）壓成一條全域時間軸——平移 `atStep`、動作軌 `PointerId` 加軌別前綴避免
  * 跨軌 `release` 誤放別條的 Grab、相機軌在起始 step 插 `setState` 硬切、相機軌
- * 重疊區間只認先列那條、依全域 `atStep` 穩定排序——交給 `demoRunner` 精準重播
+ * 重疊區間只認先列那條、依全域 `atStep` 穩定排序——由 `Clip` 精準重播
  * （Track 排程格式跟 `DemoStep[]` 相同，不需要另外寫播放器）。多條各自單指標的
  * 動作軌疊起來等於同時多點抓取（Multi-grab）。
  *
  * **Track 座標對齊**：Grab/Tap/Pin 記的是錄製當下的絕對世界座標，`playAll`
- * 因此在 `demoRunner.start` 之前先 `world.reset()`（場上回到 Scene、每塊回 rest，
+ * 因此在開始播放時 `world.reset()`（場上回到 Scene、每塊回 rest，
  * 絕對世界座標才準確落在果凍上）。相機（issue #156 改，見 ADR-0007 追記）：播放開始
  * **不動**相機——保留播放前的鏡位與「鎖定跟隨」，讓使用者能先擺好鏡位再播；相機軌
  * 自帶的 `setState` 照舊在它的起始 step 把鏡頭硬切到錄製起點。「停止／重設」把相機
@@ -119,10 +113,12 @@
  *
  * **場景狀態整合**（issue #38 / V2 T1-6；issue #95 改）：「停止／重設」（`resetSim`）、
  * 「清空全部」（`clearAll`）與「載入片段」（`applyClipState`）共用
- * `haltPlaybackAndRecording()` 把場景收束成一致的乾淨狀態；只有後兩者會換掉整份
- * 片段（Track／群組／初始 Pin），匯入圖片不再清任何東西。錄製中與
- * 播放中互斥（`ControlPanel` 依 `setRecordingActive`／`setPlaybackControlsEnabled`
- * 互相鎖住對方的按鈕）。
+ * `Clip` 的收束（`reset`／`clear`／`fromClipPart`）把錄製／播放收成一致的乾淨狀態；只有後兩者會換掉整份
+ * 片段（Track／群組／初始 Pin），匯入圖片不再清任何東西。Track／群組／初始 Pin／錄製目標
+ * ／兩個流水號都由 `Clip`（issue #163，見 `./Clip`）持有，沙盒只轉呼叫、把 `clip.view()`
+ * 同步到側欄，存檔時把 `clip.toClipPart()` 跟自己持有的來源圖庫／Scene／物理設定拼成
+ * 同一份 `ClipState`。錄製／播放是 `Clip` 的單一互斥 phase（issue #164）；「現在能不能做 X」
+ * 只問 `clip.allows`——側欄依它灰按鈕（`setClipStatus`），沙盒的入口也問它。
  *
  * **substep 自動降級 + 網格密度退路**（issue #16 / T15；退路改成壓拉霸見
  * issue #89）：`PerfMonitor`（純狀態機，見該檔）每幀吃「這幀花了幾毫秒」，持續
@@ -149,30 +145,24 @@ import {
   worldToScreen,
 } from '../camera';
 import {
-  type BackdropCommand,
-  type BackdropMode,
   DEFAULT_TOOL,
-  type FanParams,
   type GrabMode,
   type ModalToolId,
   type PinMode,
-  type ModeValueKey,
   type ToolId,
   type ToolMode,
-  DEFAULT_FAN_FALLOFF_EXPONENT,
-  DEFAULT_FAN_FREQUENCY,
-  DEFAULT_FAN_STRENGTH,
-  DEFAULT_FAN_WIDTH,
-  DEFAULT_PIN_BRUSH_RADIUS,
-  DEFAULT_SPRAY_SPACING,
-  DEFAULT_HANDFUL_RADIUS,
+  type ToolParamKey,
   FAN_FALLOFF_RANGE,
   FAN_FREQUENCY_RANGE,
+  FAN_PARAM_KEYS,
   FAN_STRENGTH_RANGE,
   FAN_WIDTH_RANGE,
   HANDFUL_RADIUS_RANGE,
   PIN_BRUSH_RADIUS_RANGE,
+  SPRAY_SPACING_RANGE,
   PointerInput,
+  ToolParams,
+  ToolRouter,
 } from '../input';
 import {
   buildSimMesh,
@@ -207,47 +197,22 @@ import {
   serializeClip,
   type ClipImage,
   type ClipState,
-  type ClipTrack,
 } from './clipFile';
-import {
-  type Backdrop,
-  BackdropBoard,
-  backdropNumber,
-  stepBackdropValue,
-  worldRectOf,
-  type WorldRect,
-} from './BackdropBoard';
+import { Clip } from './Clip';
+import { BackdropBoard, type WorldRect } from './BackdropBoard';
+import { Backdrops, browserBackdropCodec } from './Backdrops';
 import { BackgroundPanel } from './BackgroundPanel';
 import { BackgroundStore, DEFAULT_BACKGROUND_COLOR, openIndexedDbStore } from './backgroundStore';
 import { BrushCursor, type BrushVariant } from './BrushCursor';
 import { CanvasHover } from './CanvasHover';
 import { CleanView } from './CleanView';
 import { coveredInsets, visibleRect } from './fitInsets';
-import {
-  backdropMenuItems,
-  ContextMenu,
-  jellyMenuItems,
-  type JellyMenuItemId,
-} from './ContextMenu';
+import { ContextMenu, jellyMenuItems, type JellyMenuItemId } from './ContextMenu';
 import { ControlPanel } from './ControlPanel';
-import {
-  backdropValueText,
-  CursorLabel,
-  cursorLabelText,
-  type FormationShapeState,
-} from './CursorLabel';
+import { CursorLabel, cursorLabelText, type FormationShapeState } from './CursorLabel';
 import { KeyboardShortcuts } from './KeyboardShortcuts';
 import { canvasToPng, drawDefaultTexture } from './defaultJelly';
-import {
-  DEMOS,
-  DemoRunner,
-  mergeTracks,
-  overlappingCameraTrackIds,
-  setupPinsTrack,
-  STEP_SECONDS,
-  secondsToStep,
-  stepToSeconds,
-} from './demos';
+import { DEMOS, isCameraCommand, STEP_SECONDS, stepToSeconds, type DemoEvent } from './demos';
 import { DropImportInput } from './DropImportInput';
 import { loadFanIconStyle, saveFanIconStyle } from './fanIconStyle';
 import { clampFanIconRadiusPx, FanOverlay } from './FanOverlay';
@@ -263,18 +228,6 @@ import { DEFAULT_MESH_DENSITY, halveMeshDensity, MESH_DENSITY_RANGE } from './me
 import { browserStorage } from './panelLayout';
 import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
-import {
-  createDefaultGroup,
-  DEFAULT_GROUP_ID,
-  type SoloState,
-  toggleSolo,
-  TrackRecorder,
-  type RecordTarget,
-  type Track,
-  type TrackGroup,
-  tracksInEnabledGroups,
-  withGroupInvariant,
-} from './track';
 import {
   BOUNDARY_FRICTION,
   computeFloorY,
@@ -308,13 +261,6 @@ const DEFAULT_SOFTNESS = 0.5;
  */
 const GRAVITY_RANGE = { min: 0, max: 10000, step: 100 };
 /**
- * 撒 Pin 間距滑桿的範圍（issue #69），世界座標單位。下限 12 是「撒得很密」的實用
- * 下限——再小只是讓 Pin 疊在同一批 Particle 上，手感沒有變化、求解器卻要多扛
- * 幾十個硬約束。右鍵＋滾輪調得到的拉霸（大把抓取半徑、Pin 筆刷半徑、電風扇四個參數）
- * 的範圍住在 `ToolRouter`（issue #114 / #125：右鍵＋滾輪要夾在同一個範圍內）。
- */
-const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
-/**
  * 「匯入尺寸」拉霸的範圍與預設（issue #88 / V3 T1-1，見 GLOSSARY.md「匯入尺寸」），
  * 世界單位 = 未縮放時的 mask 像素。預設 512：一般解析度的圖進場大小跟以前差不多
  * （以前是降採樣後的像素尺寸、最長邊 ≤ 1024），超大圖不會撐滿桌面。下限 128 還
@@ -324,11 +270,6 @@ const IMPORT_SIZE_RANGE = { min: 128, max: 1024, step: 16 };
 const DEFAULT_IMPORT_SIZE = 512;
 /** 內建預設果凍在來源圖庫裡的 id（啟動時、「清空全部」後都重新註冊成它）。 */
 const DEFAULT_SOURCE_ID = 'src/1';
-/**
- * Backdrop 圖片長邊上限（issue #148；spec #146 US38），像素——超過就等比縮小再存。4096 是
- * 幾乎所有 WebGL 裝置都保證支援的貼圖尺寸，再大有的 GPU 會直接顯示失敗。
- */
-const MAX_BACKDROP_SIZE = 4096;
 
 /**
  * 這幾層提示是 DOM 覆蓋層，每幀要把世界座標投影成螢幕座標才畫得出來——都看不到
@@ -353,52 +294,15 @@ interface SourceImage extends ClipImage {
   texture: HTMLImageElement | HTMLCanvasElement;
 }
 
-/**
- * 一條已錄好的 Track（issue #33 / V2 T1-1；issue #36 / V2 T1-4 加相機軌）——
- * `steps` 是相對自己起點的時間軸，`startStep` 是它在疊加時間軸上的起始 sim step
- * （UI 以「秒」編輯，`STEP_SECONDS` 換算），`label`／`customLabel` 是清單上顯示的
- * 名稱（見各欄註解），`id` 兼作 `mergeTracks` 的 `PointerId` 前綴來源（各條唯一）。
- *
- * `inStep`／`outStep`（issue #35 / V2 T1-3）是本地時間的頭尾修剪範圍（同樣以
- * step 存、UI 以「秒」編輯）：播放時只取 `[inStep, outStep]` 之間的排程項，其餘
- * 頭尾各切掉。錄好時 `inStep = 0`、`outStep = ` 最後一筆操作的 step（涵蓋整條）。
- *
- * `kind` 分動作軌／相機軌。相機軌（`kind === 'camera'`）另帶 `startCamera`——錄製
- * 起點的鏡頭快照，播放時由 `mergeTracks` 在起始 step 插一個絕對相機指令硬切進場
- * （issue #36）。動作軌 `startCamera` 為 `null`。
- *
- * `groupIds`（issue #43 / V2 T1-8）是這條屬於哪些群組（多對多）。新錄好時 =
- * `{ 預設群組 }`；不變式「每條 Track 永遠至少在一個群組」由 `withGroupInvariant`
- * 維持。播放時 `playAll` 只取「至少屬於一個開啟中群組」的子集
- * （`tracksInEnabledGroups`），順序照清單順序（決定性、`mergeTracks` 認先列不變）。
- * `群組 ▾` UI（issue #43 動作軌；issue #37 相機軌一併接進，見 ADR-0008）兩種軌都掛。
- */
-interface RecordedTrack {
-  id: string;
-  kind: 'action' | 'camera';
-  /**
-   * `addTrack` 當下用 `summarizeTrack` 算一次的自動摘要（`動作軌 1（拖曳 · Pin）`），
-   * 之後**不再重算**——調整起始／修剪／分群都不動它。
-   */
-  label: string;
-  /**
-   * 使用者在清單內改的名字（issue #54 / V2 T2-1）——非 `null` 時取代 `label` 顯示、
-   * 也是之後寫進存檔的名稱（issue #57）。在欄位裡清成空字串 → 設回 `null`，顯示
-   * 退回自動摘要 `label`。
-   */
-  customLabel: string | null;
-  startStep: number;
-  inStep: number;
-  outStep: number;
-  steps: Track;
-  startCamera: CameraState | null;
-  groupIds: Set<string>;
-}
-
 export class JellySandbox {
   /** 多塊 Jelly 的模擬容器（issue #95）——沙盒唯一的模擬入口，契約與 `SimCore` 同形。 */
   private readonly world: World;
   private readonly renderer: JellyRenderer;
+  /**
+   * 工具路由（issue #159）：沙盒直接持有——目前工具、模式、參數、編隊查詢、右鍵、
+   * 右鍵＋滾輪都直接對它；`input` 只是把 DOM 指標事件接進它的 adapter。
+   */
+  private readonly router: ToolRouter;
   private readonly input: PointerInput;
   private readonly cameraInput: CameraInput;
   private readonly dropImportInput: DropImportInput;
@@ -456,25 +360,15 @@ export class JellySandbox {
   private readonly backgroundPanel: BackgroundPanel;
   /** 背景色與 Backdrop 的儲存（issue #147；IndexedDB，不能用時只在本次有效）。 */
   private readonly backgroundStore: BackgroundStore;
-  /** 場上的 Backdrop（issue #148）——純邏輯，持久化在它裡面。 */
-  private readonly backdrops: BackdropBoard;
+  /**
+   * 場上的 Backdrop（issue #148；issue #165 收成 module）：清單、貼圖、縮圖、匯入轉檔、選單
+   * 指令都在裡面，沙盒每幀只拿繪製清單（`flush`）、把背景圖工具的指令轉給它。
+   */
+  private readonly backdrops: Backdrops<ImageBitmap>;
   /** 「匯入背景圖…」的隱藏檔案輸入（issue #148）：瀏覽器解得開的圖都收。 */
   private readonly backdropFileInput: HiddenFileInput;
-  /** 每張 Backdrop 解碼好的貼圖（issue #148）；還在解碼或解不開的不在這裡，先不畫。 */
-  private readonly backdropTextures = new Map<string, ImageBitmap>();
-  /** 正在解碼的 Backdrop id（還原時非同步解碼，避免同一張重複解）。 */
-  private readonly backdropDecoding = new Set<string>();
-  /** 清單縮圖的 object URL（issue #148），Backdrop 刪掉時釋放。 */
-  private readonly backdropThumbs = new Map<string, string>();
-  /**
-   * Backdrop 清單變了、還沒同步到 Renderer 與側欄清單（issue #148）。`BackdropBoard` 每次變動
-   * 都設起來，`frame()` 每幀最多同步一次——拖曳中一格多次移動只重畫一次。
-   */
-  private backdropsDirty = true;
   /** 鍵盤快捷鍵（issue #126）：1–5 切工具、播放中空白鍵暫停／繼續。在 window 上聽，`destroy` 要解掉。 */
   private readonly keyboardShortcuts: KeyboardShortcuts;
-  private readonly demoRunner = new DemoRunner();
-  private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
   private readonly perfMonitor = new PerfMonitor();
   private readonly root: HTMLElement;
@@ -486,8 +380,6 @@ export class JellySandbox {
   private noticeTimer = 0;
 
   private cameraState: CameraState;
-  /** 最近一次「播放全部」開始前的相機（issue #156）——「停止／重設」時還原，還原後清掉。 */
-  private cameraBeforePlayback: CameraState | null = null;
   /**
    * 畫布邊上被介面蓋住多少（issue #138）——相機 zoom-to-fit 要避開的部分，經 `canvasSize()`
    * 帶給相機。每幀開頭（還沒寫任何 DOM 前）重量一次，見 `refreshFitInsets`。
@@ -509,7 +401,7 @@ export class JellySandbox {
   private boundaryFrame: BoundaryFrame | null = null;
   /**
    * 目前工具（issue #65；issue #122 起是側欄工具列的五個工具 grab／pin／fan／jelly／backdrop，ADR-0016）
-   * ——`PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠這個判定。
+   * ——`ToolRouter` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠這個判定。
    */
   private activeTool: ToolId = DEFAULT_TOOL;
   /**
@@ -539,24 +431,11 @@ export class JellySandbox {
     handfulRange: true,
   };
   /**
-   * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿目前值（issue #67）
-   * ——`PointerInput` 沒有 getter，這裡另存一份供：(a) 面板初始值、
-   * (b) `updateLiveFan` 組出更新場上目前風扇要用的完整 `setFan` 事件（該事件
-   * 是整包覆蓋，缺任何一個欄位都不行）。
+   * 工具參數（issue #160）：電風扇四個參數、Pin 筆刷半徑、撒 Pin 間距、大把抓取半徑的唯一
+   * 擁有者。交給 `ToolRouter`（按下時讀、右鍵＋滾輪時 `step`）；側欄拉霸寫入；筆刷圓圈、
+   * 大把範圍圈每幀讀；變更通知由 `onToolParamChange` 收（更新場上風扇、同步拉霸）。
    */
-  private fanWidth = DEFAULT_FAN_WIDTH;
-  private fanStrength = DEFAULT_FAN_STRENGTH;
-  private fanFalloffExponent = DEFAULT_FAN_FALLOFF_EXPONENT;
-  private fanFrequency = DEFAULT_FAN_FREQUENCY;
-  /**
-   * 「Pin 筆刷半徑」（issue #123）／「撒 Pin 間距」（issue #69）拉霸目前值——`PointerInput`
-   * 沒有 getter，這裡另存一份供：(a) 面板初始值、(b) `frame()` 每幀把半徑換算
-   * 成螢幕像素餵給筆刷圓圈游標（`BrushCursor`）。
-   */
-  private pinBrushRadius = DEFAULT_PIN_BRUSH_RADIUS;
-  private spraySpacing = DEFAULT_SPRAY_SPACING;
-  /** 「大把抓取半徑」拉霸目前值（issue #113）——用途同 `pinBrushRadius`（範圍圈的大小）。 */
-  private handfulRadius = DEFAULT_HANDFUL_RADIUS;
+  private readonly toolParams = new ToolParams();
   /**
    * 「播放時隱藏提示」全域開關（issue #71 / V2 T3-7）——開著時，播放中把所有提示
    * 一律壓下（見 `hintsSuppressed`／`applyHintVisibility`）。它跟上面那幾個
@@ -564,44 +443,11 @@ export class JellySandbox {
    * 值不被播放改寫，這個只是暫時壓下的理由，播完就自動鬆開、各自回到原本的意圖。
    */
   private hideHintsDuringPlayback = false;
-  /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
-  private playbackLocked = false;
   /**
-   * 播放暫停旗標（issue #34 / V2 T1-2）——開著時 `frame()` 整個略過固定步迴圈與
-   * 相機更新，只保留算繪：果凍定格在當下形變、播放秒數不動、鏡頭不動、排定
-   * 事件不觸發。只在播放中（`demoRunner.isRunning`）能切換；播放結束會被強制
-   * 歸零（見 `setPlaybackLocked`）。
+   * 片段（issue #163 / #164）：Track 清單、群組與獨奏、片段初始 Pin、錄製目標、Track／群組
+   * 流水號，以及錄製／播放 phase、暫停、播放前鏡位與編輯許可。每次真的變了就同步側欄與提示。
    */
-  private paused = false;
-  /** 按下錄製前選定的錄製目標（issue #33）——只錄動作／只錄運鏡／兩者同時。 */
-  private recordTarget: RecordTarget = 'action';
-  /**
-   * 已錄好的 Track 清單（issue #33；issue #36 加相機軌）——記憶體內，「清空全部」／載入
-   * 片段才換掉；「停止／重設」與匯入圖片都保留（ADR-0013）。陣列順序＝錄製順序＝清單
-   * 顯示順序＝相機軌「認先列」的先後（`mergeTracks`）。
-   */
-  private tracks: RecordedTrack[] = [];
-  /** 下一條 Track 的流水號，兼作 `id`／`PointerId` 前綴（各條唯一）與預設標籤編號。 */
-  private nextTrackNum = 1;
-  /**
-   * 片段初始 Pin 快照（issue #39 / ADR-0007 追記）——每個元素是一個 Pin 附著點在
-   * **rest 形狀**下的世界座標（`world.restAttachPoint`），獨立於任何 Track。`playAll`
-   * 在 `world.reset()` 之後、`demoRunner.start` 之前，把它組成一條合成 `OverlayTrack`
-   *（`setupPinsTrack`）排在 `mergeTracks` 輸入最前面，於 step 0 一次還原。生命週期
-   * 比照 `tracks`：`停止／重設` 與匯入保留、「清空全部」清空。多塊時還原用帶座標的
-   * `pin` 事件，命中哪塊就釘哪塊。
-   */
-  private setupPins: Point[] = [];
-  /**
-   * Track 群組清單（issue #43 / V2 T1-8，見 ADR-0008）——`groups[0]` 永遠是預設
-   * 群組（`DEFAULT_GROUP_ID`、不可刪、新錄好的 Track 自動加入）。生命週期比照
-   * `tracks`：`停止／重設` 與匯入保留、「清空全部」重建成只剩預設群組。
-   */
-  private groups: TrackGroup[] = [createDefaultGroup()];
-  /** 下一個使用者新建群組的流水號（`g1`／`g2`…，兼作預設名稱編號）。 */
-  private nextGroupNum = 1;
-  /** 目前的「獨奏」狀態（`null` = 沒在獨奏）——狀態轉移見 `track/groups` 的 `toggleSolo`。 */
-  private soloState: SoloState | null = null;
+  private readonly clip = new Clip({ onChange: () => this.syncClip() });
 
   /**
    * 軟硬度滑桿目前值本身（0–1）——`setSoftness` 收到後即轉成 `cellFrac`／`alphaSm`
@@ -655,8 +501,10 @@ export class JellySandbox {
     this.root = root;
     this.renderer = renderer;
     this.backgroundStore = background.store;
-    this.backdrops = background.backdrops;
-    this.backdrops.onChange(() => (this.backdropsDirty = true));
+    this.backdrops = new Backdrops(background.backdrops, {
+      codec: browserBackdropCodec,
+      notify: (message) => this.showNotice(message),
+    });
     this.renderer.setBackgroundColor(colorToNumber(background.color));
     // `World` 的 `meshProvider` 綁到沙盒的 `meshFor`（來源圖庫 + memo），所以在這裡建。
     // 跨塊碰撞的摩擦係數沿用牆／地板的 app 層常數（issue #96；其餘碰撞參數用求解器預設）。
@@ -674,9 +522,11 @@ export class JellySandbox {
     this.lastBbox = this.world.bbox()!;
     this.cameraState = createCameraState({ bbox: this.lastBbox }, this.canvasSize());
 
-    ({ input: this.input, cameraInput: this.cameraInput } = this.attachInputHandlers(
-      renderer.canvas,
-    ));
+    ({
+      router: this.router,
+      input: this.input,
+      cameraInput: this.cameraInput,
+    } = this.attachInputHandlers(renderer.canvas));
 
     this.renderer.setCamera(this.cameraState.transform);
     window.addEventListener('resize', this.onResize);
@@ -709,14 +559,15 @@ export class JellySandbox {
 
     // 風扇圖示外觀（issue #143）：開發者設定，上次的選擇存在 localStorage。
     const fanIconStyle = loadFanIconStyle(browserStorage());
+    const fan = this.toolParams.fan();
     this.controlPanel = new ControlPanel({
       initial: {
         activeTool: this.activeTool,
         toolModes: {
-          grab: this.input.modeOf('grab'),
-          pin: this.input.modeOf('pin'),
-          fan: this.input.modeOf('fan'),
-          backdrop: this.input.modeOf('backdrop'),
+          grab: this.router.modeOf('grab'),
+          pin: this.router.modeOf('pin'),
+          fan: this.router.modeOf('fan'),
+          backdrop: this.router.modeOf('backdrop'),
         },
         showCursorLabel: this.showCursorLabel,
         boundary: this.boundaryMode,
@@ -727,19 +578,19 @@ export class JellySandbox {
         followLocked: !this.cameraState.followEnabled,
         showWireframe: this.hintIntent.wireframe,
         fanIconStyle,
-        recordTarget: this.recordTarget,
+        recordTarget: this.clip.recordTarget,
         showFanRange: this.hintIntent.fanRange,
         showFanIcon: this.hintIntent.fanIcon,
-        fanWidth: this.fanWidth,
-        fanStrength: this.fanStrength,
-        fanFalloffExponent: this.fanFalloffExponent,
-        fanFrequency: this.fanFrequency,
+        fanWidth: fan.width,
+        fanStrength: fan.strength,
+        fanFalloffExponent: fan.falloffExponent,
+        fanFrequency: fan.frequency,
         showFormationHint: this.hintIntent.formation,
-        pinBrushRadius: this.pinBrushRadius,
-        spraySpacing: this.spraySpacing,
-        handfulRadius: this.handfulRadius,
+        pinBrushRadius: this.toolParams.get('pinBrushRadius'),
+        spraySpacing: this.toolParams.get('spraySpacing'),
+        handfulRadius: this.toolParams.get('handfulRadius'),
         showHandfulRange: this.hintIntent.handfulRange,
-        formationPerPointHandful: this.input.perPointHandful,
+        formationPerPointHandful: this.router.formation.perPointHandful,
         hideHintsDuringPlayback: this.hideHintsDuringPlayback,
         importSize: this.importSize,
         meshDensity: this.meshDensity,
@@ -765,20 +616,15 @@ export class JellySandbox {
       onRemoveFan: () => this.removeFan(),
       onShowFanRangeChange: (visible) => this.setHintVisible('fanRange', visible),
       onShowFanIconChange: (visible) => this.setHintVisible('fanIcon', visible),
-      onFanWidthChange: (width) => this.setFanWidth(width),
-      onFanStrengthChange: (strength) => this.setFanStrength(strength),
-      onFanFalloffChange: (falloffExponent) => this.setFanFalloffExponent(falloffExponent),
-      onFanFrequencyChange: (frequency) => this.setFanFrequency(frequency),
+      // 工具參數拉霸（issue #160）一律寫進 `ToolParams`，後續副作用在 `onToolParamChange`。
+      onToolParamChange: (key, value) => this.toolParams.set(key, value),
       onFormationDefineStart: () => this.beginFormationDefine(),
-      onFormationDefineEnd: () => this.input.endFormationDefine(),
+      onFormationDefineEnd: () => this.router.formation.endDefine(),
       onShowFormationHintChange: (visible) => this.setHintVisible('formation', visible),
-      onPinBrushRadiusChange: (radius) => this.setPinBrushRadius(radius),
-      onSpraySpacingChange: (spacing) => this.setSpraySpacing(spacing),
-      onHandfulRadiusChange: (radius) => this.setHandfulRadius(radius),
       onShowHandfulRangeChange: (visible) => this.setHintVisible('handfulRange', visible),
       // 每點大把（issue #135）：只影響下一次按下；範圍圈與游標標籤每幀自己重算。
       onFormationPerPointHandfulChange: (enabled) =>
-        this.input.setFormationParams({ perPointHandful: enabled }),
+        this.router.formation.setParams({ perPointHandful: enabled }),
       onHideHintsDuringPlaybackChange: (enabled) => this.setHideHintsDuringPlayback(enabled),
       onImportSizeChange: (size) => this.setImportSize(size),
       onMeshDensityChange: (density) => this.setMeshDensity(density),
@@ -800,7 +646,7 @@ export class JellySandbox {
         saveFanIconStyle(browserStorage(), style);
       },
       onRecordTargetChange: (target) => {
-        this.recordTarget = target;
+        this.clip.recordTarget = target;
       },
       onToggleRecording: () => this.toggleRecording(),
       onPlayAll: () => this.playAll(),
@@ -810,25 +656,28 @@ export class JellySandbox {
         this.showNotice(
           'Track 記的是絕對世界座標：果凍移走後，舊 Track 抓的那一點可能已經沒有果凍。確定的話再按一次「設為初始位置」',
         ),
-      onClearSetupPins: () => this.clearSetupPins(),
-      onTogglePause: () => this.togglePause(),
-      onTrackStartTimeChange: (id, seconds) => this.setTrackStartTime(id, seconds),
-      onTrackTrimInChange: (id, seconds) => this.setTrackTrimIn(id, seconds),
-      onTrackTrimOutChange: (id, seconds) => this.setTrackTrimOut(id, seconds),
-      onDeleteTrack: (id) => this.deleteTrack(id),
-      onTrackRename: (id, name) => this.renameTrack(id, name),
-      onAddGroup: () => this.addGroup(),
-      onGroupEnabledChange: (id, enabled) => this.setGroupEnabled(id, enabled),
-      onGroupRename: (id, name) => this.renameGroup(id, name),
-      onGroupSolo: (id) => this.toggleGroupSolo(id),
-      onDeleteGroup: (id) => this.deleteGroup(id),
-      onTrackGroupsChange: (trackId, groupIds) => this.setTrackGroups(trackId, groupIds),
+      onClearSetupPins: () => this.clip.clearSetupPins(),
+      onTogglePause: () => this.clip.togglePause(),
+      // Track 清單與群組區的編輯直接交給 Clip（issue #163）；變了 Clip 自己回呼 `syncClip`。
+      onTrackStartTimeChange: (id, seconds) => this.clip.setTrackStartTime(id, seconds),
+      onTrackTrimInChange: (id, seconds) => this.clip.setTrackTrimIn(id, seconds),
+      onTrackTrimOutChange: (id, seconds) => this.clip.setTrackTrimOut(id, seconds),
+      onDeleteTrack: (id) => this.clip.deleteTrack(id),
+      onTrackRename: (id, name) => this.clip.renameTrack(id, name),
+      onAddGroup: () => this.clip.addGroup(),
+      onGroupEnabledChange: (id, enabled) => this.clip.setGroupEnabled(id, enabled),
+      onGroupRename: (id, name) => this.clip.renameGroup(id, name),
+      onGroupSolo: (id) => this.clip.toggleGroupSolo(id),
+      onDeleteGroup: (id) => this.clip.deleteGroup(id),
+      onTrackGroupsChange: (trackId, groupIds) => this.clip.setTrackGroups(trackId, groupIds),
     });
     root.appendChild(this.controlPanel.element);
+    // 工具參數變了（拉霸或右鍵＋滾輪，issue #160）→ 更新場上風扇、同步拉霸。
+    this.toolParams.subscribe((key, value) => this.onToolParamChange(key, value));
     // 「背景」分區（issue #147）：背景色；Backdrop 匯入與清單（issue #148）。
     this.backdropFileInput = new HiddenFileInput(root.ownerDocument, 'image/*', (files) => {
       const file = files[0];
-      if (file) void this.importBackdrop(file);
+      if (file) void this.backdrops.import(file, this.visibleWorldRect());
     });
     this.backgroundPanel = new BackgroundPanel({
       initialColor: background.color,
@@ -840,13 +689,7 @@ export class JellySandbox {
       onMoveBackdropUp: (id) => this.backdrops.moveUp(id),
       onMoveBackdropDown: (id) => this.backdrops.moveDown(id),
       onSelectBackdrop: (id) => this.backdrops.select(id),
-      onBackdropFieldChange: (id, field, value) => {
-        const b = this.backdrops.get(id);
-        if (!b) return;
-        if (field === 'centerX') this.backdrops.setCenter(id, value, b.centerY);
-        else if (field === 'centerY') this.backdrops.setCenter(id, b.centerX, value);
-        else this.setBackdropValue(id, field, value);
-      },
+      onBackdropFieldChange: (id, field, value) => this.backdrops.setField(id, field, value),
     });
     this.controlPanel.sectionBody('background').appendChild(this.backgroundPanel.element);
     // 畫布上的播放控制條（底部中央）與相機按鈕（右下角）——issue #129；只吃自己範圍內的點擊。
@@ -894,8 +737,8 @@ export class JellySandbox {
     this.controlPanel.titleBarActions.prepend(this.cleanView.createEnterButton());
     this.keyboardShortcuts = new KeyboardShortcuts({
       selectTool: (tool) => this.setActiveTool(tool),
-      isPlaying: () => this.demoRunner.isRunning,
-      togglePause: () => this.togglePause(),
+      isPlaying: () => this.clip.phase === 'playing',
+      togglePause: () => this.clip.togglePause(),
     });
     this.applyToolVisuals();
 
@@ -907,7 +750,7 @@ export class JellySandbox {
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
     // 看到「群組」這個概念、按「＋ 新增群組」（issue #43）。
-    this.syncPanelTracks();
+    this.syncClip();
   }
 
   /**
@@ -951,8 +794,7 @@ export class JellySandbox {
     this.fileImportInput.destroy();
     this.clipFileInput.destroy();
     this.backdropFileInput.destroy();
-    for (const bitmap of this.backdropTextures.values()) bitmap.close();
-    for (const url of this.backdropThumbs.values()) URL.revokeObjectURL(url);
+    this.backdrops.dispose();
     this.dropHint.remove();
     this.importHint.removeEventListener('click', this.onImportHintClick);
     this.importHint.remove();
@@ -989,30 +831,29 @@ export class JellySandbox {
   }
 
   /**
-   * 送一個相機指令：進佇列給 `updateCamera`，同時（錄製開著時）轉呼叫
-   * `trackRecorder.record()`——「框住果凍」「鎖定跟隨」按鈕的操作在錄運鏡時
-   * 也要一起錄進 Camera Track（issue #36 / US15）。走的還是 `CameraCommand`
-   * 窄介面（ADR-0005），不新增輸入路徑。`CameraInput` 的 `emit` 回呼另外自己
-   * 做了同樣兩件事（見 `attachInputHandlers`）。
+   * 送一個相機指令：進佇列給 `updateCamera`，同時交給 `clip.record()`（錄製中才真的記下）
+   * ——「框住果凍」「鎖定跟隨」按鈕的操作在錄運鏡時也要一起錄進 Camera Track（issue #36 /
+   * US15）。走的還是 `CameraCommand` 窄介面（ADR-0005），不新增輸入路徑。`CameraInput` 的
+   * `emit` 回呼也走這裡（見 `attachInputHandlers`）。
    */
   private emitCamera(cmd: CameraCommand): void {
     this.cameraCommands.push(cmd);
-    this.trackRecorder.record(cmd); // no-op 除非正在錄製
+    this.clip.record(cmd);
   }
 
   /**
    * Demo 按鈕（issue #15）：依 `id` 找到腳本，用「目前」場上所有塊串接的 Particle 位置
-   * 算出時間軸交給 `demoRunner`——Demo 對目前 Scene 執行（spec #87 US52）：找角、找
-   * 中心都以聯集算，多塊時抓到的是整體最外圍的點。空場沒東西可示範，直接返回。已在
-   * 播放中的 Demo（若有）直接被取代。
+   * 算出時間軸交給 `clip.playDemo`——Demo 對目前 Scene 執行（spec #87 US52）：找角、找
+   * 中心都以聯集算，多塊時抓到的是整體最外圍的點。空場沒東西可示範，直接返回。錄製中、
+   * 播放中不允許播放（`Clip` 忽略），不記播放前鏡位。
    */
   private runDemo(id: string): void {
+    if (!this.clip.allows('play')) return;
     const demo = DEMOS.find((d) => d.id === id);
     if (!demo) return;
     const positions = this.allPositions();
     if (positions.length === 0) return;
-    this.demoRunner.start(demo.build(positions));
-    this.setPlaybackLocked(true); // 立即鎖住，擋掉「趁還沒進下一幀又點另一個 Demo」的疊加播放
+    this.clip.playDemo(demo.build(positions));
   }
 
   /** 場上所有塊的 Particle 位置串成一條（依 id 順序）——Demo 腳本的輸入。 */
@@ -1030,114 +871,13 @@ export class JellySandbox {
   }
 
   /**
-   * 「開始錄製／停止錄製」切換鈕（issue #29 / issue #33 拆軌 / issue #36 加相機軌）：
-   * 開始時依「錄製目標」`this.recordTarget` 起錄，並把當下的鏡頭狀態快照傳給
-   * `TrackRecorder`（相機軌硬切進場用）；停止時取回 `TrackRecorder.stop()` 拆好的
-   * `action`／`camera` 兩份，非空的各新增一列到清單——「兩者同時」一次產出兩列。
-   * 錄製中的事件本身不是在這裡送出的——是 `attachInputHandlers` 的兩個既有派送點
-   * ＋ `emitCamera` 在錄製旗標開著時順手轉呼叫 `trackRecorder.record()`。
-   *
-   * `ControlPanel` 那邊：`setRecordingActive` 會在錄製中把「▶ 播放全部」與清單
-   * 編輯一併鎖住（錄製／播放互斥，issue #33），不用在這裡另外處理。
+   * 「開始錄製／停止錄製」切換鈕（issue #29 / issue #33 拆軌 / issue #36 加相機軌）：交給
+   * `Clip`——開始時依錄製目標起錄（帶當下鏡頭的拷貝，相機軌硬切進場用），停止時它自己把
+   * 錄到的內容拆成動作軌／相機軌加進清單。錄製中的事件是 `dispatchInput`／`emitCamera`
+   * 順手交給 `clip.record()` 的。
    */
   private toggleRecording(): void {
-    if (this.trackRecorder.isRecording) {
-      const { action, camera, startCamera } = this.trackRecorder.stop();
-      this.controlPanel.setRecordingActive(false);
-      if (action.length > 0) this.addTrack('action', action, null);
-      if (camera.length > 0) this.addTrack('camera', camera, startCamera ?? null);
-    } else {
-      this.trackRecorder.start(this.recordTarget, cloneCameraState(this.cameraState));
-      this.controlPanel.setRecordingActive(true);
-    }
-  }
-
-  /**
-   * 把剛錄好的一段 Track 加進清單，並同步到面板。預設起始 0 秒、修剪範圍涵蓋
-   * 整條（`inStep = 0`、`outStep = ` 最後一筆操作的 step）。相機軌額外帶
-   * `startCamera` 快照。
-   */
-  private addTrack(kind: 'action' | 'camera', steps: Track, startCamera: CameraState | null): void {
-    const num = this.nextTrackNum++;
-    this.tracks.push({
-      id: `t${num}`,
-      kind,
-      label:
-        kind === 'camera'
-          ? summarizeTrack(`相機軌 ${num}`, steps, CAMERA_TRACK_KIND_LABELS)
-          : summarizeTrack(`動作軌 ${num}`, steps, ACTION_TRACK_KIND_LABELS),
-      customLabel: null,
-      startStep: 0,
-      inStep: 0,
-      outStep: lastEventStep(steps),
-      steps,
-      startCamera,
-      // 新錄好的 Track 自動加入預設群組（issue #43 / ADR-0008）。
-      groupIds: new Set([DEFAULT_GROUP_ID]),
-    });
-    this.syncPanelTracks();
-  }
-
-  /**
-   * 找到 `id` 那條 Track、跑 `mutate` 改它的 step 欄位、再 `syncPanelTracks()` 把
-   * 欄位重寫成量化後的秒數——三個「秒數欄位被改」的處理共用這層 find／防呆／同步
-   * （issue #35 code review）。內部一律存量化過的 step 計數：使用者輸入 0.11 秒
-   *（不是 1/60 的整數倍）時，欄位會校正成實際生效的 0.1167 秒，看到的即是播放
-   * 時用的值。
-   */
-  private updateTrack(id: string, mutate: (track: RecordedTrack) => void): void {
-    const track = this.tracks.find((t) => t.id === id);
-    if (!track) return;
-    mutate(track);
-    this.syncPanelTracks();
-  }
-
-  /** 「起始秒數」欄位（issue #33）——這條在片段時間軸上從第幾秒開始。負數 clamp 到 0。 */
-  private setTrackStartTime(id: string, seconds: number): void {
-    this.updateTrack(id, (track) => {
-      track.startStep = Math.max(0, secondsToStep(seconds));
-    });
-  }
-
-  /**
-   * 「從 X 秒」（頭修剪）欄位（issue #35）——clamp 到 `[0, outStep]`，不讓 in 越過
-   * out（`in > out` 的防呆，UI 這層先擋住，`mergeTracks` 那層另有一道）。
-   */
-  private setTrackTrimIn(id: string, seconds: number): void {
-    this.updateTrack(id, (track) => {
-      track.inStep = Math.min(Math.max(0, secondsToStep(seconds)), track.outStep);
-    });
-  }
-
-  /**
-   * 「到 Y 秒」（尾修剪）欄位（issue #35）——不小於 `inStep`（同上防呆）。超過最後
-   * 一筆操作的秒數不特別 clamp——尾端多留一點空白不影響播放內容。
-   */
-  private setTrackTrimOut(id: string, seconds: number): void {
-    this.updateTrack(id, (track) => {
-      track.outStep = Math.max(secondsToStep(seconds), track.inStep);
-    });
-  }
-
-  private deleteTrack(id: string): void {
-    this.tracks = this.tracks.filter((t) => t.id !== id);
-    this.syncPanelTracks();
-  }
-
-  /**
-   * Track 清單內改名（issue #54 / V2 T2-1）——比照 `renameGroup`（`ControlPanel` 在
-   * 失焦／Enter 回報一次、已 trim，這裡就信任呼叫端不再 trim），差別是空字串不忽略：
-   * → `customLabel` 設回 `null`，顯示退回 `addTrack` 當下算的自動摘要 `label`。非空
-   * → 存成覆寫，之後調整起始／修剪／分群都不會蓋回（那些只改 step 欄位、不碰
-   * `customLabel`）。
-   */
-  private renameTrack(id: string, name: string): void {
-    const track = this.tracks.find((t) => t.id === id);
-    if (!track) return;
-    const next = name === '' ? null : name;
-    if (track.customLabel === next) return;
-    track.customLabel = next;
-    this.syncPanelTracks();
+    this.clip.toggleRecording(cloneCameraState(this.cameraState));
   }
 
   /**
@@ -1149,10 +889,10 @@ export class JellySandbox {
    * 舊姿態建出來的，之後匯入／生成／移除後的 `setScene(sceneSnapshot())` 會把新姿態洗回去，
    * 「設為目前 Pin」拍的 rest 座標也會落在舊姿態上。重設會清掉約束與風扇，所以先記下按下前的
    * Pin（同 id、同世界座標）與風扇，重建後放回去；這幾個事件不經 `dispatchInput`——錄製中、
-   * 播放中這顆鈕本來就按不了（`ControlPanel` 鎖住，這裡再擋一次）。
+   * 播放中這顆鈕本來就按不了（`clip.allows`，側欄鎖住，這裡再擋一次）。
    */
   private setInitialPose(): void {
-    if (this.playbackLocked || this.trackRecorder.isRecording) return;
+    if (!this.clip.allows('setInitialPose')) return;
     const pins = this.world.listPins();
     const fan = this.world.fanState();
     this.world.setScene(this.world.captureScenePose());
@@ -1168,273 +908,73 @@ export class JellySandbox {
    * 「片段初始 Pin：設為目前 Pin」（issue #39 / ADR-0007 追記）——把畫面上現在所有
    * Pin（`world.listPins()`，跨所有塊）的**rest 形狀附著座標**（`world.restAttachPoint`）
    * 拍成快照，取代上一份。存 rest 座標而非目前變形座標：`playAll` 會先 `world.reset()`，還原時
-   * 這些座標才精準落在原本的表面點，也不隨拍快照當下的變形而偏。`ControlPanel`
-   * 那邊錄製中／播放中已把這顆鈕鎖住，這裡不用再擋。
+   * 這些座標才精準落在原本的表面點，也不隨拍快照當下的變形而偏。錄製中／播放中 `Clip`
+   * 自己會忽略。快照本身存在 `Clip`，沙盒只負責從 World 取出 rest 座標交給它。
    */
   private snapshotSetupPins(): void {
-    this.setupPins = this.world.listPins().flatMap((pin) => {
-      // `restAttachPoint` 回傳全新的 `Point`；作用中的 Pin 必有約束，`null` 只是防呆。
-      const rest = this.world.restAttachPoint(pin.id);
-      return rest ? [rest] : [];
+    if (!this.clip.allows('setupPins')) return;
+    this.clip.setSetupPins(
+      this.world.listPins().flatMap((pin) => {
+        // `restAttachPoint` 回傳全新的 `Point`；作用中的 Pin 必有約束，`null` 只是防呆。
+        const rest = this.world.restAttachPoint(pin.id);
+        return rest ? [rest] : [];
+      }),
+    );
+  }
+
+  /**
+   * `Clip` 每次狀態真的變了就回呼這裡（issue #163 / #164）：把 `clip.view()`（Track 清單、群組區、
+   * 可播放數、片段初始 Pin 數）與錄製／播放狀態（phase、暫停、`allows`）一次同步到
+   * `ControlPanel`，再重算提示顯示——「播放時隱藏提示」（issue #71）在播放開始時壓下、播完（或
+   * 按停止／重設）鬆開，各自回到使用者原本的開關狀態（見 `applyHintVisibility`）。
+   */
+  private syncClip(): void {
+    const view = this.clip.view();
+    this.controlPanel.setGroups(view.groups);
+    this.controlPanel.setTracks(view.tracks);
+    this.controlPanel.setPlayableTrackCount(view.playableTrackCount);
+    this.controlPanel.setSetupPinCount(view.setupPinCount);
+    this.controlPanel.setClipStatus({
+      phase: view.phase,
+      paused: view.paused,
+      allows: (action) => this.clip.allows(action),
     });
-    this.syncPanelTracks();
-  }
-
-  /** 「片段初始 Pin：清除」（issue #39）——清空快照，之後 `playAll` 不再放任何初始 Pin。 */
-  private clearSetupPins(): void {
-    if (this.setupPins.length === 0) return;
-    this.setupPins = [];
-    this.syncPanelTracks();
+    this.applyHintVisibility();
   }
 
   /**
-   * 「＋ 新增群組」（issue #43）——新群組預設**開啟**（ADR-0008）；沒有成員，
-   * 使用者再用各條 Track 的 `群組 ▾` 指派進來。新增動作讓進行中的獨奏還原點作廢。
-   */
-  private addGroup(): void {
-    const num = this.nextGroupNum++;
-    this.groups.push({ id: `g${num}`, name: `群組 ${num}`, enabled: true });
-    this.soloState = null;
-    this.syncPanelTracks();
-  }
-
-  /** 某群組的開啟／關閉勾選框（issue #43）——手動動過開關，進行中的獨奏還原點作廢。 */
-  private setGroupEnabled(id: string, enabled: boolean): void {
-    const group = this.groups.find((g) => g.id === id);
-    if (!group || group.enabled === enabled) return;
-    group.enabled = enabled;
-    this.soloState = null;
-    this.syncPanelTracks();
-  }
-
-  /** 某群組改名（issue #43）——`ControlPanel` 已擋掉空字串。 */
-  private renameGroup(id: string, name: string): void {
-    const group = this.groups.find((g) => g.id === id);
-    if (!group || group.name === name) return;
-    group.name = name;
-    this.syncPanelTracks();
-  }
-
-  /**
-   * 「獨奏」鈕（issue #43）——只留該群組開、其餘關；對正在獨奏的群組再按一次
-   * 還原先前的開關狀態。狀態轉移在純函式 `toggleSolo`（見 `track/groups`）。
-   */
-  private toggleGroupSolo(id: string): void {
-    const { groups, solo } = toggleSolo(this.groups, this.soloState, id);
-    this.groups = groups;
-    this.soloState = solo;
-    this.syncPanelTracks();
-  }
-
-  /**
-   * 「刪除」群組（issue #43）——只從清單移除、解除所有 Track 對它的歸屬；成員
-   * Track 不刪。因此掉到 0 群組的 Track 由 `withGroupInvariant` 補回預設群組
-   * （不變式：每條 Track 永遠至少在一個群組）。預設群組不可刪（`ControlPanel`
-   * 不給它刪除鈕，這裡再擋一道）。
-   */
-  private deleteGroup(id: string): void {
-    if (id === DEFAULT_GROUP_ID) return;
-    this.groups = this.groups.filter((g) => g.id !== id);
-    for (const track of this.tracks) {
-      track.groupIds = withGroupInvariant(track.groupIds, this.groups);
-    }
-    this.soloState = null;
-    this.syncPanelTracks();
-  }
-
-  /**
-   * 某條 Track 的 `群組 ▾` 勾選變更（issue #43）——`groupIds` 是勾好的群組 id 清單，
-   * 過 `withGroupInvariant`：丟掉無效 id、全空時補回預設群組（取消勾選最後一個
-   * 群組 → 自動回預設群組）。
-   */
-  private setTrackGroups(trackId: string, groupIds: readonly string[]): void {
-    const track = this.tracks.find((t) => t.id === trackId);
-    if (!track) return;
-    track.groupIds = withGroupInvariant(groupIds, this.groups);
-    this.syncPanelTracks();
-  }
-
-  /**
-   * 把 `tracks` 清單、群組區、與「▶ 播放」的可用狀態一次同步到 `ControlPanel`
-   *（issue #33 起；issue #43 加群組區）。動作軌與相機軌兩種列都帶 `群組 ▾` 多選
-   * 資料（issue #37 把相機軌一併接進分群 UI，見 ADR-0008）。
-   */
-  private syncPanelTracks(): void {
-    const overlapping = this.overlappingEnabledCameraTrackIds();
-    this.controlPanel.setGroups(
-      this.groups.map((g) => ({
-        id: g.id,
-        name: g.name,
-        enabled: g.enabled,
-        trackCount: this.tracks.filter((t) => t.groupIds.has(g.id)).length,
-        soloed: this.soloState?.soloId === g.id,
-        deletable: g.id !== DEFAULT_GROUP_ID,
-      })),
-    );
-    this.controlPanel.setTracks(
-      this.tracks.map((t) => ({
-        id: t.id,
-        kind: t.kind,
-        label: t.customLabel ?? t.label,
-        startSeconds: stepToSeconds(t.startStep),
-        inSeconds: stepToSeconds(t.inStep),
-        outSeconds: stepToSeconds(t.outStep),
-        firstEventSeconds: stepToSeconds(firstEventStep(t.steps)),
-        lastEventSeconds: stepToSeconds(lastEventStep(t.steps)),
-        overlapping: overlapping.has(t.id),
-        // 兩種軌都帶群組歸屬：清單依此分區顯示 + 畫 `群組 ▾` 編輯器（issue #37
-        // 把相機軌一併接進，見 ADR-0008）。
-        groups: this.trackGroupChoices(t),
-      })),
-    );
-    this.controlPanel.setPlayableTrackCount(tracksInEnabledGroups(this.tracks, this.groups).length);
-    this.controlPanel.setSetupPinCount(this.setupPins.length);
-  }
-
-  /** 一條 Track 的 `群組 ▾` 勾選資料（issue #43 動作軌；issue #37 相機軌）——每個群組一項 + 這條是否屬於它。 */
-  private trackGroupChoices(track: RecordedTrack): { id: string; name: string; member: boolean }[] {
-    return this.groups.map((g) => ({ id: g.id, name: g.name, member: track.groupIds.has(g.id) }));
-  }
-
-  /**
-   * 要在面板標紅的相機軌 id 集合（issue #36 起的軟警告：允許暫時重疊，播放時
-   * 重疊區間只認先列那條，見 `mergeTracks`）。issue #37 / ADR-0008：只對「開啟中
-   * 群組聯集」裡的相機軌判定——`tracksInEnabledGroups` 先濾成播放時真的會一起
-   * 出現的子集（`playAll` 餵給 `mergeTracks` 的也是同一個子集），關掉某群組後
-   * 那條相機軌不再跟別條衝突，紅框就消失。重疊判定本身在純函式
-   * `overlappingCameraTrackIds`（`demos/overlay.ts`）。
-   */
-  private overlappingEnabledCameraTrackIds(): Set<string> {
-    const cameras = tracksInEnabledGroups(this.tracks, this.groups).filter(
-      (t) => t.kind === 'camera',
-    );
-    return overlappingCameraTrackIds(cameras);
-  }
-
-  /**
-   * 「▶ 播放」按鈕（issue #33；issue #36 加相機軌；issue #43 加群組過濾）：先把
-   * `tracks` 濾成「至少屬於一個開啟中群組」的子集（`tracksInEnabledGroups`，
-   * **保留清單順序** → `mergeTracks` 認先列語意不變），再依各自的 `startStep`／
-   * 頭尾修剪疊加成一條全域時間軸（`mergeTracks` 純函式——平移 `atStep`、動作軌
-   * `PointerId` 加軌別前綴避免跨軌碰撞、相機軌在起始 step 插 `setState` 硬切、
-   * 相機軌重疊區間只認先列那條、依全域 `atStep` 穩定排序），交給 `demoRunner`
-   * 精準重播。不手動分群時所有 Track 都在預設群組、預設開啟，子集＝全部，行為
-   * 跟 issue #33 的「播放全部」完全相同。開啟中群組成員聯集為空時直接返回
-   *（`ControlPanel` 那邊按鈕也已變灰）。
+   * 「▶ 播放」按鈕（issue #33；issue #36 加相機軌；issue #43 加群組過濾）：`Clip` 把開啟中
+   * 群組的成員 Track（保留清單順序）連同片段初始 Pin 疊成一條全域時間軸播放，並記下播放前的
+   * 鏡位（issue #156，「停止／重設」時還原，見 `resetSim`）。錄製中、已在播放中、或沒有可播放的
+   * Track 時 `Clip` 忽略。
    *
-   * 播放前先 `world.reset()`：場上回到 Scene（錄製中生成的消失、移除的回來、每塊回
+   * 真的開始播放才 `world.reset()`：場上回到 Scene（錄製中生成的消失、移除的回來、每塊回
    * rest）——Track 裡 Grab/Tap/Pin 記的是錄製當下的絕對世界座標，場景回到 rest 狀態
    * 它們才會準確落在果凍上、每次疊加結果才逐格一致（issue #33 決定性驗收條件），
-   * 不受「播放前場景被怎麼動過」影響。
+   * 不受「播放前場景被怎麼動過」影響。排定的事件要到下一個 sim step 才送出，重設排在開始
+   * 之後也一樣。
    *
-   * 相機（issue #156）：不動——保留播放前的鏡位與「鎖定跟隨」（以前會推 `frame` 或重設成
-   * 跟隨開著的框好鏡位，使用者沒辦法先擺好鏡位）。相機軌一生效，自帶的 `setState` 硬切
-   * 照舊接管。播放前的相機記在 `cameraBeforePlayback`，「停止／重設」時還原（見 `resetSim`），
-   * 同一個鏡位重複播放，鏡頭路徑仍逐格一致。
+   * 相機（issue #156）：不動——保留播放前的鏡位與「鎖定跟隨」。相機軌一生效，自帶的
+   * `setState` 硬切照舊接管。
    */
   private playAll(): void {
-    const active = tracksInEnabledGroups(this.tracks, this.groups);
-    if (active.length === 0) return;
-    this.world.reset();
-    // 播放中又按一次播放時，現在的鏡頭是播放中的（可能已被相機軌硬切），不能當成播放前。
-    if (!this.demoRunner.isRunning) this.cameraBeforePlayback = this.cameraState;
-    this.demoRunner.start(
-      mergeTracks([
-        // 片段初始 Pin 合成軌排在最前面（issue #39）：`setup/` 前綴不撞 Action Track
-        // 的 `t{n}/`，一串 `atStep: 0` 的 `pin` 事件靠穩定排序落在所有軌的 step-0
-        // 事件之前——`world.reset()` 後先在 step 0 還原初始 Pin，再開演。空快照時這條
-        // steps 為空，`mergeTracks` 不貢獻任何事件。
-        setupPinsTrack(this.setupPins),
-        ...active.map((t) => ({
-          startStep: t.startStep,
-          idPrefix: `${t.id}/`,
-          steps: t.steps,
-          inStep: t.inStep,
-          outStep: t.outStep,
-          startCamera: t.startCamera,
-        })),
-      ]),
-    );
-    this.setPlaybackLocked(true); // 立即鎖住，理由同 runDemo
-  }
-
-  /**
-   * 集中處理鎖定狀態變化，`frame()` 每幀同步一次時才不會對沒變的按鈕重複寫
-   * `disabled`。`locked` 等同「Demo／Track 正在播放」——同步驅動 issue #34 的
-   * 播放控制條（issue #129：暫停鈕只在播放中可按、秒數讀數開始／結束時歸零），並在播放結束時把暫停旗標
-   * 強制歸零，下一次播放不會殘留上一輪的定格狀態。
-   *
-   * 同時是「播放時隱藏提示」（issue #71）的唯一觸發點：開始播放時壓下所有提示、
-   * 播完（或按停止／重設）鬆開，各自回到使用者原本的開關狀態——那些開關的值全程
-   * 沒被動過，所以「還原」不需要另外記一份快照（見 `applyHintVisibility`）。
-   */
-  private setPlaybackLocked(locked: boolean): void {
-    if (this.playbackLocked === locked) return;
-    this.playbackLocked = locked;
-    this.controlPanel.setPlaybackControlsEnabled(!locked);
-    this.controlPanel.setPlaybackActive(locked);
-    this.applyHintVisibility();
-    if (!locked) this.setPaused(false);
-  }
-
-  /**
-   * 「⏸ 暫停／▶ 繼續」切換鈕（issue #34）——只在播放中有作用（沒在播放時
-   * `demoRunner.isRunning` 為 false，直接忽略，對應「暫停鈕無作用」的驗收條件；
-   * 播放控制條上的暫停鈕此時也是灰的）。
-   */
-  private togglePause(): void {
-    if (!this.demoRunner.isRunning) return;
-    this.setPaused(!this.paused);
-  }
-
-  /** 切換暫停旗標並同步面板按鈕視覺；值沒變則不動作。 */
-  private setPaused(paused: boolean): void {
-    if (this.paused === paused) return;
-    this.paused = paused;
-    this.controlPanel.setPaused(paused);
-  }
-
-  /**
-   * 「停止／重設」與「重新匯入 PNG」共用的場景狀態收束（issue #38 / V2 T1-6）——
-   * 兩條路徑對「正在進行的疊加播放／錄製／播放鎖定」要處理得一模一樣，這裡集中
-   * 一處保證一致：
-   * 1. `demoRunner.stop()` 立即中斷排程中的 Demo／Track 事件——否則場景重設或換
-   *    網格後，還沒播完的排程繼續把事件砸進去（看起來像「重設沒生效」，或讓舊
-   *    網格算的座標砸進新網格）。
-   * 2. `setPlaybackLocked(false)` 解鎖被播放鎖住的所有控制項（Demo 鈕、開始錄製、
-   *    ▶ 播放、錄製目標選擇器、Track 清單編輯、群組區），並把暫停旗標歸零、播放
-   *    控制條回到閒置（見 `setPlaybackLocked`）。
-   * 3. 仍在進行中的錄製一併中斷並**丟棄**（不進清單）——「中斷」不是「存檔」。
-   *
-   * 差別只在呼叫端各自接的下一步：`resetSim` 呼 `world.reset()` 但**保留** Track／
-   * 群組清單；`clearAll`／`applyClipState` 連清單一起換掉（ADR-0013 生命週期：
-   * `停止／重設` 與匯入保留、「清空全部」／載入片段才換）。
-   */
-  private haltPlaybackAndRecording(): void {
-    this.demoRunner.stop();
-    this.setPlaybackLocked(false);
-    if (this.trackRecorder.isRecording) {
-      this.trackRecorder.stop();
-      this.controlPanel.setRecordingActive(false);
-    }
+    if (this.clip.playTracks(this.cameraState)) this.world.reset();
   }
 
   /**
    * 「停止／重設」（issue #14；issue #15 追加停 Demo；issue #38 收束播放／錄製；
-   * issue #95 回到 Scene）：先 `haltPlaybackAndRecording()`，再 `world.reset()` 讓場上
-   * 與 Scene 一致（錄製中生成的塊消失、每塊回 rest 座標、速度歸零、清掉所有 Grab／
-   * Pin 與風扇）。Track／群組清單與片段初始 Pin 快照（issue #39）**保留**——只有
-   * 「清空全部」／載入片段才換掉。播放過的話相機回到播放前的狀態（issue #156）。
+   * issue #95 回到 Scene）：`clip.reset()` 中斷播放與錄製（進行中的錄製丟棄），再
+   * `world.reset()` 讓場上與 Scene 一致（錄製中生成的塊消失、每塊回 rest 座標、速度歸零、
+   * 清掉所有 Grab／Pin 與風扇）。Track／群組清單與片段初始 Pin 快照（issue #39）**保留**——
+   * 只有「清空全部」／載入片段才換掉。播放過的話相機回到播放前的狀態（issue #156）：`Clip`
+   * 交回一次就丟掉，之後使用者重新擺的鏡位不會又被下一次重設拉回去。
    */
   private resetSim(): void {
-    this.haltPlaybackAndRecording();
+    const cameraBeforePlayback = this.clip.reset();
     this.world.reset();
-    // 播放過就把相機還原成播放前的狀態（issue #156）：下一輪播放從同一個鏡位出發。還原
-    // 一次就丟掉，之後使用者重新擺的鏡位不會又被下一次重設拉回去。
-    if (this.cameraBeforePlayback) {
-      this.cameraState = this.cameraBeforePlayback;
+    if (cameraBeforePlayback) {
+      this.cameraState = cameraBeforePlayback;
       this.cameraCommands = [];
-      this.cameraBeforePlayback = null;
     }
   }
 
@@ -1443,25 +983,20 @@ export class JellySandbox {
    * ／錄製，Scene 清空、場上所有塊移除（`setScene([])` + `reset()`），Track／群組／片段
    * 初始 Pin／流水號全部歸零，來源圖庫清空後重新註冊內建預設果凍（不自動放上桌：
    * 空桌面）、網格 memo 清掉。相機不動（`lastBbox` 維持，跟隨會停在原地）；拉霸與
-   * 邊界模式是使用者的設定，不動。
+   * 邊界模式是使用者的設定，不動。錄製中／播放中不允許（`clip.allows`，側欄也鎖住）。
    */
   private clearAll(): void {
-    this.haltPlaybackAndRecording();
+    if (!this.clip.allows('clearAll')) return;
     this.world.setScene([]);
     this.world.reset();
-    this.tracks = [];
-    this.nextTrackNum = 1;
-    this.setupPins = [];
-    this.groups = [createDefaultGroup()];
-    this.nextGroupNum = 1;
-    this.soloState = null;
+    // Track／群組／片段初始 Pin／兩個流水號，並收束錄製／播放（同步側欄由 Clip 回呼）。
+    this.clip.clear();
     this.sources.clear();
     this.meshMemo.clear();
     this.spawnBboxMemo.clear();
     this.nextJellyNum = 1;
     this.nextSourceNum = 1;
     this.registerDefaultSource();
-    this.syncPanelTracks();
     this.syncRenderer();
   }
 
@@ -1553,70 +1088,8 @@ export class JellySandbox {
    * 選取本身不受切工具影響，切回來外框就回來。選中那張被隱藏時也不畫。
    */
   private applyBackdropOutline(): void {
-    const id = this.backdrops.selectedId;
-    const b = id === null ? undefined : this.backdrops.get(id);
-    const show =
-      b !== undefined && b.visible && this.activeTool === 'backdrop' && !this.cleanView.isActive;
-    this.renderer.setBackdropOutline(show ? worldRectOf(b) : null);
-  }
-
-  /**
-   * 背景圖工具的指令（issue #149；issue #150 加右鍵＋滾輪與右鍵選單）——直接改
-   * `BackdropBoard`，不經 `World`、不錄進 Track。
-   */
-  private runBackdropCommand(cmd: BackdropCommand): void {
-    switch (cmd.type) {
-      case 'select':
-        this.backdrops.select(cmd.id);
-        return;
-      case 'move':
-        this.backdrops.move(cmd.id, cmd.dx, cmd.dy);
-        return;
-      case 'adjust': {
-        const target = this.backdropAdjustTarget(cmd.at);
-        if (!target) return;
-        const next = stepBackdropValue(cmd.property, target[cmd.property], cmd.steps);
-        this.setBackdropValue(target.id, cmd.property, next);
-        return;
-      }
-      case 'contextMenu':
-        this.openBackdropMenu(cmd.id, cmd.screen);
-        return;
-    }
-  }
-
-  /** 設某張 Backdrop 的縮放或透明度（右鍵＋滾輪與清單數字欄位共用）。 */
-  private setBackdropValue(id: string, property: BackdropMode, value: number): void {
-    if (property === 'scale') this.backdrops.setScale(id, value);
-    else this.backdrops.setOpacity(id, value);
-  }
-
-  /**
-   * 右鍵＋滾輪調的是哪一張（issue #150）：選中那張；沒有選中時是 `at`（游標下）最上層、顯示中
-   * 那張。游標標籤顯示的也是它的值。
-   */
-  private backdropAdjustTarget(at: Point | null): Readonly<Backdrop> | undefined {
-    const selected = this.backdrops.selectedId;
-    if (selected !== null) return this.backdrops.get(selected);
-    const hit = at && this.backdrops.hitTest(at);
-    return hit ? this.backdrops.get(hit) : undefined;
-  }
-
-  /**
-   * Backdrop 右鍵選單（issue #150）：先選中點到的那張（外框標出選單作用在哪一張），再在游標處
-   * 開「刪除／移到最上層／移到最下層」。跟 Jelly 選單共用同一個 `ContextMenu`。
-   */
-  private openBackdropMenu(id: string, screen: Point): void {
-    this.backdrops.select(id);
-    const items = backdropMenuItems({
-      isTop: this.backdrops.isTop(id),
-      isBottom: this.backdrops.isBottom(id),
-    });
-    this.contextMenu.open(screen, items, (item) => {
-      if (item === 'delete') this.backdrops.remove(id);
-      else if (item === 'bringToFront') this.backdrops.bringToFront(id);
-      else this.backdrops.sendToBack(id);
-    });
+    const show = this.activeTool === 'backdrop' && !this.cleanView.isActive;
+    this.renderer.setBackdropOutline(show ? this.backdrops.selectedRect() : null);
   }
 
   /**
@@ -1650,7 +1123,7 @@ export class JellySandbox {
    */
   private spawnBlockedAtHover(): boolean {
     if (this.activeTool !== 'jelly') return false;
-    if (this.playbackLocked) return true;
+    if (this.clip.phase === 'playing') return true;
     const point = this.canvasHover.point;
     if (!point) return false;
     const world = screenToWorld(this.cameraState.transform, this.canvasSize(), point.x, point.y);
@@ -1660,14 +1133,14 @@ export class JellySandbox {
 
   /**
    * 目前工具變更（issue #65 / V2 T3-1）——側欄工具列（`onToolChange`，issue #122 起，ADR-0016）
-   * 與數字鍵 1–5（issue #126）都走這裡。轉發給 `PointerInput.setActiveTool`（只影響下一次按下）；
-   * `activeTool` 另外存一份，因為 `PointerInput` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠它
+   * 與數字鍵 1–5（issue #126）都走這裡。交給 `ToolRouter.setActiveTool`（只影響下一次按下）；
+   * `activeTool` 另外存一份，因為 `ToolRouter` 沒有 getter，游標、筆刷、Pin 標記等視覺回饋靠它
    * 判定。工具列高亮與參數卡也在這裡同步（從工具列按下時面板自己已經切過，重設一次無妨）。切工具
    * 會改變游標／標記／圓圈的視覺回饋，所以要跟著重算。
    */
   private setActiveTool(tool: ToolId): void {
     this.activeTool = tool;
-    this.input.setActiveTool(tool);
+    this.router.setActiveTool(tool);
     this.controlPanel.setActiveTool(tool);
     this.contextMenu.close(); // Jelly 右鍵選單在切換工具時關閉（issue #124）
     this.applyToolVisuals();
@@ -1679,10 +1152,10 @@ export class JellySandbox {
    * 回饋（大把抓取範圍圈、Pin 筆刷圓圈顏色與標記脈動）。游標標籤每幀自己重算，不必在這裡推。
    */
   private setToolMode(tool: ModalToolId, mode: ToolMode): void {
-    this.input.setMode(tool, mode);
+    this.router.setMode(tool, mode);
     // 定義編隊形狀途中抓取工具鎖在編隊（issue #135，見 `ToolRouter.writeMode`）：模式鈕
     // 按了也切不走，面板高亮照實際的模式回填。
-    this.controlPanel.setToolMode(tool, this.input.modeOf(tool));
+    this.controlPanel.setToolMode(tool, this.router.modeOf(tool));
     this.applyToolVisuals();
   }
 
@@ -1691,7 +1164,7 @@ export class JellySandbox {
    * `cycleMode` 回 `null`，什麼都不做。
    */
   private cycleMode(): void {
-    const mode = this.input.cycleMode();
+    const mode = this.router.cycleMode();
     if (mode === null) return;
     const tool = this.activeTool as ModalToolId;
     this.controlPanel.setToolMode(tool, mode);
@@ -1700,12 +1173,12 @@ export class JellySandbox {
 
   /** 目前是不是抓取工具的這個模式（issue #122：範圍圈與編隊提示只在各自的模式出現）。 */
   private isGrabMode(mode: GrabMode): boolean {
-    return this.activeTool === 'grab' && this.input.modeOf('grab') === mode;
+    return this.activeTool === 'grab' && this.router.modeOf('grab') === mode;
   }
 
   /** 目前是不是 Pin 工具的這個模式（issue #123：標記脈動只在拔模式、圓圈顏色隨模式）。 */
   private isPinMode(mode: PinMode): boolean {
-    return this.activeTool === 'pin' && this.input.modeOf('pin') === mode;
+    return this.activeTool === 'pin' && this.router.modeOf('pin') === mode;
   }
 
   /**
@@ -1715,7 +1188,7 @@ export class JellySandbox {
    */
   private beginFormationDefine(): void {
     if (!this.isGrabMode('formation')) this.setToolMode('grab', 'formation');
-    this.input.beginFormationDefine();
+    this.router.formation.beginDefine();
   }
 
   /**
@@ -1725,7 +1198,7 @@ export class JellySandbox {
    */
   private updateFormationDefineHint(): void {
     this.formationDefineHint.setVisible(
-      this.input.isDefiningFormation &&
+      this.router.formation.isDefining &&
         this.isGrabMode('formation') &&
         !this.hintsSuppressed &&
         !this.cleanView.isActive,
@@ -1762,30 +1235,17 @@ export class JellySandbox {
    */
   private updateCursorLabel(): void {
     const tool = this.activeTool;
-    const mode = this.input.modeOf(tool);
-    const shape = this.input.formationShape;
-    const formation: FormationShapeState = this.input.isDefiningFormation
+    const mode = this.router.modeOf(tool);
+    const shape = this.router.formation.shape;
+    const formation: FormationShapeState = this.router.formation.isDefining
       ? 'defining'
       : shape && shape.length > 0
         ? 'ready'
         : 'none';
-    this.cursorLabel.setText(cursorLabelText({ mode, value: this.cursorLabelValue(), formation }));
+    // 數值由目前的工具回答（issue #161）：背景圖是右鍵＋滾輪會調的那張的值，其餘是工具參數。
+    const value = this.router.cursorValue(this.canvasHover.point);
+    this.cursorLabel.setText(cursorLabelText({ mode, value, formation }));
     this.cursorLabel.setPosition(this.canvasHover.point);
-  }
-
-  /**
-   * 游標標籤上的數值：背景圖工具（issue #150）是右鍵＋滾輪會調的那張（選中的，沒有就游標下的）
-   * 目前的縮放或透明度；其餘工具是 `ToolRouter` 自己的數值。
-   */
-  private cursorLabelValue(): number | string | null {
-    if (this.activeTool !== 'backdrop') return this.input.activeValue?.value ?? null;
-    const point = this.canvasHover.point;
-    const at = point
-      ? screenToWorld(this.cameraState.transform, this.canvasSize(), point.x, point.y)
-      : null;
-    const target = this.backdropAdjustTarget(at);
-    const property = this.input.modeOf('backdrop');
-    return target ? backdropValueText(property, target[property]) : null;
   }
 
   /**
@@ -1805,8 +1265,8 @@ export class JellySandbox {
    */
   private brushFor(): { variant: BrushVariant; radius: number } | null {
     if (this.activeTool !== 'pin') return null;
-    const variant = this.input.modeOf('pin') === 'place' ? 'spray' : 'erase';
-    return { variant, radius: this.pinBrushRadius };
+    const variant = this.router.modeOf('pin') === 'place' ? 'spray' : 'erase';
+    return { variant, radius: this.toolParams.get('pinBrushRadius') };
   }
 
   /**
@@ -1818,48 +1278,6 @@ export class JellySandbox {
     this.backgroundStore.saveColor(color);
   }
 
-  /**
-   * 「匯入背景圖…」選到一個檔案（issue #148）：瀏覽器原生解碼（不經 mesh pipeline，不受
-   * ADR-0009 的格式清單限制）。長邊超過 `MAX_BACKDROP_SIZE` 先等比縮小再存並提示；解不開就
-   * 只提示，現有的 Backdrop 不受影響。新的一張 cover 擺放在目前畫面上、疊在最上面。
-   */
-  private async importBackdrop(file: Blob): Promise<void> {
-    let bitmap: ImageBitmap;
-    try {
-      bitmap = await createImageBitmap(file);
-    } catch (err) {
-      console.warn('背景圖解碼失敗', err);
-      this.showNotice('讀不出這張背景圖：檔案可能壞掉，或瀏覽器不支援這個格式');
-      return;
-    }
-    let blob = file;
-    let { width, height } = bitmap;
-    const longest = Math.max(width, height);
-    if (longest > MAX_BACKDROP_SIZE) {
-      const k = MAX_BACKDROP_SIZE / longest;
-      width = Math.max(1, Math.round(width * k));
-      height = Math.max(1, Math.round(height * k));
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      canvas.getContext('2d')?.drawImage(bitmap, 0, 0, width, height);
-      bitmap.close();
-      // WebP 有透明度又比 PNG 小得多；不支援編碼 WebP 的瀏覽器（Safari）會自動退回 PNG。
-      const resized = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob(resolve, 'image/webp', 0.92),
-      );
-      if (!resized) {
-        this.showNotice('背景圖太大，縮小時失敗了');
-        return;
-      }
-      blob = resized;
-      bitmap = await createImageBitmap(canvas);
-      this.showNotice(`背景圖太大，已等比縮小到長邊 ${MAX_BACKDROP_SIZE} px`);
-    }
-    const backdrop = this.backdrops.add({ blob, width, height }, this.visibleWorldRect());
-    this.backdropTextures.set(backdrop.id, bitmap);
-  }
-
   /** 目前畫布看得到的世界範圍（issue #148：新 Backdrop 的 cover 擺放用）。 */
   private visibleWorldRect(): WorldRect {
     const { x, y, scale } = this.cameraState.transform;
@@ -1868,69 +1286,14 @@ export class JellySandbox {
   }
 
   /**
-   * Backdrop 清單同步到 Renderer 與側欄（issue #148）——`frame()` 在清單變了之後呼叫一次。
-   * 還沒有貼圖的（啟動時從儲存還原的）先開始解碼，解好再同步一次；解不開的就一直不畫，
-   * 清單上照樣列著、可以刪掉。刪掉的那張釋放貼圖與縮圖網址。
+   * Backdrop 有變動就同步到 Renderer 與側欄清單（issue #148；issue #165 起合併與繪製清單由
+   * `Backdrops` 算）——`frame()` 每幀呼叫一次，沒變動什麼都不做。
    */
   private syncBackdrops(): void {
-    this.backdropsDirty = false;
-    const list = this.backdrops.list();
-    const alive = new Set(list.map((b) => b.id));
-    for (const [id, bitmap] of this.backdropTextures) {
-      if (alive.has(id)) continue;
-      this.backdropTextures.delete(id);
-      bitmap.close();
-    }
-    for (const [id, url] of this.backdropThumbs) {
-      if (alive.has(id)) continue;
-      this.backdropThumbs.delete(id);
-      URL.revokeObjectURL(url);
-    }
-    for (const b of list) {
-      if (!this.backdropThumbs.has(b.id) && typeof URL.createObjectURL === 'function') {
-        this.backdropThumbs.set(b.id, URL.createObjectURL(b.image.blob));
-      }
-      if (this.backdropTextures.has(b.id) || this.backdropDecoding.has(b.id)) continue;
-      if (typeof createImageBitmap !== 'function') continue;
-      this.backdropDecoding.add(b.id);
-      createImageBitmap(b.image.blob).then(
-        (bitmap) => {
-          this.backdropDecoding.delete(b.id);
-          if (!this.backdrops.get(b.id)) {
-            bitmap.close();
-            return;
-          }
-          this.backdropTextures.set(b.id, bitmap);
-          this.backdropsDirty = true;
-        },
-        (err) => {
-          this.backdropDecoding.delete(b.id);
-          console.warn('背景圖還原失敗', err);
-        },
-      );
-    }
-    this.renderer.setBackdrops(
-      list.flatMap((b) => {
-        const source = this.backdropTextures.get(b.id);
-        if (!source) return [];
-        return [{ id: b.id, source, ...worldRectOf(b), alpha: b.opacity, visible: b.visible }];
-      }),
-    );
-    this.backgroundPanel.setBackdrops(
-      list.map((b) => ({
-        id: b.id,
-        label: `背景圖 ${backdropNumber(b.id)}`,
-        thumbnailUrl: this.backdropThumbs.get(b.id) ?? '',
-        visible: b.visible,
-        isTop: this.backdrops.isTop(b.id),
-        isBottom: this.backdrops.isBottom(b.id),
-        selected: b.id === this.backdrops.selectedId,
-        centerX: b.centerX,
-        centerY: b.centerY,
-        scale: b.scale,
-        opacity: b.opacity,
-      })),
-    );
+    const out = this.backdrops.flush();
+    if (!out) return;
+    this.renderer.setBackdrops(out.sprites);
+    this.backgroundPanel.setBackdrops(out.rows);
     this.applyBackdropOutline();
   }
 
@@ -1958,52 +1321,20 @@ export class JellySandbox {
     this.showNotice(`效能不足，已把網格密度降到 ${reduced}；下一次匯入／重建生效`);
   }
 
-  /** 「Pin 筆刷半徑」拉霸（issue #123）——撒 Pin 與橡皮擦的範圍，同時是筆刷圓圈的大小。 */
-  private setPinBrushRadius(radius: number): void {
-    this.pinBrushRadius = radius;
-    this.input.setPinBrushParams({ radius });
-  }
-
-  /** 「撒 Pin 間距」拉霸（issue #69）——越小越密，見 `ToolRouter.sprayAt`。 */
-  private setSpraySpacing(spacing: number): void {
-    this.spraySpacing = spacing;
-    this.input.setPinBrushParams({ spacing });
-  }
-
-  /** 「大把抓取半徑」拉霸（issue #113）——下一次按下用，同時是範圍圈的大小。 */
-  private setHandfulRadius(radius: number): void {
-    this.handfulRadius = radius;
-    this.input.setHandfulParams({ radius });
-  }
-
   /**
-   * 按住右鍵＋滾輪（issue #114，`CameraInput` 呼叫；issue #122 從「調工具半徑」推廣成
-   * 「調目前模式的數值」）：目前模式有數值就由 `ToolRouter` 增減並夾在範圍內，新值走跟
-   * 拉霸同一條路（`setXRadius`：沙盒狀態＝圓圈大小 + `ToolRouter`；電風扇四個參數走
-   * `setFanX`，issue #125：同時即時套用到場上的風扇、錄製中照樣錄進 Track），再灌回面板拉霸。
-   * 回傳 `false`（沒有數值，例如單點、沒開每點大把的編隊模式）時相機照舊縮放。
+   * 工具參數的單一變更通知（issue #160）——拉霸與右鍵＋滾輪都走到這裡：電風扇參數即時套用到
+   * 場上的風扇（若有，見 `updateLiveFan`），再把新值灌回側欄拉霸（拖拉霸時灌回的是同一個值，
+   * 不會觸發回呼）。筆刷圓圈、大把範圍圈與游標標籤每幀自己讀 `ToolParams`。
    */
-  private adjustModeValue(steps: number): boolean {
-    const adjusted = this.input.adjustActiveValue(steps);
-    if (!adjusted) return false;
-    const { key, value } = adjusted;
-    const setValue: Record<ModeValueKey, (v: number) => void> = {
-      pinBrushRadius: (v) => this.setPinBrushRadius(v),
-      handfulRadius: (v) => this.setHandfulRadius(v),
-      fanWidth: (v) => this.setFanWidth(v),
-      fanStrength: (v) => this.setFanStrength(v),
-      fanFalloffExponent: (v) => this.setFanFalloffExponent(v),
-      fanFrequency: (v) => this.setFanFrequency(v),
-    };
-    setValue[key](value);
-    this.controlPanel.setModeValue(key, value);
-    return true;
+  private onToolParamChange(key: ToolParamKey, value: number): void {
+    if (FAN_PARAM_KEYS.includes(key)) this.updateLiveFan();
+    this.controlPanel.setToolParam(key, value);
   }
 
   /**
    * 「清除所有 Pin」按鈕（issue #14；issue #51 起改走窄介面）——跟指標事件同一條
    * 路：一個無 `id` 的「清除 Pin 事件」`InputEvent` 送進 `world.applyInput`，同時
-   * `trackRecorder.record`（no-op 除非正在錄製）。不再直呼 `SimCore.clearPins()`，回到
+   * `clip.record`（錄製中才真的記下）。不再直呼 `SimCore.clearPins()`，回到
    * ADR-0005「所有影響模擬的輸入都經 `applyInput`」——這樣錄製中按這顆鈕會落進
    * Action Track，重播到那個 step 清掉畫面上所有 Pin（含片段初始 Pin，刻意跨軌，
    * 見 ADR-0007 追記）。`applyInput` 不會前進錄製 step 計數，兩行順序不影響結果。
@@ -2014,45 +1345,11 @@ export class JellySandbox {
 
   /**
    * 「移除風扇」按鈕（issue #66）——比照 `clearPins`：一個無座標的 `clearFan`
-   * 事件經 `world.applyInput` 送進去，同時餵給 `trackRecorder`（錄製中才會真的記
+   * 事件經 `world.applyInput` 送進去，同時餵給 `clip.record`（錄製中才會真的記
    * 下來），讓錄下的「移除風扇」重播時能在正確的 step 讓風扇消失。
    */
   private removeFan(): void {
     this.dispatchInput({ type: 'clearFan' });
-  }
-
-  /** 「風扇寬度」滑桿（issue #67）。 */
-  private setFanWidth(width: number): void {
-    this.fanWidth = width;
-    this.applyFanParamChange({ width });
-  }
-
-  /** 「風扇強度」滑桿（issue #67）。 */
-  private setFanStrength(strength: number): void {
-    this.fanStrength = strength;
-    this.applyFanParamChange({ strength });
-  }
-
-  /** 「風扇衰減程度」滑桿（issue #67）。 */
-  private setFanFalloffExponent(falloffExponent: number): void {
-    this.fanFalloffExponent = falloffExponent;
-    this.applyFanParamChange({ falloffExponent });
-  }
-
-  /** 「風扇頻率」滑桿（issue #67 事後檢視追加——平均每秒陣風次數，見 `SimCore.applyFan`）。 */
-  private setFanFrequency(frequency: number): void {
-    this.fanFrequency = frequency;
-    this.applyFanParamChange({ frequency });
-  }
-
-  /**
-   * 四個風扇滑桿共用的收尾（issue #67）——`patch` 只帶剛被改的那個欄位，先轉發給
-   * `ToolRouter`（下一次放置要用，見 `setFanParams`），再呼叫 `updateLiveFan`
-   * 把「目前場上的風扇（若有）」也一併更新。
-   */
-  private applyFanParamChange(patch: Partial<FanParams>): void {
-    this.input.setFanParams(patch);
-    this.updateLiveFan();
   }
 
   /**
@@ -2060,7 +1357,7 @@ export class JellySandbox {
    * 有的話拿它目前的原點／方向／長度，換上最新的寬度／強度／衰減程度／頻率，
    * 整包重送一次 `setFan`（ADR-0010：`setFan` 本來就是整包覆蓋，不用先 `clearFan`）。
    * 比照 `clearPins`／`removeFan`：任何直接呼叫 `world.applyInput` 的分支都同時餵
-   * 給 `trackRecorder`（no-op 除非正在錄製）——錄製中途調整滑桿，重播時風扇的
+   * 給 `clip.record`（錄製中才真的記下）——錄製中途調整滑桿，重播時風扇的
    * 手感才跟錄製當下看到的一致，不會停留在放置那一刻的舊參數。
    */
   private updateLiveFan(): void {
@@ -2073,25 +1370,32 @@ export class JellySandbox {
       dirX: fan.dirX,
       dirY: fan.dirY,
       length: fan.length,
-      width: this.fanWidth,
-      strength: this.fanStrength,
-      falloffExponent: this.fanFalloffExponent,
-      frequency: this.fanFrequency,
+      ...this.toolParams.fan(),
     };
     this.dispatchInput(event);
   }
 
   /**
    * 所有「沙盒自己發的模擬事件」的單一出口（issue #95 收攏）：送進 `world.applyInput`，
-   * 同時 `trackRecorder.record`（no-op 除非正在錄製）——ADR-0005「所有影響模擬的輸入
-   * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件（`PointerInput`
-   * 的 `applyInput`，見 `attachInputHandlers`）也直接走這裡——issue #123 起 Pin 工具由
+   * 同時 `clip.record`（錄製中才真的記下）——ADR-0005「所有影響模擬的輸入
+   * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件（`ToolRouter`
+   * 的 `emit`，見 `attachInputHandlers`）也直接走這裡——issue #123 起 Pin 工具由
    * `ToolRouter` 直送，不再另經 Pin 工具轉接。
    */
   private dispatchInput(event: InputEvent): void {
     this.world.applyInput(event);
-    this.trackRecorder.record(event);
+    this.clip.record(event);
   }
+
+  /**
+   * 播放中 `Clip` 排定的事件的出口（`clip.step` 的 `dispatch`）：模擬事件進 `world.applyInput`、
+   * 相機指令進 `cameraCommands`——跟即時輸入同一條窄介面（ADR-0005），但不經 `clip.record`
+   * （播放中本來就不能錄）。
+   */
+  private dispatchScheduled = (event: DemoEvent): void => {
+    if (isCameraCommand(event)) this.cameraCommands.push(event);
+    else this.world.applyInput(event);
+  };
 
   /**
    * 面板上任何一個提示顯示開關被切換（「顯示網格」「顯示 Pin」「顯示風扇範圍」
@@ -2116,12 +1420,11 @@ export class JellySandbox {
 
   /**
    * 提示現在是不是被播放暫時壓下（issue #71）——開關開著 ＋ 目前有 Demo／Track
-   * 在播放。「有東西在播」沿用既有的 `playbackLocked`（`frame()` 每幀用
-   * `demoRunner.isRunning` 同步、`playAll`／`runDemo` 按下當幀就先鎖，見
-   * `setPlaybackLocked`），不另外開第二個播放狀態旗標——兩個旗標遲早會對不上。
+   * 在播放。「有東西在播」直接問 `clip.phase`（issue #164），不另外開第二個播放狀態旗標
+   * ——兩個旗標遲早會對不上。
    */
   private get hintsSuppressed(): boolean {
-    return this.hideHintsDuringPlayback && this.playbackLocked;
+    return this.hideHintsDuringPlayback && this.clip.phase === 'playing';
   }
 
   /**
@@ -2141,7 +1444,7 @@ export class JellySandbox {
   /**
    * 把 `effectiveHints()` 推到各個提示層（issue #71）——所有「提示的顯示狀態可能
    * 變了」的路徑都收斂到這一個出口：`setHintVisible`（五顆開關）、
-   * `setHideHintsDuringPlayback`、播放開始／結束（`setPlaybackLocked`）、重新
+   * `setHideHintsDuringPlayback`、播放開始／結束（`syncClip`）、重新
    * 匯入圖片換新 Renderer（`replaceJelly`）、進出乾淨畫面（`applyCleanView`）。日後多一層提示，要動的是
    * `HintKey`／`hintIntent` 的初始值、這裡一行、以及（若它需要每幀投影）
    * `needsHintProjection`——不必回頭找散在各處的旗標。
@@ -2174,6 +1477,7 @@ export class JellySandbox {
    * 全部還是一塊——同一條路徑（`rebuildJellies`），行為因此保證一致。
    */
   private rebuildAll(): void {
+    if (!this.clip.allows('rebuildAll')) return;
     this.rebuildJellies(this.world.sceneSnapshot(), '重建失敗，場上的果凍維持不變');
   }
 
@@ -2187,7 +1491,7 @@ export class JellySandbox {
    * 先把每塊的新網格都建好（`meshFor`，任何一塊失敗就整批放棄、場上不動＋提示），
    * 確定都成功才動場上的塊：不會重建到一半留下缺塊。失敗文案由呼叫端給（單塊與
    * 全場講法不同），跟 `runImport` 同一個手法。兩個入口（「全部重建」按鈕、
-   * Jelly 右鍵選單的「重建」）在錄製中／播放中分別已被面板與 `runJellyMenuItem` 擋掉，
+   * Jelly 右鍵選單的「重建」）在錄製中／播放中分別已被 `rebuildAll` 與 `runJellyMenuItem` 問過 `clip.allows` 擋掉，
    * 這裡不再重複判定。
    */
   private rebuildJellies(entries: readonly SceneEntry[], failureNotice: string): void {
@@ -2256,10 +1560,7 @@ export class JellySandbox {
     const importSize = this.importSize;
     const format = sniffImageFormat(imageBytes);
     const texture = await decodeTextureImage(imageBytes);
-    if (this.demoRunner.isRunning) {
-      this.demoRunner.stop();
-      this.setPlaybackLocked(false);
-    }
+    this.clip.stopPlayback();
     const sourceId = `src/${this.nextSourceNum}`;
     // 網格先建（`meshFor` 要從圖庫查位元組，所以先暫時登記）；建不出來就撤掉登記、
     // 丟到 runImport 的 catch——流水號不前進、來源不會被半註冊。
@@ -2302,7 +1603,7 @@ export class JellySandbox {
    * 播放的理由）；懸停時已經先用禁止游標預告（`spawnBlockedAtHover`）。
    */
   private onJellyClick(world: Point): void {
-    if (this.playbackLocked) {
+    if (this.clip.phase === 'playing') {
       this.showNotice('播放中不能生成果凍——先按「停止／重設」');
       return;
     }
@@ -2312,35 +1613,32 @@ export class JellySandbox {
   /**
    * Jelly 工具右鍵單擊點中某塊 Jelly（`ToolRouter` 的 `onJellyContextMenu`，issue #124）：
    * 在游標處開 [重建｜移除]，作用在**點中的那一塊**（id 在開選單當下就定下，之後場上
-   * 怎麼變都不會換成別塊）。暫時不能用的項目變灰附原因（`jellyMenuItems`：播放中兩項都
-   * 不行、錄製中不能重建）；選了之後再照同一組規則擋一次（`runJellyMenuItem`），因為選單
+   * 怎麼變都不會換成別塊）。暫時不能用的項目變灰附原因（`jellyMenuItems` 問 `clip.allows`：
+   * 播放中兩項都不行、錄製中不能重建）；選了之後再照同一組規則擋一次（`runJellyMenuItem`），因為選單
    * 開著的期間播放／錄製狀態可能已經變了。右鍵點空白處 `ToolRouter` 就不會叫到這裡。
    */
   private openJellyMenu(world: Point, screen: Point): void {
     const hit = this.world.pick(world.x, world.y);
     if (!hit) return;
     const items = jellyMenuItems({
-      playing: this.playbackLocked,
-      recording: this.trackRecorder.isRecording,
+      allows: (action) => this.clip.allows(action),
+      phase: this.clip.phase,
     });
     this.contextMenu.open(screen, items, (item) => this.runJellyMenuItem(item, hit.jellyId));
   }
 
-  /** 選單項目的分派口（issue #124），守衛同 `jellyMenuItems` 的鎖法。 */
+  /** 選單項目的分派口（issue #124），守衛問 `clip.allows`（同 `jellyMenuItems` 的鎖法）。 */
   private runJellyMenuItem(item: JellyMenuItemId, jellyId: string): void {
-    if (this.playbackLocked) {
-      this.showNotice('播放中不能重建或移除果凍——先按「停止／重設」');
+    if (!this.clip.allows(item === 'rebuild' ? 'rebuildJelly' : 'removeJelly')) {
+      this.showNotice(
+        this.clip.phase === 'playing'
+          ? '播放中不能重建或移除果凍——先按「停止／重設」'
+          : '錄製中不能重建——重建換的是佈景的網格，不是可以錄的事件',
+      );
       return;
     }
-    if (item === 'rebuild') {
-      if (this.trackRecorder.isRecording) {
-        this.showNotice('錄製中不能重建——重建換的是佈景的網格，不是可以錄的事件');
-        return;
-      }
-      this.rebuildJelly(jellyId);
-    } else {
-      this.removeJelly(jellyId);
-    }
+    if (item === 'rebuild') this.rebuildJelly(jellyId);
+    else this.removeJelly(jellyId);
   }
 
   /**
@@ -2350,7 +1648,7 @@ export class JellySandbox {
    * 後不存在）。
    */
   private commitSceneUnlessRecording(): void {
-    if (!this.trackRecorder.isRecording) this.world.setScene(this.world.sceneSnapshot());
+    if (this.clip.phase !== 'recording') this.world.setScene(this.world.sceneSnapshot());
   }
 
   /**
@@ -2545,10 +1843,11 @@ export class JellySandbox {
   /**
    * 蒐集目前記憶體狀態成 `ClipState`（issue #57；issue #95 升 v2）——來源圖庫攤成
    * `sources`（每張只存一份，貼圖不進檔）、Scene 直接取 `world.sceneSnapshot()`、
-   * `RecordedTrack` 攤成 `ClipTrack`（`groupIds` 的 `Set` → 陣列、`customLabel ?? label` →
-   * `name`）、`setupPins` 拷成純 `{ x, y }`、`sim` 帶滑桿原始值、四個流水號。
+   * Track／群組／片段初始 Pin 與 Track／群組流水號取 `clip.toClipPart()`（issue #163）、
+   * `sim` 帶滑桿原始值、Jelly／來源流水號由沙盒自己補上。欄位順序維持原樣（檔案內容不變）。
    */
   private buildClipState(): ClipState {
+    const part = this.clip.toClipPart();
     const sources: Record<string, ClipImage> = {};
     for (const [id, source] of this.sources) {
       sources[id] = { format: source.format, bytes: source.bytes };
@@ -2562,22 +1861,11 @@ export class JellySandbox {
         boundary: this.boundaryMode,
         gravity: this.world.params.gravity,
       },
-      tracks: this.tracks.map((t): ClipTrack => ({
-        id: t.id,
-        kind: t.kind,
-        name: t.customLabel ?? t.label,
-        startStep: t.startStep,
-        inStep: t.inStep,
-        outStep: t.outStep,
-        steps: t.steps,
-        startCamera: t.startCamera,
-        groupIds: [...t.groupIds],
-      })),
-      groups: this.groups.map((g) => ({ id: g.id, name: g.name, enabled: g.enabled })),
-      setupPins: this.setupPins.map((p) => ({ x: p.x, y: p.y })),
+      tracks: part.tracks,
+      groups: part.groups,
+      setupPins: part.setupPins,
       counters: {
-        nextTrackNum: this.nextTrackNum,
-        nextGroupNum: this.nextGroupNum,
+        ...part.counters,
         nextJellyNum: this.nextJellyNum,
         nextSourceNum: this.nextSourceNum,
       },
@@ -2621,57 +1909,52 @@ export class JellySandbox {
    * `onLoadClip` 的 catch 接住、場上完全不動。都成功了才：中斷播放／錄製、換掉來源
    * 圖庫與 memo、`setScene` + `reset()` 把場上換成片段的 Scene、鏡頭框住聯集（即「剛匯入」
    * 的鏡位，不保存存檔時的手動平移／縮放）、其餘欄位灌回：軟硬度／輕拍力道／重力／
-   * 邊界模式（同時同步面板顯示）、所有 Track（`hydrateClipTrack`）、所有群組、片段初始
+   * 邊界模式（同時同步面板顯示）、所有 Track、所有群組、片段初始
    * Pin、流水號。拉霸 `importSize`／`meshDensity` 刻意不動：它們代表「下一次」。
    * 「最近匯入的圖」= 最大的 `sourceId`，由 `sources` 本身決定，不另外記。
    */
-  private async applyClipState(clip: ClipState): Promise<void> {
+  private async applyClipState(state: ClipState): Promise<void> {
     const decoded = new Map<string, SourceImage>();
-    for (const [id, image] of Object.entries(clip.sources)) {
+    for (const [id, image] of Object.entries(state.sources)) {
       decoded.set(id, { ...image, texture: await decodeTextureImage(image.bytes) });
     }
     // 網格先建好放在暫時的 memo，確定每塊都建得出來才動狀態（同 `meshFor` 的 key 與建法）。
     const memo = new Map<string, SimMesh>();
-    for (const e of clip.scene) {
+    for (const e of state.scene) {
       const key = meshKey(e.sourceId, e.meshParams, e.importSize);
       if (memo.has(key)) continue;
       memo.set(key, buildScaledMesh(decoded.get(e.sourceId)!.bytes, e.meshParams, e.importSize));
     }
 
-    this.haltPlaybackAndRecording();
+    this.clip.halt();
     this.sources.clear();
     for (const [id, source] of decoded) this.sources.set(id, source);
     this.meshMemo.clear();
     this.spawnBboxMemo.clear();
     for (const [key, mesh] of memo) this.meshMemo.set(key, mesh);
-    this.world.setScene(clip.scene);
+    this.world.setScene(state.scene);
     this.world.reset();
     this.syncRenderer();
     this.cameraState = createCameraState({ bbox: this.currentBbox() }, this.canvasSize());
     this.cameraCommands = [];
 
-    this.setSoftness(clip.sim.softness);
-    this.controlPanel.setSoftness(clip.sim.softness);
-    this.setTapStrength(clip.sim.tapStrength);
-    this.controlPanel.setTapStrength(clip.sim.tapStrength);
-    this.setGravity(clip.sim.gravity);
-    this.controlPanel.setGravity(clip.sim.gravity);
-    this.setBoundaryMode(clip.sim.boundary);
-    this.controlPanel.setBoundary(clip.sim.boundary);
+    this.setSoftness(state.sim.softness);
+    this.controlPanel.setSoftness(state.sim.softness);
+    this.setTapStrength(state.sim.tapStrength);
+    this.controlPanel.setTapStrength(state.sim.tapStrength);
+    this.setGravity(state.sim.gravity);
+    this.controlPanel.setGravity(state.sim.gravity);
+    this.setBoundaryMode(state.sim.boundary);
+    this.controlPanel.setBoundary(state.sim.boundary);
 
-    this.groups = clip.groups.map((g) => ({ ...g }));
-    this.tracks = clip.tracks.map(hydrateClipTrack);
-    this.nextTrackNum = clip.counters.nextTrackNum;
-    this.nextGroupNum = clip.counters.nextGroupNum;
-    this.nextJellyNum = clip.counters.nextJellyNum;
-    this.nextSourceNum = clip.counters.nextSourceNum;
-    this.soloState = null;
-    this.setupPins = clip.setupPins.map((p) => ({ x: p.x, y: p.y }));
-    this.syncPanelTracks();
+    this.nextJellyNum = state.counters.nextJellyNum;
+    this.nextSourceNum = state.counters.nextSourceNum;
+    this.clip.fromClipPart(state); // Track／群組／片段初始 Pin／兩個流水號（同步側欄由 Clip 回呼）
   }
 
-  /** `PointerInput` + `CameraInput` 都吃同一組 project／hitTest（picking 走 `World.pick`，跨所有塊）。 */
+  /** `ToolRouter` + `CameraInput` 都吃同一組 project／hitTest（picking 走 `World.pick`，跨所有塊）。 */
   private attachInputHandlers(canvas: HTMLCanvasElement): {
+    router: ToolRouter;
     input: PointerInput;
     cameraInput: CameraInput;
   } {
@@ -2679,7 +1962,8 @@ export class JellySandbox {
       screenToWorld(this.cameraState.transform, this.canvasSize(), sx, sy);
     const hitTest = (world: { x: number; y: number }) => this.world.pick(world.x, world.y) != null;
 
-    const input = new PointerInput(canvas, {
+    const router = new ToolRouter({
+      params: this.toolParams,
       screenToWorld: project,
       hitTest,
       getFan: () => this.world.fanState(),
@@ -2692,26 +1976,33 @@ export class JellySandbox {
       onJellyContextMenu: (world, screen) => this.openJellyMenu(world, screen),
       // 背景圖工具（issue #149）：判定與指令都是 `BackdropBoard` 的事，不經 `World`，也不錄進 Track。
       backdropHitTest: (world) => this.backdrops.hitTest(world),
-      onBackdropCommand: (cmd) => this.runBackdropCommand(cmd),
+      onBackdropCommand: (cmd) => {
+        const menu = this.backdrops.command(cmd);
+        // 右鍵選單跟 Jelly 選單共用同一個 `ContextMenu`。
+        if (menu) this.contextMenu.open(menu.screen, menu.items, menu.pick);
+      },
+      // 游標標籤：右鍵＋滾輪此刻會調的那張（選中的，沒有就游標下的）目前的縮放或透明度（issue #150）。
+      backdropCursorValue: (property, at) => this.backdrops.cursorValue(property, at),
       // 進 World + no-op 除非正在錄製（issue #29）。Pin 工具直接送 pin／unpin（issue #123），
       // 不再經 `routeForPinTool` 轉換。
-      applyInput: (event) => this.dispatchInput(event),
+      emit: (event) => this.dispatchInput(event),
     });
+    const input = new PointerInput(canvas, router);
     const cameraInput = new CameraInput(canvas, {
       screenToWorld: project,
       // 觸控在背景上拖曳＝平移相機；背景圖工具下按在 Backdrop 上是拖那張圖，不算背景（issue #149）。
-      hitTest: (world) =>
-        hitTest(world) ||
-        (this.activeTool === 'backdrop' && this.backdrops.hitTest(world) !== null),
+      // 歸不歸工具由目前的 adapter 回答（issue #161）。
+      hitTest: (world) => hitTest(world) || router.ownsPointerAt(world),
       emit: (cmd) => this.emitCamera(cmd), // 進佇列 + no-op 除非正在錄製（issue #29 / #36）
-      // 背景圖工具調的是場上某張 Backdrop（issue #150），其餘工具調自己的數值。
-      adjustModeValue: (steps, sx, sy) =>
-        input.adjustBackdrop(steps, sx, sy) || this.adjustModeValue(steps),
+      // 右鍵＋滾輪的退路在 `ToolRouter.wheel`（issue #161）：工具自己處理（背景圖調場上那張）
+      // → 目前模式的工具參數 → 都沒有回 false，相機照舊縮放。同步拉霸、即時更新場上風扇
+      // （錄製中照樣錄進 Track）都在 `onToolParamChange`，跟拖拉霸同一條路。
+      adjustModeValue: (steps, sx, sy) => router.wheel(steps, sx, sy),
       onMiddleClick: () => this.cycleMode(), // 中鍵單擊輪替模式（issue #122）
       // 右鍵單擊交給目前工具（issue #124 / #125）：Jelly 開選單、電風扇點在風扇上＝移除。
-      onRightClick: (world, sx, sy) => input.rightClick(world, sx, sy),
+      onRightClick: (world, sx, sy) => router.rightClick(world, sx, sy),
     });
-    return { input, cameraInput };
+    return { router, input, cameraInput };
   }
 
   private createDropHint(): HTMLDivElement {
@@ -2781,13 +2072,13 @@ export class JellySandbox {
     // 游標不該落後指標，所以一樣排在暫停守衛之前。
     this.applyCanvasCursor();
     // Backdrop（issue #148）不跟著暫停：暫停中照樣可以匯入、刪除。
-    if (this.backdropsDirty) this.syncBackdrops();
+    this.syncBackdrops();
 
     // 暫停中（issue #34）：略過固定步迴圈、PerfMonitor 取樣與相機更新——果凍
     // 定格在當下形變、播放秒數不動、鏡頭不動、排定事件不觸發——只重畫這一格。
     // `lastFrameMs` 上面已更新，暫停期間累積的真實時間全數丟棄，按繼續時
     // `accumulator` 不會突然吐出一大批步，決定性不受影響。
-    if (this.paused) {
+    if (this.clip.paused) {
       this.renderer.render();
       this.rafId = requestAnimationFrame(this.frame);
       return;
@@ -2807,19 +2098,15 @@ export class JellySandbox {
 
     const steps = this.accumulator.advance(elapsed);
     for (let i = 0; i < steps; i++) {
-      this.demoRunner.advance(
-        (event) => this.world.applyInput(event),
-        (cmd) => this.cameraCommands.push(cmd),
-      );
+      // 播放中送出這個 step 排定的事件（不再錄一次）；錄製中讓錄製時間軸前進一格，錄下的
+      // 時間戳記才能對得上重播（issue #29）。自己播完時 `Clip` 切回閒置並回呼 `syncClip`。
+      this.clip.step(this.dispatchScheduled);
       this.world.step(STEP_SECONDS);
-      this.trackRecorder.tick(); // 跟 demoRunner 同一個 step 計數，錄下的時間戳記才能對得上重播（issue #29）
     }
-    const playing = this.demoRunner.isRunning;
-    this.setPlaybackLocked(playing); // 追上「Demo／Track 自己播完」這種沒有按鈕點擊觸發的狀態變化
-    if (playing) {
+    if (this.clip.phase === 'playing') {
       // 面板的「目前 X.XX 秒」讀出（issue #34）——用 DemoRunner 的全域 sim step
       // 計數換算，暫停時 step 不前進、讀出跟著定住。
-      this.controlPanel.setPlaybackTime(stepToSeconds(this.demoRunner.elapsedSteps));
+      this.controlPanel.setPlaybackTime(stepToSeconds(this.clip.playbackSteps));
     }
 
     const cmds = this.cameraCommands;
@@ -2918,7 +2205,7 @@ export class JellySandbox {
    *
    * - **大把模式**：一顆，在游標處；拖曳中 `canvasHover` 照樣更新，圈跟著游標。
    * - **編隊拖曳中**：每個這一抓真的抓到的點各一顆，半徑是按下當下的那個
-   *   （`formationActiveGroups[].handfulRadius`；單點編隊的那一抓不畫）。按下之後才切走
+   *   （`formation.activeGroups[].handfulRadius`；單點編隊的那一抓不畫）。按下之後才切走
    *   模式或關掉開關，這一抓仍照畫到放開——跟 `formationOverlayGroups` 同一條規則。
    * - **編隊＋每點大把、沒有進行中的一抓**：定義形狀中畫在已經點下的每個點上；否則畫在
    *   游標＋各偏移的位置（跟形狀預覽同一組點）。
@@ -2933,23 +2220,28 @@ export class JellySandbox {
       radiusPx: radius * scale,
     });
     const hover = this.canvasHover.point;
-    const active = this.input.formationActiveGroups;
+    const handfulRadius = this.toolParams.get('handfulRadius');
+    const active = this.router.formation.activeGroups;
     const circles: HandfulRangeCircle[] = [];
     for (const group of active) {
       const radius = group.handfulRadius;
       if (radius !== null) for (const p of group.points) circles.push(circleAt(p, radius));
     }
     if (this.isGrabMode('handful')) {
-      if (hover) circles.push({ x: hover.x, y: hover.y, radiusPx: this.handfulRadius * scale });
-    } else if (this.isGrabMode('formation') && this.input.perPointHandful && active.length === 0) {
-      const points = this.input.isDefiningFormation
-        ? this.input.formationDefinePreview
+      if (hover) circles.push({ x: hover.x, y: hover.y, radiusPx: handfulRadius * scale });
+    } else if (
+      this.isGrabMode('formation') &&
+      this.router.formation.perPointHandful &&
+      active.length === 0
+    ) {
+      const points = this.router.formation.isDefining
+        ? this.router.formation.definePreview
         : hover
-          ? this.input.formationPreviewAt(
+          ? this.router.formation.previewAt(
               screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y),
             )
           : [];
-      for (const p of points) circles.push(circleAt(p, this.handfulRadius));
+      for (const p of points) circles.push(circleAt(p, handfulRadius));
     }
     return circles;
   }
@@ -2959,7 +2251,7 @@ export class JellySandbox {
    * ——三種狀態依序優先，任一時刻只會是其中一種：
    *
    * 1. **定義形狀中**：畫已經點下的那幾個點（還在累積，尚未成為形狀）。
-   * 2. **拖曳中**：畫每個作用中手勢真正抓到的點（`formationActiveGroups` 只列
+   * 2. **拖曳中**：畫每個作用中手勢真正抓到的點（`formation.activeGroups` 只列
    *    `attached`，落在果凍外被跳過的偏移點不畫——issue #68 原設計）。
    * 3. **閒置**：形狀已定義、指標在畫布上 → 以指標處為主點畫整組形狀，按下去
    *    之前就看得到「這一下會抓哪幾點」。少了這一段，那顆顯示開關在平常什麼
@@ -2968,26 +2260,26 @@ export class JellySandbox {
    *
    * 按下的瞬間 3 換成 2：兩者都以指標為主點、偏移量相同，視覺上是同一組點接手，
    * 不會跳位。唯一的例外是「按下時整組點**一個都沒命中**果凍」——那時
-   * `ToolRouter` 根本不建立 session（沒有任何 `grab` 送出去），`formationActiveGroups`
+   * 編隊 adapter 根本不建立 session（沒有任何 `grab` 送出去），`formation.activeGroups`
    * 是空的，於是落回 3 繼續畫預覽跟著游標。這是刻意的：那一下什麼都沒抓到，
    * 讓形狀繼續顯示才看得出「剛才那下落在果凍外了」，畫面整個空掉反而像壞了。
    */
   private formationOverlayGroups(canvasSize: CanvasSize): FormationOverlayGroup[] {
     const project = (p: Point) => worldToScreen(this.cameraState.transform, canvasSize, p.x, p.y);
     // 進行中的編隊手勢照畫到放開為止：按下之後才切走模式，這一組仍被抓著（issue #122）。
-    const active = this.input.formationActiveGroups;
+    const active = this.router.formation.activeGroups;
     if (active.length > 0) {
       return active.map((g) => ({ points: g.points.map(project) }));
     }
     // 定義中的點與懸停預覽只在編隊模式出現（issue #122）。
     if (!this.isGrabMode('formation')) return [];
-    if (this.input.isDefiningFormation) {
-      return [{ points: this.input.formationDefinePreview.map(project) }];
+    if (this.router.formation.isDefining) {
+      return [{ points: this.router.formation.definePreview.map(project) }];
     }
     const hover = this.canvasHover.point;
     if (!hover) return [];
     const anchor = screenToWorld(this.cameraState.transform, canvasSize, hover.x, hover.y);
-    const preview = this.input.formationPreviewAt(anchor);
+    const preview = this.router.formation.previewAt(anchor);
     return preview.length > 0 ? [{ points: preview.map(project) }] : [];
   }
 
@@ -3046,68 +2338,6 @@ function fanRectCorners(fan: FanState): [Point, Point, Point, Point] {
   return [nearLeft, farLeft, farRight, nearRight];
 }
 
-/** 事件 `type` → 清單標籤上的操作分類字；沒列到的 type 不進標籤。 */
-const ACTION_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
-  grab: '拖曳',
-  moveGrab: '拖曳',
-  release: '拖曳',
-  tap: '輕拍',
-  pin: 'Pin',
-  movePin: 'Pin',
-  unpin: 'Pin',
-  clearPins: 'Pin',
-  setFan: '電風扇',
-  clearFan: '電風扇',
-  spawn: '生成',
-  remove: '移除',
-};
-const CAMERA_TRACK_KIND_LABELS: Readonly<Record<string, string>> = {
-  panBy: '平移',
-  zoomBy: '縮放',
-  frame: '框住',
-  setFollow: '鎖定跟隨',
-};
-
-/**
- * 一段 Track 的簡短標籤（issue #33 動作軌 / issue #36 相機軌）：`<name>` 後面括號
- * 列出這條錄到哪幾類操作（依 `labels` 把 `event.type` 對成分類字、去重、保留出現
- * 順序），讓使用者在清單上一眼分得出哪條是哪條。沒有可辨識的操作就只回 `name`。
- */
-function summarizeTrack(
-  name: string,
-  steps: Track,
-  labels: Readonly<Record<string, string>>,
-): string {
-  const kinds = new Set<string>();
-  for (const { event } of steps) {
-    const label = labels[event.type];
-    if (label !== undefined) kinds.add(label);
-  }
-  return kinds.size > 0 ? `${name}（${[...kinds].join(' · ')}）` : name;
-}
-
-/**
- * `ClipTrack`（存檔格式）→ `RecordedTrack`（記憶體格式），issue #58——`applyClipState`
- * 載入每一條 Track 時呼叫。`groupIds` 陣列還原成 `Set`；`name` 同時填入 `customLabel`
- * 與 `label`，因為存檔的 `name` 已經是 `customLabel ?? label` 攤平後的最終顯示字串、
- * 分不出原本是使用者自訂還是自動摘要——兩欄位都設成它，載入後顯示的就是存檔當下
- * 那個名字；使用者之後把名稱欄位清空仍會照 `renameTrack` 的邏輯退回這個 `label`。
- */
-function hydrateClipTrack(clip: ClipTrack): RecordedTrack {
-  return {
-    id: clip.id,
-    kind: clip.kind,
-    label: clip.name,
-    customLabel: clip.name,
-    startStep: clip.startStep,
-    inStep: clip.inStep,
-    outStep: clip.outStep,
-    steps: clip.steps,
-    startCamera: clip.startCamera,
-    groupIds: new Set(clip.groupIds),
-  };
-}
-
 /**
  * 深拷貝一份相機狀態當快照（欄位形狀綁死 `CameraState`：`transform` 是唯一的巢狀
  * 物件，其餘是純量）——錄製起點傳給 `TrackRecorder`，之後 `updateCamera` 每幀回傳
@@ -3115,19 +2345,6 @@ function hydrateClipTrack(clip: ClipTrack): RecordedTrack {
  */
 function cloneCameraState(state: CameraState): CameraState {
   return { ...state, transform: { ...state.transform } };
-}
-
-/**
- * 一段 Track 第一筆／最後一筆操作的 step（issue #35）——`steps` 由 `TrackRecorder`
- * 逐格 push，依 `atStep` 升冪，所以取頭尾即可。空 Track 回 0（`addTrack`
- * 只在非空時才建列，這裡只是防呆）。清單上顯示成秒數，幫使用者抓修剪起訖值。
- */
-function firstEventStep(steps: Track): number {
-  return steps[0]?.atStep ?? 0;
-}
-
-function lastEventStep(steps: Track): number {
-  return steps[steps.length - 1]?.atStep ?? 0;
 }
 
 /** `meshFor` memo 的 key：來源 + 匯入尺寸 + 完整網格參數（同 key ⇒ 決定性同一張網格）。 */

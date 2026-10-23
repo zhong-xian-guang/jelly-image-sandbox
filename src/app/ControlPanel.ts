@@ -28,21 +28,23 @@
  * `JellySandbox.applyHintVisibility`。它自己不受播放／錄製鎖定影響（見
  * `onHideHintsDuringPlaybackChange`）。
  *
- * 「Demo」按鈕（issue #15）播放中會被 `JellySandbox` 呼叫 `setPlaybackControlsEnabled(false)`
- * 全部鎖住，理由同上——避免疊加播放兩個 Demo 留下沒人清的殘留 Pin/Grab。
+ * 「Demo」按鈕（issue #15）在 `Clip` 不允許播放時（錄製中、播放中）全部鎖住——避免疊加
+ * 播放兩個 Demo 留下沒人清的殘留 Pin/Grab。
  *
  * 「Track」錄製（issue #29 / V2 T1a）：一顆「● 錄製」／「■ 停止錄製」切換鈕，錄製中
  * 文字變色＋脈動（`.jelly-recording-active`，樣式見
  * `style.css`）——低頭一眼就知道現在正在錄。停止後解鎖「▶ 播放」按鈕重播剛
- * 錄好的那條。`setPlaybackControlsEnabled(false)` 也會一併鎖住這兩顆鈕：Track
- * 重播跟 Demo 播放共用同一個 `DemoRunner`，播放中不能再錄一次或重疊播放。
+ * 錄好的那條。播放中這兩顆鈕一併鎖住：Track 重播跟 Demo 播放共用 `Clip` 的同一個
+ * 「播放中」，播放中不能再錄一次或重疊播放。
+ *
+ * **鎖定規則**（issue #164）：面板不自己鏡像錄製／播放旗標——`JellySandbox` 每次 `Clip` 變動
+ * 就呼叫 `setClipStatus`，每顆會被鎖的鈕直接問其中的 `allows(動作)`（規則只寫在 `Clip`）。
  *
  * **畫布上的控制**（issue #129 / V4 U2；spec #127「播放控制條」「相機按鈕」）：錄製、播放、
  * 暫停／繼續、停止／重設與時間讀數是畫布底部中央的 `playbackBar`；「鎖定跟隨」「框住果凍」
  * 與縮放倍率讀數是畫布右下角的 `cameraControls`（DOM 見 `./CanvasControls`）。兩者由面板
  * 建出、但不在側欄裡，`JellySandbox` 把它們掛到畫布容器上；可用狀態照舊在
- * `updateTrackControlsState` 一處算，對外的 `setRecordingActive`／`setPlaybackActive`／
- * `setPaused`／`setPlaybackTime`／`setFollowLocked` 名稱不變。
+ * `updateTrackControlsState` 一處算。
  *
  * **分區與收起**（issue #128 / V4 U1；spec #127「側欄」）：最上方是側欄標題列（右側由左到右
  * 是「乾淨畫面」「?」「收起側欄」三顆鈕；前兩顆由 `JellySandbox` 塞進 `titleBarActions`，
@@ -67,7 +69,7 @@ import {
   modesOf,
   TOOL_IDS,
   type ModalToolId,
-  type ModeValueKey,
+  type ToolParamKey,
   type ToolId,
   type ToolMode,
   type ToolModeOf,
@@ -94,6 +96,23 @@ import {
 } from './panelControls';
 import { MODE_LABELS, TOOL_LABELS } from './toolLabels';
 import type { RecordTarget } from './track';
+import { clipAllows, type ClipAction, type ClipPhase } from './Clip';
+
+/**
+ * 面板要顯示的片段狀態（issue #164）：phase（錄製鈕換字、控制條播放中樣式）、暫停、以及
+ * 「現在能不能做 X」——由 `Clip.allows` 提供，面板依它決定每顆鈕灰不灰。
+ */
+export interface ClipStatus {
+  phase: ClipPhase;
+  paused: boolean;
+  allows: (action: ClipAction) => boolean;
+}
+
+const IDLE_CLIP_STATUS: ClipStatus = {
+  phase: 'idle',
+  paused: false,
+  allows: (action) => clipAllows('idle', action),
+};
 
 export type { PanelSectionId } from './panelLayout';
 
@@ -297,11 +316,11 @@ export interface ControlPanelOptions {
   onLoadClip: () => void;
   /**
    * 工具列按鈕被按（issue #65；issue #122 改成工具列）——切換給 `JellySandbox` 轉發到
-   * `PointerInput.setActiveTool`。
+   * `ToolRouter.setActiveTool`。
    */
   onToolChange: (tool: ToolId) => void;
   /**
-   * 參數卡的模式鈕被按（issue #122）——`JellySandbox` 轉發到 `PointerInput.setMode`，
+   * 參數卡的模式鈕被按（issue #122）——`JellySandbox` 轉發到 `ToolRouter.setMode`，
    * 並同步游標標籤與提示。跟中鍵單擊輪替走同一條路。
    */
   onModeChange: (tool: ModalToolId, mode: ToolMode) => void;
@@ -327,14 +346,13 @@ export interface ControlPanelOptions {
   onShowFanRangeChange: (visible: boolean) => void;
   onShowFanIconChange: (visible: boolean) => void;
   /**
-   * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿變更（issue #67）——
-   * 即時反映到場上目前的風扇（若有）與下一次放置，兩件事都交給 `JellySandbox`
-   * 處理：`ControlPanel` 只負責把滑桿的新數值原封不動送出去。
+   * 七條工具參數拉霸的單一變更回呼（issue #160；與反方向的 `setToolParam` 對稱）：電風扇
+   * 寬度／強度／衰減程度／頻率（issue #67）、Pin 筆刷半徑（issue #123）、撒 Pin 間距
+   * （issue #69）、大把抓取半徑（issue #113）。`ControlPanel` 只負責把哪條拉霸、新數值
+   * 原封不動送出去；即時更新場上風扇、影響之後的撒／擦／抓都交給 `JellySandbox`（已經
+   * 撒出去的 Pin、已抓住的那一把不回頭改）。
    */
-  onFanWidthChange: (width: number) => void;
-  onFanStrengthChange: (strength: number) => void;
-  onFanFalloffChange: (falloffExponent: number) => void;
-  onFanFrequencyChange: (frequency: number) => void;
+  onToolParamChange: (key: ToolParamKey, value: number) => void;
   /**
    * 「開始設定形狀」／「重新設定編隊形狀」按鈕被按（issue #68）——面板用同一顆
    * 按鈕依目前是否在定義中／是否已有形狀切換文字（見 `formationParams`），按下
@@ -345,18 +363,6 @@ export interface ControlPanelOptions {
   onFormationDefineEnd: () => void;
   /** 「顯示編隊抓取提示」開關（issue #68）——同 `onShowFanRangeChange` 的理由，純視覺。 */
   onShowFormationHintChange: (visible: boolean) => void;
-  /**
-   * 「Pin 筆刷半徑」（issue #123；撒 Pin 與橡皮擦共用）／「撒 Pin 間距」（issue #69）拉霸
-   * 變更——比照四個電風扇滑桿，`ControlPanel` 只負責把新數值原封不動送出去，影響之後的
-   * 撒／擦與畫布上的筆刷圓圈（已經撒出去的 Pin 是既成事實，不會回頭重排）。
-   */
-  onPinBrushRadiusChange: (radius: number) => void;
-  onSpraySpacingChange: (spacing: number) => void;
-  /**
-   * 「大把抓取半徑」拉霸變更（issue #113 / V3 T4-1）——影響下一次按下（已抓住的那一把
-   * 不變）與畫布上的範圍圈，兩件事都交給 `JellySandbox`。
-   */
-  onHandfulRadiusChange: (radius: number) => void;
   /** 「顯示大把抓取範圍」開關（issue #113）——範圍圈是提示層，同 `onShowFormationHintChange`，純視覺。 */
   onShowHandfulRangeChange: (visible: boolean) => void;
   /**
@@ -369,14 +375,14 @@ export interface ControlPanelOptions {
    * Demo 在播放，所有視覺提示（顯示網格／顯示 Pin／風扇範圍／風扇圖示／編隊抓取
    * 提示）一律暫時隱藏，播放結束再各自恢復原本的開關狀態；實際的壓下／還原在
    * `JellySandbox`，面板這邊只送出新值。是**全域**的一列、不屬於任何工具專屬
-   * 區塊，而且刻意不被 `setPlaybackControlsEnabled`／`setRecordingActive` 鎖住
+   * 區塊，而且刻意不被錄製／播放鎖住
    * ——播放中臨時想看一眼提示（或反過來）隨時都能切。
    */
   onHideHintsDuringPlaybackChange: (enabled: boolean) => void;
   /**
    * 「匯入尺寸」拉霸變更（issue #88 / V3 T1-1，見 GLOSSARY.md「匯入尺寸」）——
    * 只影響**下一次**匯入的果凍最長邊有多少世界單位，場上的果凍不跟著變，所以
-   * 這條拉霸刻意不被 `setPlaybackControlsEnabled`／`setRecordingActive` 鎖住，
+   * 這條拉霸刻意不被錄製／播放鎖住，
    * 也不因載入片段而被改寫（拉霸永遠代表「下一次」的意圖）。
    */
   onImportSizeChange: (size: number) => void;
@@ -389,7 +395,7 @@ export interface ControlPanelOptions {
   /**
    * 「全部重建」按鈕被按（issue #90 / V3 T1-3，見 GLOSSARY.md「重建」）——對場上
    * **每一塊**用它自己的來源圖＋目前兩條拉霸重新生成網格（位置不變、Pin 掉光）。
-   * 跟兩條拉霸不同，這顆**會**被 `setPlaybackControlsEnabled`／`setRecordingActive`
+   * 跟兩條拉霸不同，這顆**會**被錄製／播放
    * 鎖住（比照片段初始 Pin 兩顆鈕）：重建只改 Scene、不是 Track 事件（ADR-0013），
    * 錄製中／播放中按下沒意義。issue #95 起對每一塊重建、不再清空 Track；issue #98
    * 起面板文字是「全部重建」，跟只重建一塊的「重建 Jelly」工具成對。
@@ -481,7 +487,7 @@ export class ControlPanel {
   /** 目前的側欄版面（issue #128）——每次變動整份寫回 `storage`。 */
   private readonly layout: PanelLayout;
   private readonly storage: KeyValueStorage | null;
-  /** 播放中鎖住，避免疊加播放兩個 Demo（issue #15）——見 `setPlaybackControlsEnabled`。 */
+  /** 播放中鎖住，避免疊加播放兩個 Demo（issue #15）——見 `updateTrackControlsState`。 */
   private readonly demoButtons: HTMLButtonElement[] = [];
   /**
    * 畫布底部中央的播放控制條（issue #129）——[● 錄製] [▶ 播放] [⏸ 暫停／繼續] [■ 停止／重設]
@@ -554,10 +560,11 @@ export class ControlPanel {
    * 維護；為 0 時（所有群組都關／開啟中群組沒有成員）「▶ 播放」變灰。
    */
   private playableTrackCount = 0;
-  /** 正在錄製中——`setRecordingActive` 維護；錄製與播放互斥，錄製中「▶ 播放」與清單編輯鎖住。 */
-  private recording = false;
-  /** Demo／Track 播放中鎖住——`setPlaybackControlsEnabled` 維護。 */
-  private playbackLocked = false;
+  /**
+   * 片段的錄製／播放狀態與編輯許可（issue #164）——`setClipStatus` 整份換掉。面板不自己推論
+   * 「錄製中／播放中該鎖什麼」，每顆鈕直接問 `status.allows(動作)`。
+   */
+  private clipStatus: ClipStatus = IDLE_CLIP_STATUS;
   private readonly perfStatus: HTMLElement;
   /** `setPerfStatus` 比對用；避免值沒變時每幀重寫 DOM。 */
   private lastPerfText: string | null = null;
@@ -573,8 +580,11 @@ export class ControlPanel {
   private readonly boundarySelect: HTMLSelectElement;
   /** 「網格密度」拉霸——效能退路 `setMeshDensity` 連同旁邊的數值一起更新（issue #89）。 */
   private readonly meshDensitySlider: RangeSlider;
-  /** 「右鍵＋滾輪」調得到的數值拉霸（issue #114；issue #122 推廣）——經 `setModeValue` 灌回。 */
-  private readonly valueSliders: Record<ModeValueKey, RangeSlider>;
+  /**
+   * 工具參數的拉霸（issue #114；issue #122 推廣；issue #160 加上撒 Pin 間距）——值住在
+   * `ToolParams`，變了之後經 `setToolParam` 灌回。
+   */
+  private readonly valueSliders: Record<ToolParamKey, RangeSlider>;
 
   constructor(opts: ControlPanelOptions) {
     this.onTrackStartTimeChange = opts.onTrackStartTimeChange;
@@ -660,25 +670,25 @@ export class ControlPanel {
       '風扇寬度',
       opts.fanWidthRange,
       opts.initial.fanWidth,
-      opts.onFanWidthChange,
+      (value) => opts.onToolParamChange('fanWidth', value),
     );
     const fanStrength = createRangeSlider(
       '風扇強度',
       opts.fanStrengthRange,
       opts.initial.fanStrength,
-      opts.onFanStrengthChange,
+      (value) => opts.onToolParamChange('fanStrength', value),
     );
     const fanFalloff = createRangeSlider(
       '風扇衰減程度',
       opts.fanFalloffRange,
       opts.initial.fanFalloffExponent,
-      opts.onFanFalloffChange,
+      (value) => opts.onToolParamChange('fanFalloffExponent', value),
     );
     const fanFrequency = createRangeSlider(
       '風扇頻率',
       opts.fanFrequencyRange,
       opts.initial.fanFrequency,
-      opts.onFanFrequencyChange,
+      (value) => opts.onToolParamChange('fanFrequency', value),
     );
 
     // 電風扇專屬參數（issue #67 事後檢視拆成兩顆顯示開關；「顯示風扇提示」→
@@ -705,17 +715,18 @@ export class ControlPanel {
       'Pin 筆刷半徑',
       opts.pinBrushRadiusRange,
       opts.initial.pinBrushRadius,
-      opts.onPinBrushRadiusChange,
+      (value) => opts.onToolParamChange('pinBrushRadius', value),
+    );
+    const spraySpacingRow = createRangeSlider(
+      '撒 Pin 間距（越小越密）',
+      opts.spraySpacingRange,
+      opts.initial.spraySpacing,
+      (value) => opts.onToolParamChange('spraySpacing', value),
     );
     const pinParams = this.toolParams('Pin', [
       this.modeRow('pin', opts.initial.toolModes.pin, opts.onModeChange),
       pinBrushRadiusRow.row,
-      createRangeSlider(
-        '撒 Pin 間距（越小越密）',
-        opts.spraySpacingRange,
-        opts.initial.spraySpacing,
-        opts.onSpraySpacingChange,
-      ).row,
+      spraySpacingRow.row,
     ]);
 
     // 抓取工具的參數卡（issue #122：一般操作／大把抓取／編隊抓取合成抓取工具）——模式鈕、
@@ -725,7 +736,7 @@ export class ControlPanel {
       '大把抓取半徑',
       opts.handfulRadiusRange,
       opts.initial.handfulRadius,
-      opts.onHandfulRadiusChange,
+      (value) => opts.onToolParamChange('handfulRadius', value),
     );
     const grabParams = this.toolParams('抓取', [
       this.modeRow('grab', opts.initial.toolModes.grab, opts.onModeChange),
@@ -751,6 +762,7 @@ export class ControlPanel {
 
     this.valueSliders = {
       pinBrushRadius: pinBrushRadiusRow,
+      spraySpacing: spraySpacingRow,
       handfulRadius: handfulRadiusRow,
       fanWidth,
       fanStrength,
@@ -1028,27 +1040,20 @@ export class ControlPanel {
   }
 
   /**
-   * Demo／Track 播放中呼叫 `setPlaybackControlsEnabled(false)` 鎖住所有 Demo 按鈕、
-   * 畫布播放控制條的「● 錄製」「▶ 播放」（issue #129）、「錄製目標」選擇器與 Track 清單的
-   * 所有編輯欄位（issue #15、issue #29、issue #33）——不然疊加按下另一個 Demo，前一個已建立的
-   * Pin/Grab 不會被清掉（`DemoRunner.start` 只換排程、不回頭釋放約束），會留下沒人
-   * 記得的殘留；Track 疊加播放跟 Demo 共用同一個 `DemoRunner`，同樣的理由也適用。
-   * 播完或按「停止／重設」都要解鎖，見 `JellySandbox.frame`／`setPlaybackLocked`。
+   * 片段的錄製／播放狀態（issue #164；`JellySandbox` 每次 `Clip` 變動時同步一次）：
+   * - 錄製中：錄製鈕換成「■ 停止錄製」並變色＋脈動（issue #29；樣式見 `style.css`）。
+   * - 播放開始／結束（issue #34 / #129）：暫停鈕只在播放中可按，開始與結束時時間讀數歸零、
+   *   暫停鈕文字重設——只在 phase 真的進出「播放中」時做，暫停／繼續不會把讀數洗成 0。
+   * - 暫停中：暫停鈕換成「▶ 繼續」並加上 `.jelly-paused-active`。
+   * - 每顆會被鎖的鈕依 `status.allows` 灰掉（見 `updateTrackControlsState`）。
    */
-  setPlaybackControlsEnabled(enabled: boolean): void {
-    for (const button of this.demoButtons) button.disabled = !enabled;
-    this.playbackLocked = !enabled;
-    this.updateTrackControlsState();
-  }
-
-  /**
-   * 錄製中／已停止的視覺切換（issue #29；issue #129 起在畫布播放控制條上）——錄製鈕從
-   * 「● 錄製」換成「■ 停止錄製」並變色＋脈動（樣式見 `style.css`），低頭一眼就知道現在
-   * 正在錄。錄製中「▶ 播放」與清單編輯一併鎖住（錄製／播放互斥，issue #33）。
-   */
-  setRecordingActive(active: boolean): void {
-    this.recording = active;
-    this.bar.setRecording(active);
+  setClipStatus(status: ClipStatus): void {
+    const wasPlaying = this.clipStatus.phase === 'playing';
+    this.clipStatus = status;
+    this.bar.setRecording(status.phase === 'recording');
+    const playing = status.phase === 'playing';
+    if (playing !== wasPlaying) this.bar.setPlaying(playing);
+    this.bar.setPaused(playing && status.paused);
     this.updateTrackControlsState();
   }
 
@@ -1130,49 +1135,42 @@ export class ControlPanel {
   }
 
   /**
-   * 依 `playbackLocked` / `recording` / `trackCount` / `playableTrackCount` 重算
-   * Track 區塊每個控制項的可用狀態，集中一處免得各方法各自漏掉一顆按鈕。
-   * issue #43：群組區（`群組 ▾`、開關、名稱、獨奏、刪除、＋ 新增群組）在錄製中、
-   * 播放中一起鎖住。
+   * 依 `clipStatus.allows` / `trackCount` / `playableTrackCount` 重算 Track 區塊每個控制項的
+   * 可用狀態，集中一處免得各方法各自漏掉一顆按鈕（規則本身在 `Clip`：錄製中或播放中鎖住，
+   * 唯錄製鈕在錄製中保持可按——它此時是「■ 停止錄製」）。
    */
   private updateTrackControlsState(): void {
-    const busy = this.playbackLocked || this.recording;
-    // 錄製中錄製鈕要保持可按（它此時是「■ 停止錄製」）；只有播放中才鎖它。
-    this.bar.setEnabled('record', !this.playbackLocked);
-    this.recordTargetSelect.disabled = busy;
-    // 片段初始 Pin 的兩顆鈕比照 Track 清單編輯：錄製中／播放中鎖住（issue #39）。
-    this.setupPinsSnapshotButton.disabled = busy;
-    this.setupPinsClearButton.disabled = busy;
-    // 「設為初始位置」（issue #155）同理：Scene 不是錄得進 Track 的事件。
-    this.initialPoseButton.disabled = busy;
-    // 「全部重建」鈕（issue #90）錄製中／播放中鎖住：重建只改 Scene、不是事件（ADR-0013）。
-    this.rebuildAllButton.disabled = busy;
-    // 「清空全部」（issue #95）同理：它會清掉正在錄／正在播的片段本身。
-    this.clearAllButton.disabled = busy;
+    const allows = this.clipStatus.allows;
+    this.bar.setEnabled('record', allows('record'));
+    this.recordTargetSelect.disabled = !allows('selectRecordTarget');
+    // Demo 按鈕與「▶ 播放」共用同一個播放（issue #15）：不能疊加播放。
+    for (const button of this.demoButtons) button.disabled = !allows('play');
+    // 片段初始 Pin 的兩顆鈕（issue #39）。
+    this.setupPinsSnapshotButton.disabled = !allows('setupPins');
+    this.setupPinsClearButton.disabled = !allows('setupPins');
+    // 「設為初始位置」（issue #155）：Scene 不是錄得進 Track 的事件。
+    this.initialPoseButton.disabled = !allows('setInitialPose');
+    // 「全部重建」（issue #90）：重建只改 Scene、不是事件（ADR-0013）。
+    this.rebuildAllButton.disabled = !allows('rebuildAll');
+    // 「清空全部」（issue #95）：它會清掉正在錄／正在播的片段本身。
+    this.clearAllButton.disabled = !allows('clearAll');
     // 被鎖住時一併取消待確認（issue #131），解鎖後要重新按兩下。
-    if (busy) {
-      this.rebuildAllConfirm.cancel();
-      this.clearAllConfirm.cancel();
-      this.initialPoseConfirm.cancel();
-    }
+    if (!allows('rebuildAll')) this.rebuildAllConfirm.cancel();
+    if (!allows('clearAll')) this.clearAllConfirm.cancel();
+    if (!allows('setInitialPose')) this.initialPoseConfirm.cancel();
     // 工具列按鈕永遠可按（issue #124）：Jelly 工具的播放中／錄製中限制改在畫布上的右鍵
     // 選單各項變灰（`ContextMenu`），生成則由 `JellySandbox` 用禁止游標＋提示擋。
     // 「▶ 播放」：沒有任何 Track、或開啟中群組成員聯集為空時變灰（issue #43）。
-    this.bar.setEnabled('play', !busy && this.trackCount > 0 && this.playableTrackCount > 0);
-    this.addGroupButton.disabled = busy;
-    // 分區清單裡的群組標頭控制項 + Track 卡片欄位 + `群組 ▾` 一起鎖住（issue #43）。
+    this.bar.setEnabled(
+      'play',
+      allows('play') && this.trackCount > 0 && this.playableTrackCount > 0,
+    );
+    // 群組區（＋ 新增群組、標頭控制項、Track 卡片欄位、`群組 ▾`，issue #43）。
+    const editable = allows('editTracks');
+    this.addGroupButton.disabled = !editable;
     for (const el of this.groupedTracksEl.querySelectorAll('input, button, select')) {
-      (el as HTMLInputElement | HTMLButtonElement | HTMLSelectElement).disabled = busy;
+      (el as HTMLInputElement | HTMLButtonElement | HTMLSelectElement).disabled = !editable;
     }
-  }
-
-  /**
-   * 播放中／未播放的切換（issue #34）——`JellySandbox` 在 Demo／Track 播放開始
-   * 與結束時各呼叫一次。issue #129 起控制條常駐：播放中「⏸ 暫停／▶ 繼續」鈕才可按，
-   * 開始與結束時都把時間讀數歸零、暫停鈕文字重設回「⏸ 暫停」。
-   */
-  setPlaybackActive(active: boolean): void {
-    this.bar.setPlaying(active);
   }
 
   /**
@@ -1182,14 +1180,6 @@ export class ControlPanel {
    */
   setPlaybackTime(seconds: number): void {
     this.bar.setTime(seconds);
-  }
-
-  /**
-   * 「⏸ 暫停／▶ 繼續」鈕的視覺狀態（issue #34）——`JellySandbox` 切換暫停旗標
-   * 時呼叫；暫停中按鈕變成「▶ 繼續」並加上 `.jelly-paused-active` 提示色。
-   */
-  setPaused(paused: boolean): void {
-    this.bar.setPaused(paused);
   }
 
   /**
@@ -1247,10 +1237,11 @@ export class ControlPanel {
   }
 
   /**
-   * 「按住右鍵＋滾輪」調過數值後把新值灌回對應的拉霸（issue #114；issue #122 推廣）。
-   * 同 `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、不回呼 `onXChange`。
+   * 工具參數變了之後把新值灌回對應的拉霸（issue #114；issue #122 推廣；issue #160 改成每次
+   * `ToolParams` 變更都灌回）。同 `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、
+   * 不回呼 `onToolParamChange`。
    */
-  setModeValue(key: ModeValueKey, value: number): void {
+  setToolParam(key: ToolParamKey, value: number): void {
     setRangeSliderValue(this.valueSliders[key], value);
   }
 
