@@ -1,6 +1,7 @@
 /**
  * `TrackRecorder`（issue #29 / V2 T1a，issue #33 / V2 T1-1 依 ADR-0007 改為拆軌）
- * ——把一段即時操作錄成 Track，跟 `DemoRunner` 互補：`DemoRunner` 依 sim-step
+ * ——issue #164 起是 `Clip` 的內部零件（下文的呼叫端「`JellySandbox`」現在是 `Clip`）。
+ * 把一段即時操作錄成 Track，跟 `DemoRunner` 互補：`DemoRunner` 依 sim-step
  * 排程「播」事件，`TrackRecorder` 依 sim-step 排程「錄」事件，兩者共用 `DemoStep`
  * 格式，錄好的 Track 可以直接丟給 `DemoRunner.start()` 重播（見 ADR-0007）。
  *

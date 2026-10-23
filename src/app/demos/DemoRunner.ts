@@ -1,5 +1,6 @@
 /**
- * 輕量時間軸執行器（issue #15 / T14）——依「已經跑了幾個固定 sim step」（不是
+ * 輕量時間軸執行器（issue #15 / T14；issue #164 起是 `Clip` 的內部零件，下文的「`JellySandbox`」
+ * 呼叫端現在是 `Clip.step`）——依「已經跑了幾個固定 sim step」（不是
  * wall-clock 時間或 RAF 幀數）觸發排定的事件，跟即時輸入走同一條
  * `applyInput`／`cameraCommands` 窄介面（ADR-0005），不繞過它們直接戳 `SimCore`
  * 或相機內部狀態。

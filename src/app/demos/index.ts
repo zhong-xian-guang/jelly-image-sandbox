@@ -12,4 +12,4 @@ export {
 export type { OverlayTrack } from './overlay';
 export { DEMOS } from './scripts';
 export { STEP_SECONDS, secondsToStep, stepToSeconds } from './time';
-export type { DemoDefinition, DemoStep } from './types';
+export type { DemoDefinition, DemoEvent, DemoStep } from './types';

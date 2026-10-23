@@ -76,40 +76,34 @@
  * 聯集 bbox（`World.bbox()`）展開 Walled 範圍／貼齊 Floor；空場時維持上一次的值
  * （`lastBbox`）。
  *
- * **Demo**（issue #15 / T14 追加）：`./demos` 提供純函式腳本（`DEMOS`）+
- * `DemoRunner`（依 sim-step 計數排定事件，見該檔說明）。主迴圈每跑一個固定
- * step 前先呼叫 `demoRunner.advance(...)`，把該 step 排定的 `InputEvent` 一樣
- * 經 `world.applyInput` 送進去——跟即時輸入同一條窄介面，不繞道。Demo 腳本吃
+ * **Demo**（issue #15 / T14 追加）：`./demos` 提供純函式腳本（`DEMOS`），算好的排程交給
+ * `clip.playDemo`。主迴圈每跑一個固定 step 前先呼叫 `clip.step(dispatch)`，把該 step 排定的
+ * `InputEvent` 一樣經 `world.applyInput` 送進去——跟即時輸入同一條窄介面，不繞道。Demo 腳本吃
  * 場上**所有塊**串接起來的 Particle 位置（對目前 Scene 執行，spec #87 US52）。
- * 「停止／重設」按鈕（`resetSim`）先停 Demo 排程再 `world.reset()`，避免重設後殘留
+ * 「停止／重設」按鈕（`resetSim`）先停播放再 `world.reset()`，避免重設後殘留
  * 事件繼續觸發；匯入圖片也會中斷播放（新塊加進 Scene 的時機要乾淨，見
- * `importImage`）。播放中鎖住所有 Demo 按鈕（`setPlaybackLocked`），
- * 擋掉「疊加播放另一個 Demo」——`DemoRunner.start` 只換排程、不會回頭釋放前一個
- * Demo 已經建立的 Pin/Grab，疊加播放會留下一個沒人記得、永遠釘住的 Pin。
+ * `importImage`）。播放中不能再播（`clip.allows('play')`），擋掉「疊加播放另一個 Demo」
+ * ——疊加播放會留下一個沒人記得、永遠釘住的 Pin。
  *
  * **Track 錄製 + 疊加播放**（issue #29 / V2 T1a，issue #33 / V2 T1-1 依 ADR-0007
- * 改為多動作軌，issue #36 / V2 T1-4 加相機軌）：`./track` 提供 `TrackRecorder`
- * ——跟 `DemoRunner` 互補的純類別，依 sim-step 排程「錄」而非「播」事件。攔截點
- * 是 `attachInputHandlers` 裡既有的兩個派送點（`world.applyInput(routed)` 之前、
- * `cameraInput` 的 `emit` 推進 `cameraCommands` 之前）＋ `emitCamera`（「框住果凍」
- * ／「鎖定跟隨」按鈕）——錄製開啟時額外把同一個事件轉呼叫進
- * `trackRecorder.record()`，不新增輸入路徑（ADR-0005）。主迴圈每個固定 step
- * 呼叫一次 `trackRecorder.tick()`，讓錄下的時間戳記跟 `DemoRunner` 重播時的
- * step 計數對得上。
+ * 改為多動作軌，issue #36 / V2 T1-4 加相機軌；issue #164 生命週期收進 `Clip`）：攔截點是
+ * 兩個派送點 `dispatchInput`（所有模擬事件）與 `emitCamera`（所有相機指令）——每個事件
+ * 同時交給 `clip.record()`（錄製中才真的記下），不新增輸入路徑（ADR-0005）。主迴圈每個
+ * 固定 step 呼叫一次 `clip.step()`，錄下的時間戳記跟重播時的 step 計數才對得上。
  *
- * 停止錄製時 `TrackRecorder.stop()` 依事件種類把錄到的內容拆成 `{ action, camera }`
- * 兩份 ＋ 錄製起點鏡頭快照 `startCamera`（ADR-0007 的拆軌模型）。「錄製目標」為
+ * 停止錄製時 `Clip` 依事件種類把錄到的內容拆成動作軌／相機軌
+ * ＋ 錄製起點鏡頭快照 `startCamera`（ADR-0007 的拆軌模型）。「錄製目標」為
  * `both` 時兩份都消化——各非空就新增一列（一條動作軌 + 一條相機軌）；單頻道
  * 只消化被選那一份，另一路的操作即時生效但不錄進去。「▶ 播放全部」把清單裡
  * 所有 Track 依各自的 `startStep`／頭尾修剪用 `mergeTracks`（`demos/overlay.ts`
  * 純函式）壓成一條全域時間軸——平移 `atStep`、動作軌 `PointerId` 加軌別前綴避免
  * 跨軌 `release` 誤放別條的 Grab、相機軌在起始 step 插 `setState` 硬切、相機軌
- * 重疊區間只認先列那條、依全域 `atStep` 穩定排序——交給 `demoRunner` 精準重播
+ * 重疊區間只認先列那條、依全域 `atStep` 穩定排序——由 `Clip` 精準重播
  * （Track 排程格式跟 `DemoStep[]` 相同，不需要另外寫播放器）。多條各自單指標的
  * 動作軌疊起來等於同時多點抓取（Multi-grab）。
  *
  * **Track 座標對齊**：Grab/Tap/Pin 記的是錄製當下的絕對世界座標，`playAll`
- * 因此在 `demoRunner.start` 之前先 `world.reset()`（場上回到 Scene、每塊回 rest，
+ * 因此在開始播放時 `world.reset()`（場上回到 Scene、每塊回 rest，
  * 絕對世界座標才準確落在果凍上）。相機（issue #156 改，見 ADR-0007 追記）：播放開始
  * **不動**相機——保留播放前的鏡位與「鎖定跟隨」，讓使用者能先擺好鏡位再播；相機軌
  * 自帶的 `setState` 照舊在它的起始 step 把鏡頭硬切到錄製起點。「停止／重設」把相機
@@ -119,13 +113,12 @@
  *
  * **場景狀態整合**（issue #38 / V2 T1-6；issue #95 改）：「停止／重設」（`resetSim`）、
  * 「清空全部」（`clearAll`）與「載入片段」（`applyClipState`）共用
- * `haltPlaybackAndRecording()` 把場景收束成一致的乾淨狀態；只有後兩者會換掉整份
+ * `Clip` 的收束（`reset`／`clear`／`fromClipPart`）把錄製／播放收成一致的乾淨狀態；只有後兩者會換掉整份
  * 片段（Track／群組／初始 Pin），匯入圖片不再清任何東西。Track／群組／初始 Pin／錄製目標
  * ／兩個流水號都由 `Clip`（issue #163，見 `./Clip`）持有，沙盒只轉呼叫、把 `clip.view()`
  * 同步到側欄，存檔時把 `clip.toClipPart()` 跟自己持有的來源圖庫／Scene／物理設定拼成
- * 同一份 `ClipState`。錄製中與
- * 播放中互斥（`ControlPanel` 依 `setRecordingActive`／`setPlaybackControlsEnabled`
- * 互相鎖住對方的按鈕）。
+ * 同一份 `ClipState`。錄製／播放是 `Clip` 的單一互斥 phase（issue #164）；「現在能不能做 X」
+ * 只問 `clip.allows`——側欄依它灰按鈕（`setClipStatus`），沙盒的入口也問它。
  *
  * **substep 自動降級 + 網格密度退路**（issue #16 / T15；退路改成壓拉霸見
  * issue #89）：`PerfMonitor`（純狀態機，見該檔）每幀吃「這幀花了幾毫秒」，持續
@@ -237,7 +230,7 @@ import {
 } from './CursorLabel';
 import { KeyboardShortcuts } from './KeyboardShortcuts';
 import { canvasToPng, drawDefaultTexture } from './defaultJelly';
-import { DEMOS, DemoRunner, mergeTracks, STEP_SECONDS, stepToSeconds } from './demos';
+import { DEMOS, isCameraCommand, STEP_SECONDS, stepToSeconds, type DemoEvent } from './demos';
 import { DropImportInput } from './DropImportInput';
 import { loadFanIconStyle, saveFanIconStyle } from './fanIconStyle';
 import { clampFanIconRadiusPx, FanOverlay } from './FanOverlay';
@@ -253,7 +246,6 @@ import { DEFAULT_MESH_DENSITY, halveMeshDensity, MESH_DENSITY_RANGE } from './me
 import { browserStorage } from './panelLayout';
 import { PerfMonitor } from './PerfMonitor';
 import { PinMarkers } from './PinMarkers';
-import { TrackRecorder } from './track';
 import {
   BOUNDARY_FRICTION,
   computeFloorY,
@@ -408,8 +400,6 @@ export class JellySandbox {
   private backdropsDirty = true;
   /** 鍵盤快捷鍵（issue #126）：1–5 切工具、播放中空白鍵暫停／繼續。在 window 上聽，`destroy` 要解掉。 */
   private readonly keyboardShortcuts: KeyboardShortcuts;
-  private readonly demoRunner = new DemoRunner();
-  private readonly trackRecorder = new TrackRecorder();
   private readonly accumulator = new FixedStepAccumulator(STEP_SECONDS);
   private readonly perfMonitor = new PerfMonitor();
   private readonly root: HTMLElement;
@@ -421,8 +411,6 @@ export class JellySandbox {
   private noticeTimer = 0;
 
   private cameraState: CameraState;
-  /** 最近一次「播放全部」開始前的相機（issue #156）——「停止／重設」時還原，還原後清掉。 */
-  private cameraBeforePlayback: CameraState | null = null;
   /**
    * 畫布邊上被介面蓋住多少（issue #138）——相機 zoom-to-fit 要避開的部分，經 `canvasSize()`
    * 帶給相機。每幀開頭（還沒寫任何 DOM 前）重量一次，見 `refreshFitInsets`。
@@ -486,20 +474,11 @@ export class JellySandbox {
    * 值不被播放改寫，這個只是暫時壓下的理由，播完就自動鬆開、各自回到原本的意圖。
    */
   private hideHintsDuringPlayback = false;
-  /** `controlPanel.setPlaybackControlsEnabled` 目前套用的鎖定狀態，`frame()` 靠它避免每幀重複寫入同樣的值。 */
-  private playbackLocked = false;
   /**
-   * 播放暫停旗標（issue #34 / V2 T1-2）——開著時 `frame()` 整個略過固定步迴圈與
-   * 相機更新，只保留算繪：果凍定格在當下形變、播放秒數不動、鏡頭不動、排定
-   * 事件不觸發。只在播放中（`demoRunner.isRunning`）能切換；播放結束會被強制
-   * 歸零（見 `setPlaybackLocked`）。
+   * 片段（issue #163 / #164）：Track 清單、群組與獨奏、片段初始 Pin、錄製目標、Track／群組
+   * 流水號，以及錄製／播放 phase、暫停、播放前鏡位與編輯許可。每次真的變了就同步側欄與提示。
    */
-  private paused = false;
-  /**
-   * 片段資料（issue #163）：Track 清單、群組與獨奏、片段初始 Pin、錄製目標、Track／群組
-   * 流水號。每次真的變了就把 `view()` 同步到側欄。
-   */
-  private readonly clip = new Clip({ onChange: () => this.syncPanelTracks() });
+  private readonly clip = new Clip({ onChange: () => this.syncClip() });
 
   /**
    * 軟硬度滑桿目前值本身（0–1）——`setSoftness` 收到後即轉成 `cellFrac`／`alphaSm`
@@ -713,8 +692,8 @@ export class JellySandbox {
           'Track 記的是絕對世界座標：果凍移走後，舊 Track 抓的那一點可能已經沒有果凍。確定的話再按一次「設為初始位置」',
         ),
       onClearSetupPins: () => this.clip.clearSetupPins(),
-      onTogglePause: () => this.togglePause(),
-      // Track 清單與群組區的編輯直接交給 Clip（issue #163）；變了 Clip 自己回呼 `syncPanelTracks`。
+      onTogglePause: () => this.clip.togglePause(),
+      // Track 清單與群組區的編輯直接交給 Clip（issue #163）；變了 Clip 自己回呼 `syncClip`。
       onTrackStartTimeChange: (id, seconds) => this.clip.setTrackStartTime(id, seconds),
       onTrackTrimInChange: (id, seconds) => this.clip.setTrackTrimIn(id, seconds),
       onTrackTrimOutChange: (id, seconds) => this.clip.setTrackTrimOut(id, seconds),
@@ -799,8 +778,8 @@ export class JellySandbox {
     this.controlPanel.titleBarActions.prepend(this.cleanView.createEnterButton());
     this.keyboardShortcuts = new KeyboardShortcuts({
       selectTool: (tool) => this.setActiveTool(tool),
-      isPlaying: () => this.demoRunner.isRunning,
-      togglePause: () => this.togglePause(),
+      isPlaying: () => this.clip.phase === 'playing',
+      togglePause: () => this.clip.togglePause(),
     });
     this.applyToolVisuals();
 
@@ -812,7 +791,7 @@ export class JellySandbox {
 
     // 一開始就把群組區畫出來（預設群組永遠存在）——Track 清單仍空，但使用者能先
     // 看到「群組」這個概念、按「＋ 新增群組」（issue #43）。
-    this.syncPanelTracks();
+    this.syncClip();
   }
 
   /**
@@ -894,30 +873,29 @@ export class JellySandbox {
   }
 
   /**
-   * 送一個相機指令：進佇列給 `updateCamera`，同時（錄製開著時）轉呼叫
-   * `trackRecorder.record()`——「框住果凍」「鎖定跟隨」按鈕的操作在錄運鏡時
-   * 也要一起錄進 Camera Track（issue #36 / US15）。走的還是 `CameraCommand`
-   * 窄介面（ADR-0005），不新增輸入路徑。`CameraInput` 的 `emit` 回呼另外自己
-   * 做了同樣兩件事（見 `attachInputHandlers`）。
+   * 送一個相機指令：進佇列給 `updateCamera`，同時交給 `clip.record()`（錄製中才真的記下）
+   * ——「框住果凍」「鎖定跟隨」按鈕的操作在錄運鏡時也要一起錄進 Camera Track（issue #36 /
+   * US15）。走的還是 `CameraCommand` 窄介面（ADR-0005），不新增輸入路徑。`CameraInput` 的
+   * `emit` 回呼也走這裡（見 `attachInputHandlers`）。
    */
   private emitCamera(cmd: CameraCommand): void {
     this.cameraCommands.push(cmd);
-    this.trackRecorder.record(cmd); // no-op 除非正在錄製
+    this.clip.record(cmd);
   }
 
   /**
    * Demo 按鈕（issue #15）：依 `id` 找到腳本，用「目前」場上所有塊串接的 Particle 位置
-   * 算出時間軸交給 `demoRunner`——Demo 對目前 Scene 執行（spec #87 US52）：找角、找
-   * 中心都以聯集算，多塊時抓到的是整體最外圍的點。空場沒東西可示範，直接返回。已在
-   * 播放中的 Demo（若有）直接被取代。
+   * 算出時間軸交給 `clip.playDemo`——Demo 對目前 Scene 執行（spec #87 US52）：找角、找
+   * 中心都以聯集算，多塊時抓到的是整體最外圍的點。空場沒東西可示範，直接返回。錄製中、
+   * 播放中不允許播放（`Clip` 忽略），不記播放前鏡位。
    */
   private runDemo(id: string): void {
+    if (!this.clip.allows('play')) return;
     const demo = DEMOS.find((d) => d.id === id);
     if (!demo) return;
     const positions = this.allPositions();
     if (positions.length === 0) return;
-    this.demoRunner.start(demo.build(positions));
-    this.setPlaybackLocked(true); // 立即鎖住，擋掉「趁還沒進下一幀又點另一個 Demo」的疊加播放
+    this.clip.playDemo(demo.build(positions));
   }
 
   /** 場上所有塊的 Particle 位置串成一條（依 id 順序）——Demo 腳本的輸入。 */
@@ -935,26 +913,13 @@ export class JellySandbox {
   }
 
   /**
-   * 「開始錄製／停止錄製」切換鈕（issue #29 / issue #33 拆軌 / issue #36 加相機軌）：
-   * 開始時依「錄製目標」`clip.recordTarget` 起錄，並把當下的鏡頭狀態快照傳給
-   * `TrackRecorder`（相機軌硬切進場用）；停止時取回 `TrackRecorder.stop()` 拆好的
-   * `action`／`camera` 兩份，非空的各新增一列到清單——「兩者同時」一次產出兩列。
-   * 錄製中的事件本身不是在這裡送出的——是 `attachInputHandlers` 的兩個既有派送點
-   * ＋ `emitCamera` 在錄製旗標開著時順手轉呼叫 `trackRecorder.record()`。
-   *
-   * `ControlPanel` 那邊：`setRecordingActive` 會在錄製中把「▶ 播放全部」與清單
-   * 編輯一併鎖住（錄製／播放互斥，issue #33），不用在這裡另外處理。
+   * 「開始錄製／停止錄製」切換鈕（issue #29 / issue #33 拆軌 / issue #36 加相機軌）：交給
+   * `Clip`——開始時依錄製目標起錄（帶當下鏡頭的拷貝，相機軌硬切進場用），停止時它自己把
+   * 錄到的內容拆成動作軌／相機軌加進清單。錄製中的事件是 `dispatchInput`／`emitCamera`
+   * 順手交給 `clip.record()` 的。
    */
   private toggleRecording(): void {
-    if (this.trackRecorder.isRecording) {
-      const { action, camera, startCamera } = this.trackRecorder.stop();
-      this.controlPanel.setRecordingActive(false);
-      if (action.length > 0) this.clip.addTrack('action', action, null);
-      if (camera.length > 0) this.clip.addTrack('camera', camera, startCamera ?? null);
-    } else {
-      this.trackRecorder.start(this.clip.recordTarget, cloneCameraState(this.cameraState));
-      this.controlPanel.setRecordingActive(true);
-    }
+    this.clip.toggleRecording(cloneCameraState(this.cameraState));
   }
 
   /**
@@ -966,10 +931,10 @@ export class JellySandbox {
    * 舊姿態建出來的，之後匯入／生成／移除後的 `setScene(sceneSnapshot())` 會把新姿態洗回去，
    * 「設為目前 Pin」拍的 rest 座標也會落在舊姿態上。重設會清掉約束與風扇，所以先記下按下前的
    * Pin（同 id、同世界座標）與風扇，重建後放回去；這幾個事件不經 `dispatchInput`——錄製中、
-   * 播放中這顆鈕本來就按不了（`ControlPanel` 鎖住，這裡再擋一次）。
+   * 播放中這顆鈕本來就按不了（`clip.allows`，側欄鎖住，這裡再擋一次）。
    */
   private setInitialPose(): void {
-    if (this.playbackLocked || this.trackRecorder.isRecording) return;
+    if (!this.clip.allows('setInitialPose')) return;
     const pins = this.world.listPins();
     const fan = this.world.fanState();
     this.world.setScene(this.world.captureScenePose());
@@ -985,11 +950,11 @@ export class JellySandbox {
    * 「片段初始 Pin：設為目前 Pin」（issue #39 / ADR-0007 追記）——把畫面上現在所有
    * Pin（`world.listPins()`，跨所有塊）的**rest 形狀附著座標**（`world.restAttachPoint`）
    * 拍成快照，取代上一份。存 rest 座標而非目前變形座標：`playAll` 會先 `world.reset()`，還原時
-   * 這些座標才精準落在原本的表面點，也不隨拍快照當下的變形而偏。`ControlPanel`
-   * 那邊錄製中／播放中已把這顆鈕鎖住，這裡不用再擋。快照本身存在 `Clip`，沙盒只負責從
-   * World 取出 rest 座標交給它。
+   * 這些座標才精準落在原本的表面點，也不隨拍快照當下的變形而偏。錄製中／播放中 `Clip`
+   * 自己會忽略。快照本身存在 `Clip`，沙盒只負責從 World 取出 rest 座標交給它。
    */
   private snapshotSetupPins(): void {
+    if (!this.clip.allows('setupPins')) return;
     this.clip.setSetupPins(
       this.world.listPins().flatMap((pin) => {
         // `restAttachPoint` 回傳全新的 `Point`；作用中的 Pin 必有約束，`null` 只是防呆。
@@ -1000,127 +965,58 @@ export class JellySandbox {
   }
 
   /**
-   * 把 `clip.view()`（Track 清單、群組區、可播放數、片段初始 Pin 數）一次同步到
-   * `ControlPanel`（issue #33 起；issue #43 加群組區；issue #163 改由 `Clip` 算好）。
-   * `Clip` 每次狀態真的變了就回呼這裡。
+   * `Clip` 每次狀態真的變了就回呼這裡（issue #163 / #164）：把 `clip.view()`（Track 清單、群組區、
+   * 可播放數、片段初始 Pin 數）與錄製／播放狀態（phase、暫停、`allows`）一次同步到
+   * `ControlPanel`，再重算提示顯示——「播放時隱藏提示」（issue #71）在播放開始時壓下、播完（或
+   * 按停止／重設）鬆開，各自回到使用者原本的開關狀態（見 `applyHintVisibility`）。
    */
-  private syncPanelTracks(): void {
+  private syncClip(): void {
     const view = this.clip.view();
     this.controlPanel.setGroups(view.groups);
     this.controlPanel.setTracks(view.tracks);
     this.controlPanel.setPlayableTrackCount(view.playableTrackCount);
     this.controlPanel.setSetupPinCount(view.setupPinCount);
+    this.controlPanel.setClipStatus({
+      phase: view.phase,
+      paused: view.paused,
+      allows: (action) => this.clip.allows(action),
+    });
+    this.applyHintVisibility();
   }
 
   /**
-   * 「▶ 播放」按鈕（issue #33；issue #36 加相機軌；issue #43 加群組過濾）：先把
-   * Track 清單濾成「至少屬於一個開啟中群組」的子集（`tracksInEnabledGroups`，
-   * **保留清單順序** → `mergeTracks` 認先列語意不變），再依各自的 `startStep`／
-   * 頭尾修剪疊加成一條全域時間軸（`mergeTracks` 純函式——平移 `atStep`、動作軌
-   * `PointerId` 加軌別前綴避免跨軌碰撞、相機軌在起始 step 插 `setState` 硬切、
-   * 相機軌重疊區間只認先列那條、依全域 `atStep` 穩定排序），交給 `demoRunner`
-   * 精準重播。不手動分群時所有 Track 都在預設群組、預設開啟，子集＝全部，行為
-   * 跟 issue #33 的「播放全部」完全相同。開啟中群組成員聯集為空時直接返回
-   *（`ControlPanel` 那邊按鈕也已變灰）。
+   * 「▶ 播放」按鈕（issue #33；issue #36 加相機軌；issue #43 加群組過濾）：`Clip` 把開啟中
+   * 群組的成員 Track（保留清單順序）連同片段初始 Pin 疊成一條全域時間軸播放，並記下播放前的
+   * 鏡位（issue #156，「停止／重設」時還原，見 `resetSim`）。錄製中、已在播放中、或沒有可播放的
+   * Track 時 `Clip` 忽略。
    *
-   * 播放前先 `world.reset()`：場上回到 Scene（錄製中生成的消失、移除的回來、每塊回
+   * 真的開始播放才 `world.reset()`：場上回到 Scene（錄製中生成的消失、移除的回來、每塊回
    * rest）——Track 裡 Grab/Tap/Pin 記的是錄製當下的絕對世界座標，場景回到 rest 狀態
    * 它們才會準確落在果凍上、每次疊加結果才逐格一致（issue #33 決定性驗收條件），
-   * 不受「播放前場景被怎麼動過」影響。
+   * 不受「播放前場景被怎麼動過」影響。排定的事件要到下一個 sim step 才送出，重設排在開始
+   * 之後也一樣。
    *
-   * 相機（issue #156）：不動——保留播放前的鏡位與「鎖定跟隨」（以前會推 `frame` 或重設成
-   * 跟隨開著的框好鏡位，使用者沒辦法先擺好鏡位）。相機軌一生效，自帶的 `setState` 硬切
-   * 照舊接管。播放前的相機記在 `cameraBeforePlayback`，「停止／重設」時還原（見 `resetSim`），
-   * 同一個鏡位重複播放，鏡頭路徑仍逐格一致。
+   * 相機（issue #156）：不動——保留播放前的鏡位與「鎖定跟隨」。相機軌一生效，自帶的
+   * `setState` 硬切照舊接管。
    */
   private playAll(): void {
-    // 片段初始 Pin 合成軌在最前、其後是開啟中群組的成員 Track（照清單順序），見 `Clip.overlayTracks`。
-    const overlay = this.clip.overlayTracks();
-    if (overlay.length === 0) return;
-    this.world.reset();
-    // 播放中又按一次播放時，現在的鏡頭是播放中的（可能已被相機軌硬切），不能當成播放前。
-    if (!this.demoRunner.isRunning) this.cameraBeforePlayback = this.cameraState;
-    this.demoRunner.start(mergeTracks(overlay));
-    this.setPlaybackLocked(true); // 立即鎖住，理由同 runDemo
-  }
-
-  /**
-   * 集中處理鎖定狀態變化，`frame()` 每幀同步一次時才不會對沒變的按鈕重複寫
-   * `disabled`。`locked` 等同「Demo／Track 正在播放」——同步驅動 issue #34 的
-   * 播放控制條（issue #129：暫停鈕只在播放中可按、秒數讀數開始／結束時歸零），並在播放結束時把暫停旗標
-   * 強制歸零，下一次播放不會殘留上一輪的定格狀態。
-   *
-   * 同時是「播放時隱藏提示」（issue #71）的唯一觸發點：開始播放時壓下所有提示、
-   * 播完（或按停止／重設）鬆開，各自回到使用者原本的開關狀態——那些開關的值全程
-   * 沒被動過，所以「還原」不需要另外記一份快照（見 `applyHintVisibility`）。
-   */
-  private setPlaybackLocked(locked: boolean): void {
-    if (this.playbackLocked === locked) return;
-    this.playbackLocked = locked;
-    this.controlPanel.setPlaybackControlsEnabled(!locked);
-    this.controlPanel.setPlaybackActive(locked);
-    this.applyHintVisibility();
-    if (!locked) this.setPaused(false);
-  }
-
-  /**
-   * 「⏸ 暫停／▶ 繼續」切換鈕（issue #34）——只在播放中有作用（沒在播放時
-   * `demoRunner.isRunning` 為 false，直接忽略，對應「暫停鈕無作用」的驗收條件；
-   * 播放控制條上的暫停鈕此時也是灰的）。
-   */
-  private togglePause(): void {
-    if (!this.demoRunner.isRunning) return;
-    this.setPaused(!this.paused);
-  }
-
-  /** 切換暫停旗標並同步面板按鈕視覺；值沒變則不動作。 */
-  private setPaused(paused: boolean): void {
-    if (this.paused === paused) return;
-    this.paused = paused;
-    this.controlPanel.setPaused(paused);
-  }
-
-  /**
-   * 「停止／重設」與「重新匯入 PNG」共用的場景狀態收束（issue #38 / V2 T1-6）——
-   * 兩條路徑對「正在進行的疊加播放／錄製／播放鎖定」要處理得一模一樣，這裡集中
-   * 一處保證一致：
-   * 1. `demoRunner.stop()` 立即中斷排程中的 Demo／Track 事件——否則場景重設或換
-   *    網格後，還沒播完的排程繼續把事件砸進去（看起來像「重設沒生效」，或讓舊
-   *    網格算的座標砸進新網格）。
-   * 2. `setPlaybackLocked(false)` 解鎖被播放鎖住的所有控制項（Demo 鈕、開始錄製、
-   *    ▶ 播放、錄製目標選擇器、Track 清單編輯、群組區），並把暫停旗標歸零、播放
-   *    控制條回到閒置（見 `setPlaybackLocked`）。
-   * 3. 仍在進行中的錄製一併中斷並**丟棄**（不進清單）——「中斷」不是「存檔」。
-   *
-   * 差別只在呼叫端各自接的下一步：`resetSim` 呼 `world.reset()` 但**保留** Track／
-   * 群組清單；`clearAll`／`applyClipState` 連清單一起換掉（ADR-0013 生命週期：
-   * `停止／重設` 與匯入保留、「清空全部」／載入片段才換）。
-   */
-  private haltPlaybackAndRecording(): void {
-    this.demoRunner.stop();
-    this.setPlaybackLocked(false);
-    if (this.trackRecorder.isRecording) {
-      this.trackRecorder.stop();
-      this.controlPanel.setRecordingActive(false);
-    }
+    if (this.clip.playTracks(this.cameraState)) this.world.reset();
   }
 
   /**
    * 「停止／重設」（issue #14；issue #15 追加停 Demo；issue #38 收束播放／錄製；
-   * issue #95 回到 Scene）：先 `haltPlaybackAndRecording()`，再 `world.reset()` 讓場上
-   * 與 Scene 一致（錄製中生成的塊消失、每塊回 rest 座標、速度歸零、清掉所有 Grab／
-   * Pin 與風扇）。Track／群組清單與片段初始 Pin 快照（issue #39）**保留**——只有
-   * 「清空全部」／載入片段才換掉。播放過的話相機回到播放前的狀態（issue #156）。
+   * issue #95 回到 Scene）：`clip.reset()` 中斷播放與錄製（進行中的錄製丟棄），再
+   * `world.reset()` 讓場上與 Scene 一致（錄製中生成的塊消失、每塊回 rest 座標、速度歸零、
+   * 清掉所有 Grab／Pin 與風扇）。Track／群組清單與片段初始 Pin 快照（issue #39）**保留**——
+   * 只有「清空全部」／載入片段才換掉。播放過的話相機回到播放前的狀態（issue #156）：`Clip`
+   * 交回一次就丟掉，之後使用者重新擺的鏡位不會又被下一次重設拉回去。
    */
   private resetSim(): void {
-    this.haltPlaybackAndRecording();
+    const cameraBeforePlayback = this.clip.reset();
     this.world.reset();
-    // 播放過就把相機還原成播放前的狀態（issue #156）：下一輪播放從同一個鏡位出發。還原
-    // 一次就丟掉，之後使用者重新擺的鏡位不會又被下一次重設拉回去。
-    if (this.cameraBeforePlayback) {
-      this.cameraState = this.cameraBeforePlayback;
+    if (cameraBeforePlayback) {
+      this.cameraState = cameraBeforePlayback;
       this.cameraCommands = [];
-      this.cameraBeforePlayback = null;
     }
   }
 
@@ -1129,13 +1025,14 @@ export class JellySandbox {
    * ／錄製，Scene 清空、場上所有塊移除（`setScene([])` + `reset()`），Track／群組／片段
    * 初始 Pin／流水號全部歸零，來源圖庫清空後重新註冊內建預設果凍（不自動放上桌：
    * 空桌面）、網格 memo 清掉。相機不動（`lastBbox` 維持，跟隨會停在原地）；拉霸與
-   * 邊界模式是使用者的設定，不動。
+   * 邊界模式是使用者的設定，不動。錄製中／播放中不允許（`clip.allows`，側欄也鎖住）。
    */
   private clearAll(): void {
-    this.haltPlaybackAndRecording();
+    if (!this.clip.allows('clearAll')) return;
     this.world.setScene([]);
     this.world.reset();
-    this.clip.clear(); // Track／群組／片段初始 Pin／兩個流水號（同步側欄由 Clip 回呼）
+    // Track／群組／片段初始 Pin／兩個流水號，並收束錄製／播放（同步側欄由 Clip 回呼）。
+    this.clip.clear();
     this.sources.clear();
     this.meshMemo.clear();
     this.spawnBboxMemo.clear();
@@ -1330,7 +1227,7 @@ export class JellySandbox {
    */
   private spawnBlockedAtHover(): boolean {
     if (this.activeTool !== 'jelly') return false;
-    if (this.playbackLocked) return true;
+    if (this.clip.phase === 'playing') return true;
     const point = this.canvasHover.point;
     if (!point) return false;
     const world = screenToWorld(this.cameraState.transform, this.canvasSize(), point.x, point.y);
@@ -1638,7 +1535,7 @@ export class JellySandbox {
   /**
    * 「清除所有 Pin」按鈕（issue #14；issue #51 起改走窄介面）——跟指標事件同一條
    * 路：一個無 `id` 的「清除 Pin 事件」`InputEvent` 送進 `world.applyInput`，同時
-   * `trackRecorder.record`（no-op 除非正在錄製）。不再直呼 `SimCore.clearPins()`，回到
+   * `clip.record`（錄製中才真的記下）。不再直呼 `SimCore.clearPins()`，回到
    * ADR-0005「所有影響模擬的輸入都經 `applyInput`」——這樣錄製中按這顆鈕會落進
    * Action Track，重播到那個 step 清掉畫面上所有 Pin（含片段初始 Pin，刻意跨軌，
    * 見 ADR-0007 追記）。`applyInput` 不會前進錄製 step 計數，兩行順序不影響結果。
@@ -1649,7 +1546,7 @@ export class JellySandbox {
 
   /**
    * 「移除風扇」按鈕（issue #66）——比照 `clearPins`：一個無座標的 `clearFan`
-   * 事件經 `world.applyInput` 送進去，同時餵給 `trackRecorder`（錄製中才會真的記
+   * 事件經 `world.applyInput` 送進去，同時餵給 `clip.record`（錄製中才會真的記
    * 下來），讓錄下的「移除風扇」重播時能在正確的 step 讓風扇消失。
    */
   private removeFan(): void {
@@ -1661,7 +1558,7 @@ export class JellySandbox {
    * 有的話拿它目前的原點／方向／長度，換上最新的寬度／強度／衰減程度／頻率，
    * 整包重送一次 `setFan`（ADR-0010：`setFan` 本來就是整包覆蓋，不用先 `clearFan`）。
    * 比照 `clearPins`／`removeFan`：任何直接呼叫 `world.applyInput` 的分支都同時餵
-   * 給 `trackRecorder`（no-op 除非正在錄製）——錄製中途調整滑桿，重播時風扇的
+   * 給 `clip.record`（錄製中才真的記下）——錄製中途調整滑桿，重播時風扇的
    * 手感才跟錄製當下看到的一致，不會停留在放置那一刻的舊參數。
    */
   private updateLiveFan(): void {
@@ -1684,15 +1581,25 @@ export class JellySandbox {
 
   /**
    * 所有「沙盒自己發的模擬事件」的單一出口（issue #95 收攏）：送進 `world.applyInput`，
-   * 同時 `trackRecorder.record`（no-op 除非正在錄製）——ADR-0005「所有影響模擬的輸入
+   * 同時 `clip.record`（錄製中才真的記下）——ADR-0005「所有影響模擬的輸入
    * 都經 `applyInput`」，錄製中按下的按鈕才會落進 Action Track。指標事件（`ToolRouter`
    * 的 `emit`，見 `attachInputHandlers`）也直接走這裡——issue #123 起 Pin 工具由
    * `ToolRouter` 直送，不再另經 Pin 工具轉接。
    */
   private dispatchInput(event: InputEvent): void {
     this.world.applyInput(event);
-    this.trackRecorder.record(event);
+    this.clip.record(event);
   }
+
+  /**
+   * 播放中 `Clip` 排定的事件的出口（`clip.step` 的 `dispatch`）：模擬事件進 `world.applyInput`、
+   * 相機指令進 `cameraCommands`——跟即時輸入同一條窄介面（ADR-0005），但不經 `clip.record`
+   * （播放中本來就不能錄）。
+   */
+  private dispatchScheduled = (event: DemoEvent): void => {
+    if (isCameraCommand(event)) this.cameraCommands.push(event);
+    else this.world.applyInput(event);
+  };
 
   /**
    * 面板上任何一個提示顯示開關被切換（「顯示網格」「顯示 Pin」「顯示風扇範圍」
@@ -1717,12 +1624,11 @@ export class JellySandbox {
 
   /**
    * 提示現在是不是被播放暫時壓下（issue #71）——開關開著 ＋ 目前有 Demo／Track
-   * 在播放。「有東西在播」沿用既有的 `playbackLocked`（`frame()` 每幀用
-   * `demoRunner.isRunning` 同步、`playAll`／`runDemo` 按下當幀就先鎖，見
-   * `setPlaybackLocked`），不另外開第二個播放狀態旗標——兩個旗標遲早會對不上。
+   * 在播放。「有東西在播」直接問 `clip.phase`（issue #164），不另外開第二個播放狀態旗標
+   * ——兩個旗標遲早會對不上。
    */
   private get hintsSuppressed(): boolean {
-    return this.hideHintsDuringPlayback && this.playbackLocked;
+    return this.hideHintsDuringPlayback && this.clip.phase === 'playing';
   }
 
   /**
@@ -1742,7 +1648,7 @@ export class JellySandbox {
   /**
    * 把 `effectiveHints()` 推到各個提示層（issue #71）——所有「提示的顯示狀態可能
    * 變了」的路徑都收斂到這一個出口：`setHintVisible`（五顆開關）、
-   * `setHideHintsDuringPlayback`、播放開始／結束（`setPlaybackLocked`）、重新
+   * `setHideHintsDuringPlayback`、播放開始／結束（`syncClip`）、重新
    * 匯入圖片換新 Renderer（`replaceJelly`）、進出乾淨畫面（`applyCleanView`）。日後多一層提示，要動的是
    * `HintKey`／`hintIntent` 的初始值、這裡一行、以及（若它需要每幀投影）
    * `needsHintProjection`——不必回頭找散在各處的旗標。
@@ -1775,6 +1681,7 @@ export class JellySandbox {
    * 全部還是一塊——同一條路徑（`rebuildJellies`），行為因此保證一致。
    */
   private rebuildAll(): void {
+    if (!this.clip.allows('rebuildAll')) return;
     this.rebuildJellies(this.world.sceneSnapshot(), '重建失敗，場上的果凍維持不變');
   }
 
@@ -1788,7 +1695,7 @@ export class JellySandbox {
    * 先把每塊的新網格都建好（`meshFor`，任何一塊失敗就整批放棄、場上不動＋提示），
    * 確定都成功才動場上的塊：不會重建到一半留下缺塊。失敗文案由呼叫端給（單塊與
    * 全場講法不同），跟 `runImport` 同一個手法。兩個入口（「全部重建」按鈕、
-   * Jelly 右鍵選單的「重建」）在錄製中／播放中分別已被面板與 `runJellyMenuItem` 擋掉，
+   * Jelly 右鍵選單的「重建」）在錄製中／播放中分別已被 `rebuildAll` 與 `runJellyMenuItem` 問過 `clip.allows` 擋掉，
    * 這裡不再重複判定。
    */
   private rebuildJellies(entries: readonly SceneEntry[], failureNotice: string): void {
@@ -1857,10 +1764,7 @@ export class JellySandbox {
     const importSize = this.importSize;
     const format = sniffImageFormat(imageBytes);
     const texture = await decodeTextureImage(imageBytes);
-    if (this.demoRunner.isRunning) {
-      this.demoRunner.stop();
-      this.setPlaybackLocked(false);
-    }
+    this.clip.stopPlayback();
     const sourceId = `src/${this.nextSourceNum}`;
     // 網格先建（`meshFor` 要從圖庫查位元組，所以先暫時登記）；建不出來就撤掉登記、
     // 丟到 runImport 的 catch——流水號不前進、來源不會被半註冊。
@@ -1903,7 +1807,7 @@ export class JellySandbox {
    * 播放的理由）；懸停時已經先用禁止游標預告（`spawnBlockedAtHover`）。
    */
   private onJellyClick(world: Point): void {
-    if (this.playbackLocked) {
+    if (this.clip.phase === 'playing') {
       this.showNotice('播放中不能生成果凍——先按「停止／重設」');
       return;
     }
@@ -1921,27 +1825,24 @@ export class JellySandbox {
     const hit = this.world.pick(world.x, world.y);
     if (!hit) return;
     const items = jellyMenuItems({
-      playing: this.playbackLocked,
-      recording: this.trackRecorder.isRecording,
+      playing: this.clip.phase === 'playing',
+      recording: this.clip.phase === 'recording',
     });
     this.contextMenu.open(screen, items, (item) => this.runJellyMenuItem(item, hit.jellyId));
   }
 
-  /** 選單項目的分派口（issue #124），守衛同 `jellyMenuItems` 的鎖法。 */
+  /** 選單項目的分派口（issue #124），守衛問 `clip.allows`（同 `jellyMenuItems` 的鎖法）。 */
   private runJellyMenuItem(item: JellyMenuItemId, jellyId: string): void {
-    if (this.playbackLocked) {
-      this.showNotice('播放中不能重建或移除果凍——先按「停止／重設」');
+    if (!this.clip.allows(item === 'rebuild' ? 'rebuildJelly' : 'removeJelly')) {
+      this.showNotice(
+        this.clip.phase === 'playing'
+          ? '播放中不能重建或移除果凍——先按「停止／重設」'
+          : '錄製中不能重建——重建換的是佈景的網格，不是可以錄的事件',
+      );
       return;
     }
-    if (item === 'rebuild') {
-      if (this.trackRecorder.isRecording) {
-        this.showNotice('錄製中不能重建——重建換的是佈景的網格，不是可以錄的事件');
-        return;
-      }
-      this.rebuildJelly(jellyId);
-    } else {
-      this.removeJelly(jellyId);
-    }
+    if (item === 'rebuild') this.rebuildJelly(jellyId);
+    else this.removeJelly(jellyId);
   }
 
   /**
@@ -1951,7 +1852,7 @@ export class JellySandbox {
    * 後不存在）。
    */
   private commitSceneUnlessRecording(): void {
-    if (!this.trackRecorder.isRecording) this.world.setScene(this.world.sceneSnapshot());
+    if (this.clip.phase !== 'recording') this.world.setScene(this.world.sceneSnapshot());
   }
 
   /**
@@ -2229,7 +2130,7 @@ export class JellySandbox {
       memo.set(key, buildScaledMesh(decoded.get(e.sourceId)!.bytes, e.meshParams, e.importSize));
     }
 
-    this.haltPlaybackAndRecording();
+    this.clip.halt();
     this.sources.clear();
     for (const [id, source] of decoded) this.sources.set(id, source);
     this.meshMemo.clear();
@@ -2380,7 +2281,7 @@ export class JellySandbox {
     // 定格在當下形變、播放秒數不動、鏡頭不動、排定事件不觸發——只重畫這一格。
     // `lastFrameMs` 上面已更新，暫停期間累積的真實時間全數丟棄，按繼續時
     // `accumulator` 不會突然吐出一大批步，決定性不受影響。
-    if (this.paused) {
+    if (this.clip.paused) {
       this.renderer.render();
       this.rafId = requestAnimationFrame(this.frame);
       return;
@@ -2400,19 +2301,15 @@ export class JellySandbox {
 
     const steps = this.accumulator.advance(elapsed);
     for (let i = 0; i < steps; i++) {
-      this.demoRunner.advance(
-        (event) => this.world.applyInput(event),
-        (cmd) => this.cameraCommands.push(cmd),
-      );
+      // 播放中送出這個 step 排定的事件（不再錄一次）；錄製中讓錄製時間軸前進一格，錄下的
+      // 時間戳記才能對得上重播（issue #29）。自己播完時 `Clip` 切回閒置並回呼 `syncClip`。
+      this.clip.step(this.dispatchScheduled);
       this.world.step(STEP_SECONDS);
-      this.trackRecorder.tick(); // 跟 demoRunner 同一個 step 計數，錄下的時間戳記才能對得上重播（issue #29）
     }
-    const playing = this.demoRunner.isRunning;
-    this.setPlaybackLocked(playing); // 追上「Demo／Track 自己播完」這種沒有按鈕點擊觸發的狀態變化
-    if (playing) {
+    if (this.clip.phase === 'playing') {
       // 面板的「目前 X.XX 秒」讀出（issue #34）——用 DemoRunner 的全域 sim step
       // 計數換算，暫停時 step 不前進、讀出跟著定住。
-      this.controlPanel.setPlaybackTime(stepToSeconds(this.demoRunner.elapsedSteps));
+      this.controlPanel.setPlaybackTime(stepToSeconds(this.clip.playbackSteps));
     }
 
     const cmds = this.cameraCommands;
