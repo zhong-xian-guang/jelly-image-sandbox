@@ -3,7 +3,7 @@
  *
  * 兩邊都吃 `CameraTransform`：`screen = (world − {x, y}) · scale + 畫布中心`。
  * 這是全專案唯一一份這個公式——`updateCamera` 的縮放定點換算、Renderer 的
- * container 定位、輸入層的 picking 換算都從這裡取，不各自重算（見 CONTEXT.md
+ * container 定位、輸入層的 picking 換算都從這裡取，不各自重算（見 GLOSSARY.md
  * 「Camera」：所有繪製與 picking 都經過它）。
  */
 

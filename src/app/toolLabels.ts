@@ -14,7 +14,7 @@ export const TOOL_LABELS: Readonly<Record<ToolId, { icon: string; text: string }
   backdrop: { icon: '🖼️', text: '背景圖' },
 };
 
-/** 模式名稱（CONTEXT.md「模式」）。 */
+/** 模式名稱（GLOSSARY.md「模式」）。 */
 export const MODE_LABELS: Readonly<Record<ToolMode, string>> = {
   single: '單點',
   handful: '大把',

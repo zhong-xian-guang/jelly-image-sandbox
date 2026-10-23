@@ -1,5 +1,5 @@
 /**
- * 「網格密度」拉霸（issue #89 / V3 T1-2，見 CONTEXT.md「網格密度」）的範圍、預設值，
+ * 「網格密度」拉霸（issue #89 / V3 T1-2，見 GLOSSARY.md「網格密度」）的範圍、預設值，
  * 與效能退路的砍半規則。純函式、無 DOM——`JellySandbox` 在 `PerfMonitor` 降級那一幀
  * 呼叫 `halveMeshDensity` 壓拉霸，`ControlPanel` 只負責顯示。
  *

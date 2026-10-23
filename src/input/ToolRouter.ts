@@ -42,7 +42,7 @@
  * 的位置（`startWorld + offset`），跟 `GestureTracker` 一致。`cancel` 是例外，
  * 不送 `tap`：中斷不是完成一次輕拍。
  *
- * **編隊抓取的每點大把**（issue #135；CONTEXT.md「編隊抓取」）：`setFormationParams`
+ * **編隊抓取的每點大把**（issue #135；GLOSSARY.md「編隊抓取」）：`setFormationParams`
  * 的開關開著時，每個點的 `grab` 帶 `handfulRadius`（大把抓取那條半徑，同一個值）、快速
  * 按放時每個 `tap` 帶同一個 `radius`——其餘（id、落點過濾、順序、`move`／`release`）
  * 跟上面完全相同，不新增事件種類。開關與半徑都在按下當下拍進 session。開著時右鍵＋
@@ -62,7 +62,7 @@
  *   一顆；拖曳超過門檻後變成橡皮擦，每次 `move` 拔掉筆刷半徑內的所有 Pin（見 `eraseAt`）。
  *   單擊不當橡皮擦：不然點一下就會清掉一整圈，「精準地拔一顆」做不到。
  *
- * 撒 Pin 與橡皮擦共用一條 Pin 筆刷半徑（`pinBrushRadius`，CONTEXT.md「Pin 筆刷半徑」），
+ * 撒 Pin 與橡皮擦共用一條 Pin 筆刷半徑（`pinBrushRadius`，GLOSSARY.md「Pin 筆刷半徑」），
  * 撒 Pin 間距另外一條（`spraySpacing`），都由 `setPinBrushParams` 即時寫入。
  *
  * 撒點用經典的 dart throwing：用注入的 `random`（預設 `Math.random`——**執行期**隨機，
@@ -196,7 +196,7 @@ export type ToolId = 'grab' | 'pin' | 'fan' | 'jelly' | 'backdrop';
 export const TOOL_IDS: readonly ToolId[] = ['grab', 'pin', 'fan', 'jelly', 'backdrop'];
 
 /**
- * 有模式的工具與它們的模式，依中鍵單擊輪替的順序排（issue #122；CONTEXT.md「模式」）。
+ * 有模式的工具與它們的模式，依中鍵單擊輪替的順序排（issue #122；GLOSSARY.md「模式」）。
  * 第一個是預設模式。電風扇的模式是「右鍵＋滾輪要調的參數」（issue #125）。
  */
 export const TOOL_MODES = {
@@ -280,7 +280,7 @@ export interface FanParams {
 }
 
 /**
- * Pin 筆刷半徑的預設值（issue #123；撒 Pin 與橡皮擦共用，CONTEXT.md「Pin 筆刷半徑」），
+ * Pin 筆刷半徑的預設值（issue #123；撒 Pin 與橡皮擦共用，GLOSSARY.md「Pin 筆刷半徑」），
  * 世界單位——`setPinBrushParams` 可在執行期間覆寫。先取 120，試手感後再調（spec #121）。
  */
 export const DEFAULT_PIN_BRUSH_RADIUS = 120;
@@ -433,7 +433,7 @@ export interface HandfulParams {
 /** `setFormationParams` 接受的部分更新（issue #135）。 */
 export interface FormationParams {
   /**
-   * 每點大把（CONTEXT.md「編隊抓取」）：編隊的每個點改成一把大把抓取，半徑共用大把抓取
+   * 每點大把（GLOSSARY.md「編隊抓取」）：編隊的每個點改成一把大把抓取，半徑共用大把抓取
    * 那條（`handfulRadius`）。預設關閉。
    */
   perPointHandful: boolean;

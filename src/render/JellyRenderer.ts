@@ -25,11 +25,11 @@
  * 標常數（`WalledBoundary.box`／`FloorBoundary.floorY`，不隨 Jelly 變形），只在邊界
  * 模式切換時重設。它**不是**提示，不受「播放時隱藏提示」影響。
  *
- * **背景色**（issue #147；CONTEXT.md「Background color」）：建立時的 `background.color` 只是
+ * **背景色**（issue #147；GLOSSARY.md「Background color」）：建立時的 `background.color` 只是
  * 初值，`setBackgroundColor` 在執行中換掉——清畫布用的就是這個顏色，所以相機怎麼平移縮放都
  * 填滿整個畫面。它不是提示，乾淨畫面與播放中照常顯示。
  *
- * **Backdrop 圖層**（issue #148；CONTEXT.md「Backdrop」、ADR-0017）：`setBackdrops(items)` 給
+ * **Backdrop 圖層**（issue #148；GLOSSARY.md「Backdrop」、ADR-0017）：`setBackdrops(items)` 給
  * 整份 Backdrop 清單（依疊放順序、先畫→後畫），每張一個 `Sprite`，掛在世界容器最底層——所有
  * Jelly、線框、邊界線都畫在它上面，世界→螢幕轉換跟 Jelly 共用同一個相機。只在清單變了時呼叫，
  * 不必每幀。貼圖來源由呼叫端解碼好給（`ImageBitmap` 等），Renderer 依 id 快取 `Sprite`，

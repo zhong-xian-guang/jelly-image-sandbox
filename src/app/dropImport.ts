@@ -21,7 +21,7 @@ const SUPPORTED_EXT = ['.png', '.jpg', '.jpeg', '.gif'];
  * 管理器拖出的檔案—不填 `File.type`）退回看副檔名。
  *
  * 命名故意避開「pick」——那個詞在這個專案已經是 `sim.pick`（世界座標→表面點）
- * 的專用術語，這裡挑的是檔案，不要混用（見 CONTEXT.md）。
+ * 的專用術語，這裡挑的是檔案，不要混用（見 GLOSSARY.md）。
  */
 export function selectSupportedImageFile(
   files: Iterable<File> | ArrayLike<File> | null | undefined,
