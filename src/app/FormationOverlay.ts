@@ -6,7 +6,7 @@
  *
  * 一組（`FormationOverlayGroup`）= 一個主點 + 其餘偏移點的目前螢幕座標，畫成
  * 「主點 → 每個偏移點各一條線」+ 每個點各一個小圓標記。定義形狀中
- * （`ToolRouter.isDefiningFormation`）與拖曳中（`ToolRouter.formationActiveGroups`）
+ * （`router.formation.isDefining`）與拖曳中（`router.formation.activeGroups`）
  * 共用同一個資料形狀：定義中只有一組（目前按過的點，第一個是主點）；拖曳中
  * 每個作用中的指標各是一組。兩者互斥（定義中不會同時有作用中的拖曳），呼叫端
  * 只需決定當下要餵哪一份。

@@ -11,7 +11,7 @@
  */
 
 import type { FanState, InputEvent, PinInfo, Point, PointerId } from '../../sim';
-import { movedFromStart, type GestureConfig, type GestureStart } from '../GestureTracker';
+import { isTap, movedFromStart, type GestureConfig, type GestureStart } from '../GestureTracker';
 import type { ToolParams } from '../ToolParams';
 
 /**
@@ -72,6 +72,11 @@ export interface ToolContext {
    * `session.dragged`、不再放下（拖出去又拖回原點仍算在拖）。
    */
   passedDragThreshold(session: DragSession, screenX: number, screenY: number): boolean;
+  /**
+   * 這一筆在 `(screenX, screenY, timeMs)` 放開算不算快速按放（輕拍）——`isTap` 套上 `config`，
+   * 跟單點抓取（`GestureTracker`）同一把尺。
+   */
+  isTap(session: GestureStart, screenX: number, screenY: number, timeMs: number): boolean;
 }
 
 /** `createToolContext` 的輸入：`ToolRouterOptions` 裡共用的那幾項（未注入的給預設）。 */
@@ -112,5 +117,6 @@ export function createToolContext(init: ToolContextInit): ToolContext {
       }
       return session.dragged;
     },
+    isTap: (session, screenX, screenY, timeMs) => isTap(session, screenX, screenY, timeMs, config),
   };
 }
