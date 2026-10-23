@@ -315,7 +315,7 @@ const GRAVITY_RANGE = { min: 0, max: 10000, step: 100 };
  */
 const SPRAY_SPACING_RANGE = { min: 12, max: 120, step: 2 };
 /**
- * 「匯入尺寸」拉霸的範圍與預設（issue #88 / V3 T1-1，見 CONTEXT.md「匯入尺寸」），
+ * 「匯入尺寸」拉霸的範圍與預設（issue #88 / V3 T1-1，見 GLOSSARY.md「匯入尺寸」），
  * 世界單位 = 未縮放時的 mask 像素。預設 512：一般解析度的圖進場大小跟以前差不多
  * （以前是降採樣後的像素尺寸、最長邊 ≤ 1024），超大圖不會撐滿桌面。下限 128 還
  * 看得見、上限 1024 = 以前的最大值。
@@ -2178,7 +2178,7 @@ export class JellySandbox {
   }
 
   /**
-   * 重建的唯一實作（issue #90 / #95 / #98，見 CONTEXT.md「重建」）：對 `entries` 裡的
+   * 重建的唯一實作（issue #90 / #95 / #98，見 GLOSSARY.md「重建」）：對 `entries` 裡的
    * 每一塊，用它自己的來源圖＋目前兩條拉霸，同 id 同圖同 `offset` 地 `remove` + `spawn`
    * （新 `meshParams`／`importSize`），之後 `setScene(sceneSnapshot())`——只改 Scene、
    * 不是 Track 事件（所以走 `world.applyInput` 而不是 `dispatchInput`：這件事不該被錄），

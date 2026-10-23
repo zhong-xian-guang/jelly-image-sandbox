@@ -1,5 +1,5 @@
 /**
- * 提示（CONTEXT.md「提示」）的「意圖＋現算」規則（issue #71 起在 `JellySandbox`，issue #130 抽出來
+ * 提示（GLOSSARY.md「提示」）的「意圖＋現算」規則（issue #71 起在 `JellySandbox`，issue #130 抽出來
  * 才測得到）：`JellySandbox.hintIntent` 永遠存使用者的開關意圖，實際看不看得到由這裡現算——
  * 被壓下時全體隱藏，壓下的理由一消失就回到意圖原樣，不必另外記快照。
  */

@@ -2,7 +2,7 @@
 
 物理模擬的網頁沙盒小遊戲：匯入一張帶 alpha 的 PNG，不透明區域變成一塊桌上的「果凍」，可以抓住一角拖曳、甩動、輕拍、釘選。最終發佈為 itch.io 靜態包。
 
-產品構想與設計限制見 [CLAUDE.md](./CLAUDE.md)；決策脈絡見 [`docs/adr/`](./docs/adr/)、[`docs/design/simulation-and-mesh.md`](./docs/design/simulation-and-mesh.md)；詞彙見 [CONTEXT.md](./CONTEXT.md)。
+產品構想與設計限制見 [CLAUDE.md](./CLAUDE.md)；決策脈絡見 [`docs/adr/`](./docs/adr/)、[`docs/design/simulation-and-mesh.md`](./docs/design/simulation-and-mesh.md)；詞彙見 [GLOSSARY.md](./GLOSSARY.md)。
 
 ## 開發
 

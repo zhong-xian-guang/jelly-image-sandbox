@@ -1,6 +1,6 @@
 /**
  * 片段存檔（Clip file）——issue #57 / V2 T2-4（序列化端）、issue #58 / V2 T2-5
- * （反序列化端），見 spec #53 與 CONTEXT.md「片段」。
+ * （反序列化端），見 spec #53 與 GLOSSARY.md「片段」。
  *
  * `ClipState` 是 `JellySandbox` 記憶體狀態的**可序列化投影**（issue #95 / V3 T3-2 升成
  * **v2**，ADR-0013）：來源圖庫 `sources`（`sourceId` → 原始影像位元組 + 格式，多塊共用

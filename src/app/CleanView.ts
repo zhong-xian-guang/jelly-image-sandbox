@@ -1,5 +1,5 @@
 /**
- * `CleanView`（issue #130 / V4 U3；spec #127「乾淨畫面」、CONTEXT.md「乾淨畫面」）——為了用外部
+ * `CleanView`（issue #130 / V4 U3；spec #127「乾淨畫面」、GLOSSARY.md「乾淨畫面」）——為了用外部
  * 螢幕錄影錄素材而切換的顯示狀態：畫布上只剩 Jelly。
  *
  * 這個模組只管「進出」本身：

@@ -1,6 +1,6 @@
 /**
  * Track 疊加播放（issue #33 / V2 T1-1，issue #36 / V2 T1-4 加相機軌，見
- * CONTEXT.md「Overlay」詞條、ADR-0007）——把「多條 Action Track ＋ 多條 Camera
+ * GLOSSARY.md「Overlay」詞條、ADR-0007）——把「多條 Action Track ＋ 多條 Camera
  * Track ＋ 各自的起始 step 與頭尾修剪」壓成**一條**全域時間軸，交給既有的
  * `DemoRunner` 精準重播。
  *
