@@ -6,6 +6,12 @@ import {
   jellyMenuItems,
   type ContextMenuItem,
 } from './ContextMenu';
+import { clipAllows, type ClipPhase } from './Clip';
+
+/** 沙盒怎麼叫 `jellyMenuItems`：變灰問 `clip.allows`（這裡用同一條規則 `clipAllows`）。 */
+function jellyMenuFor(phase: ClipPhase) {
+  return jellyMenuItems({ phase, allows: (action) => clipAllows(phase, action) });
+}
 
 describe('backdropMenuItems — Backdrop 右鍵選單（issue #150）', () => {
   it('刪除、移到最上層、移到最下層；夾在中間時都能用', () => {
@@ -28,20 +34,20 @@ describe('backdropMenuItems — Backdrop 右鍵選單（issue #150）', () => {
 
 describe('jellyMenuItems — Jelly 右鍵選單的項目與鎖定原因（issue #124）', () => {
   it('平常：重建、移除都能按', () => {
-    expect(jellyMenuItems({ playing: false, recording: false })).toEqual([
+    expect(jellyMenuFor('idle')).toEqual([
       { id: 'rebuild', label: '重建', disabledReason: null },
       { id: 'remove', label: '移除', disabledReason: null },
     ]);
   });
 
   it('播放中：兩項都變灰，附原因', () => {
-    const items = jellyMenuItems({ playing: true, recording: false });
+    const items = jellyMenuFor('playing');
     expect(items.map((i) => i.id)).toEqual(['rebuild', 'remove']);
     for (const item of items) expect(item.disabledReason).toMatch(/播放中/);
   });
 
   it('錄製中：只有重建變灰（移除照樣錄成事件）', () => {
-    const [rebuild, remove] = jellyMenuItems({ playing: false, recording: true });
+    const [rebuild, remove] = jellyMenuFor('recording');
     expect(rebuild!.disabledReason).toMatch(/錄製中/);
     expect(remove!.disabledReason).toBeNull();
   });

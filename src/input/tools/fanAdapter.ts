@@ -129,7 +129,6 @@ export class FanAdapter implements ToolAdapter {
     const dy = current.y - origin.y;
     const length = Math.hypot(dx, dy);
     const [dirX, dirY] = length > 1e-9 ? [dx / length, dy / length] : [1, 0];
-    const { params } = this.ctx;
     this.ctx.emit({
       type: 'setFan',
       originX: origin.x,
@@ -137,10 +136,7 @@ export class FanAdapter implements ToolAdapter {
       dirX,
       dirY,
       length,
-      width: params.get('fanWidth'),
-      strength: params.get('fanStrength'),
-      falloffExponent: params.get('fanFalloffExponent'),
-      frequency: params.get('fanFrequency'),
+      ...this.ctx.params.fan(),
     });
   }
 

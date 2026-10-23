@@ -2,9 +2,11 @@
  * Clip（片段，issue #163 / spec #158 B1）——片段可編輯資料的唯一擁有者：Track 清單、
  * 群組與獨奏、片段初始 Pin、錄製目標、Track 與群組流水號。見 GLOSSARY.md「片段（Clip）」。
  *
- * 範圍窄於「片段」這個概念：Scene（在 World）、來源圖庫、物理設定、Jelly／來源流水號
- * 仍由 `JellySandbox` 持有；存檔時沙盒把 `toClipPart()` 跟自己那幾塊拼成同一份
- * `ClipState`，載入時反過來拆開。
+ * 範圍窄於「片段」這個概念：這個 module 只持有 Track、群組與獨奏、片段初始 Pin、錄製目標、
+ * Track／群組流水號，以及錄製／播放狀態（閒置／錄製中／播放中三者互斥）、播放前鏡位與
+ * 「現在能不能做 X」的編輯許可。Scene 由 World 持有，來源圖庫、物理設定與 Jelly／來源流水號
+ * 由 `JellySandbox` 持有；存檔時沙盒把 `toClipPart()` 跟自己那幾塊拼成同一份 `ClipState`，
+ * 載入時反過來拆開。
  *
  * 只管狀態：不持有 World、不碰 DOM。需要 World 資訊時由沙盒傳入（例如拍片段初始 Pin
  * 時沙盒交來 rest 座標）。每次狀態真的變了就呼叫建構時給的 `onChange`（沙盒在那裡把
@@ -22,7 +24,7 @@
 
 import type { CameraState } from '../camera';
 import type { Point } from '../mesh';
-import type { ClipCounters, ClipGroup, ClipPoint, ClipState, ClipTrack } from './clipFile';
+import type { ClipCounters, ClipGroup, ClipPoint, ClipTrack } from './clipFile';
 import { DemoRunner } from './demos/DemoRunner';
 import {
   mergeTracks,
@@ -124,11 +126,14 @@ export interface ClipView {
   paused: boolean;
 }
 
-/** 片段檔中 Clip 負責的那部分。 */
+/**
+ * 片段檔中 Clip 負責的那部分。陣列一律唯讀，讓整份 `ClipState`（欄位是它的超集）也能直接
+ * 交給 `fromClipPart`。
+ */
 export interface ClipPart {
-  tracks: ClipTrack[];
-  groups: ClipGroup[];
-  setupPins: ClipPoint[];
+  tracks: readonly ClipTrack[];
+  groups: readonly ClipGroup[];
+  setupPins: readonly ClipPoint[];
   counters: Pick<ClipCounters, 'nextTrackNum' | 'nextGroupNum'>;
 }
 
@@ -582,7 +587,7 @@ export class Clip {
    * 以片段檔的 Clip 那部分整包取代目前狀態（載入片段，issue #58）；先 `halt()` 中斷錄製／播放，
    * 獨奏狀態清掉。
    */
-  fromClipPart(part: Readonly<ClipPart> | ClipState): void {
+  fromClipPart(part: Readonly<ClipPart>): void {
     this.halt();
     this.groups = part.groups.map((g) => ({ ...g }));
     this.tracks = part.tracks.map(hydrateClipTrack);

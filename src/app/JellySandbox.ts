@@ -559,6 +559,7 @@ export class JellySandbox {
 
     // 風扇圖示外觀（issue #143）：開發者設定，上次的選擇存在 localStorage。
     const fanIconStyle = loadFanIconStyle(browserStorage());
+    const fan = this.toolParams.fan();
     this.controlPanel = new ControlPanel({
       initial: {
         activeTool: this.activeTool,
@@ -580,10 +581,10 @@ export class JellySandbox {
         recordTarget: this.clip.recordTarget,
         showFanRange: this.hintIntent.fanRange,
         showFanIcon: this.hintIntent.fanIcon,
-        fanWidth: this.toolParams.get('fanWidth'),
-        fanStrength: this.toolParams.get('fanStrength'),
-        fanFalloffExponent: this.toolParams.get('fanFalloffExponent'),
-        fanFrequency: this.toolParams.get('fanFrequency'),
+        fanWidth: fan.width,
+        fanStrength: fan.strength,
+        fanFalloffExponent: fan.falloffExponent,
+        fanFrequency: fan.frequency,
         showFormationHint: this.hintIntent.formation,
         pinBrushRadius: this.toolParams.get('pinBrushRadius'),
         spraySpacing: this.toolParams.get('spraySpacing'),
@@ -616,17 +617,10 @@ export class JellySandbox {
       onShowFanRangeChange: (visible) => this.setHintVisible('fanRange', visible),
       onShowFanIconChange: (visible) => this.setHintVisible('fanIcon', visible),
       // 工具參數拉霸（issue #160）一律寫進 `ToolParams`，後續副作用在 `onToolParamChange`。
-      onFanWidthChange: (width) => this.toolParams.set('fanWidth', width),
-      onFanStrengthChange: (strength) => this.toolParams.set('fanStrength', strength),
-      onFanFalloffChange: (falloffExponent) =>
-        this.toolParams.set('fanFalloffExponent', falloffExponent),
-      onFanFrequencyChange: (frequency) => this.toolParams.set('fanFrequency', frequency),
+      onToolParamChange: (key, value) => this.toolParams.set(key, value),
       onFormationDefineStart: () => this.beginFormationDefine(),
       onFormationDefineEnd: () => this.router.formation.endDefine(),
       onShowFormationHintChange: (visible) => this.setHintVisible('formation', visible),
-      onPinBrushRadiusChange: (radius) => this.toolParams.set('pinBrushRadius', radius),
-      onSpraySpacingChange: (spacing) => this.toolParams.set('spraySpacing', spacing),
-      onHandfulRadiusChange: (radius) => this.toolParams.set('handfulRadius', radius),
       onShowHandfulRangeChange: (visible) => this.setHintVisible('handfulRange', visible),
       // 每點大把（issue #135）：只影響下一次按下；範圍圈與游標標籤每幀自己重算。
       onFormationPerPointHandfulChange: (enabled) =>
@@ -1376,10 +1370,7 @@ export class JellySandbox {
       dirX: fan.dirX,
       dirY: fan.dirY,
       length: fan.length,
-      width: this.toolParams.get('fanWidth'),
-      strength: this.toolParams.get('fanStrength'),
-      falloffExponent: this.toolParams.get('fanFalloffExponent'),
-      frequency: this.toolParams.get('fanFrequency'),
+      ...this.toolParams.fan(),
     };
     this.dispatchInput(event);
   }
@@ -1622,16 +1613,16 @@ export class JellySandbox {
   /**
    * Jelly 工具右鍵單擊點中某塊 Jelly（`ToolRouter` 的 `onJellyContextMenu`，issue #124）：
    * 在游標處開 [重建｜移除]，作用在**點中的那一塊**（id 在開選單當下就定下，之後場上
-   * 怎麼變都不會換成別塊）。暫時不能用的項目變灰附原因（`jellyMenuItems`：播放中兩項都
-   * 不行、錄製中不能重建）；選了之後再照同一組規則擋一次（`runJellyMenuItem`），因為選單
+   * 怎麼變都不會換成別塊）。暫時不能用的項目變灰附原因（`jellyMenuItems` 問 `clip.allows`：
+   * 播放中兩項都不行、錄製中不能重建）；選了之後再照同一組規則擋一次（`runJellyMenuItem`），因為選單
    * 開著的期間播放／錄製狀態可能已經變了。右鍵點空白處 `ToolRouter` 就不會叫到這裡。
    */
   private openJellyMenu(world: Point, screen: Point): void {
     const hit = this.world.pick(world.x, world.y);
     if (!hit) return;
     const items = jellyMenuItems({
-      playing: this.clip.phase === 'playing',
-      recording: this.clip.phase === 'recording',
+      allows: (action) => this.clip.allows(action),
+      phase: this.clip.phase,
     });
     this.contextMenu.open(screen, items, (item) => this.runJellyMenuItem(item, hit.jellyId));
   }
@@ -1922,14 +1913,14 @@ export class JellySandbox {
    * Pin、流水號。拉霸 `importSize`／`meshDensity` 刻意不動：它們代表「下一次」。
    * 「最近匯入的圖」= 最大的 `sourceId`，由 `sources` 本身決定，不另外記。
    */
-  private async applyClipState(clip: ClipState): Promise<void> {
+  private async applyClipState(state: ClipState): Promise<void> {
     const decoded = new Map<string, SourceImage>();
-    for (const [id, image] of Object.entries(clip.sources)) {
+    for (const [id, image] of Object.entries(state.sources)) {
       decoded.set(id, { ...image, texture: await decodeTextureImage(image.bytes) });
     }
     // 網格先建好放在暫時的 memo，確定每塊都建得出來才動狀態（同 `meshFor` 的 key 與建法）。
     const memo = new Map<string, SimMesh>();
-    for (const e of clip.scene) {
+    for (const e of state.scene) {
       const key = meshKey(e.sourceId, e.meshParams, e.importSize);
       if (memo.has(key)) continue;
       memo.set(key, buildScaledMesh(decoded.get(e.sourceId)!.bytes, e.meshParams, e.importSize));
@@ -1941,24 +1932,24 @@ export class JellySandbox {
     this.meshMemo.clear();
     this.spawnBboxMemo.clear();
     for (const [key, mesh] of memo) this.meshMemo.set(key, mesh);
-    this.world.setScene(clip.scene);
+    this.world.setScene(state.scene);
     this.world.reset();
     this.syncRenderer();
     this.cameraState = createCameraState({ bbox: this.currentBbox() }, this.canvasSize());
     this.cameraCommands = [];
 
-    this.setSoftness(clip.sim.softness);
-    this.controlPanel.setSoftness(clip.sim.softness);
-    this.setTapStrength(clip.sim.tapStrength);
-    this.controlPanel.setTapStrength(clip.sim.tapStrength);
-    this.setGravity(clip.sim.gravity);
-    this.controlPanel.setGravity(clip.sim.gravity);
-    this.setBoundaryMode(clip.sim.boundary);
-    this.controlPanel.setBoundary(clip.sim.boundary);
+    this.setSoftness(state.sim.softness);
+    this.controlPanel.setSoftness(state.sim.softness);
+    this.setTapStrength(state.sim.tapStrength);
+    this.controlPanel.setTapStrength(state.sim.tapStrength);
+    this.setGravity(state.sim.gravity);
+    this.controlPanel.setGravity(state.sim.gravity);
+    this.setBoundaryMode(state.sim.boundary);
+    this.controlPanel.setBoundary(state.sim.boundary);
 
-    this.nextJellyNum = clip.counters.nextJellyNum;
-    this.nextSourceNum = clip.counters.nextSourceNum;
-    this.clip.fromClipPart(clip); // Track／群組／片段初始 Pin／兩個流水號（同步側欄由 Clip 回呼）
+    this.nextJellyNum = state.counters.nextJellyNum;
+    this.nextSourceNum = state.counters.nextSourceNum;
+    this.clip.fromClipPart(state); // Track／群組／片段初始 Pin／兩個流水號（同步側欄由 Clip 回呼）
   }
 
   /** `ToolRouter` + `CameraInput` 都吃同一組 project／hitTest（picking 走 `World.pick`，跨所有塊）。 */

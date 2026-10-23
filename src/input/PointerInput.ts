@@ -5,10 +5,6 @@
  * 呼叫 `ToolRouter`。所有影響模擬的輸入都經由 `ToolRouter` 的 `emit`（接
  * `sim.applyInput`），輸入層不直接碰求解器內部（ADR-0005）。
  *
- * issue #65 / V2 T3-1：內部持有的 tracker 從 `GestureTracker` 換成
- * `ToolRouter`（「一般操作」下原封不動委派給既有 `GestureTracker`，行為不變；
- * 見 ADR-0011）。
- *
  * **不直接把瀏覽器的 `PointerEvent.pointerId` 當 `GestureTracker`／`SimCore` 的
  * `id` 用**——滑鼠裝置的 `pointerId` 依規範永遠是 `1`，如果照樣沿用，兩次分開
  * 的滑鼠手勢會共用同一個 id。這對一般 Grab 沒事（放開就清掉），但 Pin 會一直

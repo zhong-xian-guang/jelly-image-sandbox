@@ -15,6 +15,7 @@ import {
   type ControlPanelOptions,
   type TrackListRow,
 } from './ControlPanel';
+import type { ToolParamKey } from '../input';
 import { TOOL_HELP_LINES } from './helpText';
 import { PANEL_LAYOUT_STORAGE_KEY, type KeyValueStorage } from './panelLayout';
 
@@ -97,16 +98,10 @@ function makeOptions(overrides: Partial<ControlPanelOptions> = {}): ControlPanel
     onRemoveFan: vi.fn(),
     onShowFanRangeChange: vi.fn(),
     onShowFanIconChange: vi.fn(),
-    onFanWidthChange: vi.fn(),
-    onFanStrengthChange: vi.fn(),
-    onFanFalloffChange: vi.fn(),
-    onFanFrequencyChange: vi.fn(),
+    onToolParamChange: vi.fn(),
     onFormationDefineStart: vi.fn(),
     onFormationDefineEnd: vi.fn(),
     onShowFormationHintChange: vi.fn(),
-    onPinBrushRadiusChange: vi.fn(),
-    onSpraySpacingChange: vi.fn(),
-    onHandfulRadiusChange: vi.fn(),
     onShowHandfulRangeChange: vi.fn(),
     onFormationPerPointHandfulChange: vi.fn(),
     onHideHintsDuringPlaybackChange: vi.fn(),
@@ -1133,7 +1128,7 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(opts.onShowFanIconChange).toHaveBeenCalledWith(true);
   });
 
-  it('「風扇寬度」滑桿初始值來自 initial.fanWidth，拖動觸發 onFanWidthChange', () => {
+  it('「風扇寬度」滑桿初始值來自 initial.fanWidth，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '風扇寬度');
@@ -1141,10 +1136,10 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(Number(input.value)).toBe(opts.initial.fanWidth);
     input.value = '300';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onFanWidthChange).toHaveBeenCalledWith(300);
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('fanWidth', 300);
   });
 
-  it('「風扇強度」滑桿初始值來自 initial.fanStrength，拖動觸發 onFanStrengthChange', () => {
+  it('「風扇強度」滑桿初始值來自 initial.fanStrength，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '風扇強度');
@@ -1152,10 +1147,10 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(Number(input.value)).toBe(opts.initial.fanStrength);
     input.value = '9000';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onFanStrengthChange).toHaveBeenCalledWith(9000);
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('fanStrength', 9000);
   });
 
-  it('「風扇衰減程度」滑桿初始值來自 initial.fanFalloffExponent，拖動觸發 onFanFalloffChange', () => {
+  it('「風扇衰減程度」滑桿初始值來自 initial.fanFalloffExponent，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '風扇衰減程度');
@@ -1163,10 +1158,10 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(Number(input.value)).toBe(opts.initial.fanFalloffExponent);
     input.value = '0.5';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onFanFalloffChange).toHaveBeenCalledWith(0.5);
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('fanFalloffExponent', 0.5);
   });
 
-  it('「風扇頻率」滑桿初始值來自 initial.fanFrequency，拖動觸發 onFanFrequencyChange', () => {
+  it('「風扇頻率」滑桿初始值來自 initial.fanFrequency，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '風扇頻率');
@@ -1174,7 +1169,7 @@ describe('ControlPanel — 電風扇控制項（issue #66 / V2 T3-2）', () => {
     expect(Number(input.value)).toBe(opts.initial.fanFrequency);
     input.value = '5';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onFanFrequencyChange).toHaveBeenCalledWith(5);
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('fanFrequency', 5);
   });
 });
 
@@ -1307,18 +1302,18 @@ describe('ControlPanel — Pin 工具（issue #123 / V4 T2）', () => {
     expect(Number(input.value)).toBe(120);
     input.value = '300';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onPinBrushRadiusChange).toHaveBeenCalledWith(300);
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('pinBrushRadius', 300);
   });
 
-  it('「撒 Pin 間距」拉霸初始值來自 initial.spraySpacing，拖動觸發 onSpraySpacingChange', () => {
+  it('「撒 Pin 間距」拉霸初始值來自 initial.spraySpacing，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '撒 Pin 間距');
     expect(Number(input.value)).toBe(opts.initial.spraySpacing);
     input.value = '20';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onSpraySpacingChange).toHaveBeenCalledWith(20);
-    expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('spraySpacing', 20);
+    expect(opts.onToolParamChange).not.toHaveBeenCalledWith('pinBrushRadius', expect.anything());
   });
 });
 
@@ -1356,7 +1351,7 @@ describe('ControlPanel — 播放時隱藏提示（issue #71 / V2 T3-7）', () =
 
   // 驗收條件：這個開關「本身不受播放狀態影響、隨時可切換」——播放中鎖住的是
   // Demo／錄製／Track 清單那一批，不包含它。
-  it('播放中／錄製中仍可切換（不被 setPlaybackControlsEnabled／setRecordingActive 鎖住）', () => {
+  it('播放中／錄製中仍可切換（不被錄製／播放鎖住）', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
     panel.setClipStatus(clipStatus('playing'));
@@ -1566,7 +1561,7 @@ describe('ControlPanel — 大把抓取控制項（issue #113；issue #122 併�
     expect(handfulParams(panel).hidden).toBe(true);
   });
 
-  it('「大把抓取半徑」拉霸範圍與初始值來自 options，拖動觸發 onHandfulRadiusChange', () => {
+  it('「大把抓取半徑」拉霸範圍與初始值來自 options，拖動觸發 onToolParamChange', () => {
     const opts = makeOptions({ initial: { ...makeOptions().initial, handfulRadius: 180 } });
     const panel = new ControlPanel(opts);
     const input = findRangeInputByLabel(panel, '大把抓取半徑');
@@ -1575,8 +1570,8 @@ describe('ControlPanel — 大把抓取控制項（issue #113；issue #122 併�
 
     input.value = '260';
     input.dispatchEvent(new Event('input'));
-    expect(opts.onHandfulRadiusChange).toHaveBeenCalledWith(260);
-    expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
+    expect(opts.onToolParamChange).toHaveBeenCalledWith('handfulRadius', 260);
+    expect(opts.onToolParamChange).not.toHaveBeenCalledWith('pinBrushRadius', expect.anything());
   });
 
   it('「顯示大把抓取範圍」checkbox 初始值來自 initial.showHandfulRange，切換觸發回呼', () => {
@@ -1632,8 +1627,7 @@ describe('ControlPanel — 右鍵＋滾輪調數值的拉霸同步（issue #114�
     panel.setToolParam('handfulRadius', 310);
     expect([pinBrush.value, handful.value]).toEqual(['230', '310']);
 
-    expect(opts.onPinBrushRadiusChange).not.toHaveBeenCalled();
-    expect(opts.onHandfulRadiusChange).not.toHaveBeenCalled();
+    expect(opts.onToolParamChange).not.toHaveBeenCalled();
   });
 
   it('電風扇四個參數（issue #125）：setToolParam 各自灌回對應的拉霸，不觸發回呼', () => {
@@ -1649,10 +1643,7 @@ describe('ControlPanel — 右鍵＋滾輪調數值的拉霸同步（issue #114�
       panel.setToolParam(key, value);
       expect(findRangeInputByLabel(panel, label).value).toBe(String(value));
     }
-    expect(opts.onFanWidthChange).not.toHaveBeenCalled();
-    expect(opts.onFanStrengthChange).not.toHaveBeenCalled();
-    expect(opts.onFanFalloffChange).not.toHaveBeenCalled();
-    expect(opts.onFanFrequencyChange).not.toHaveBeenCalled();
+    expect(opts.onToolParamChange).not.toHaveBeenCalled();
   });
 });
 
@@ -2399,13 +2390,6 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
       ['重力', 'onGravityChange', 0],
       ['匯入尺寸', 'onImportSizeChange', 512],
       ['網格密度', 'onMeshDensityChange', 350],
-      ['風扇寬度', 'onFanWidthChange', 150],
-      ['風扇強度', 'onFanStrengthChange', 4000],
-      ['風扇衰減程度', 'onFanFalloffChange', 2],
-      ['風扇頻率', 'onFanFrequencyChange', 2],
-      ['Pin 筆刷半徑', 'onPinBrushRadiusChange', 120],
-      ['撒 Pin 間距', 'onSpraySpacingChange', 36],
-      ['大把抓取半徑', 'onHandfulRadiusChange', 140],
     ];
     for (const [text, callback, value] of cases) {
       const input = findRangeInputByLabel(panel, text);
@@ -2414,6 +2398,23 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
       dblclick(input);
       expect(Number(input.value), text).toBe(value);
       expect(opts[callback], text).toHaveBeenLastCalledWith(value);
+    }
+    const toolParamCases: [string, ToolParamKey, number][] = [
+      ['風扇寬度', 'fanWidth', 150],
+      ['風扇強度', 'fanStrength', 4000],
+      ['風扇衰減程度', 'fanFalloffExponent', 2],
+      ['風扇頻率', 'fanFrequency', 2],
+      ['Pin 筆刷半徑', 'pinBrushRadius', 120],
+      ['撒 Pin 間距', 'spraySpacing', 36],
+      ['大把抓取半徑', 'handfulRadius', 140],
+    ];
+    for (const [text, key, value] of toolParamCases) {
+      const input = findRangeInputByLabel(panel, text);
+      input.value = input.max;
+      input.dispatchEvent(new Event('input'));
+      dblclick(input);
+      expect(Number(input.value), text).toBe(value);
+      expect(opts.onToolParamChange, text).toHaveBeenLastCalledWith(key, value);
     }
   });
 
@@ -2439,8 +2440,7 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
       'onTapStrengthChange',
       'onGravityChange',
       'onMeshDensityChange',
-      'onPinBrushRadiusChange',
-      'onHandfulRadiusChange',
+      'onToolParamChange',
     ] as const) {
       expect(opts[callback], callback).not.toHaveBeenCalled();
     }
@@ -2459,10 +2459,7 @@ describe('ControlPanel — 拉霸數值與雙擊重設（issue #131 / V4 U4）',
       panel.setToolParam(key, value);
       expect(valueOf(findRangeInputByLabel(panel, label)), label).toBe(shown);
     }
-    expect(opts.onFanWidthChange).not.toHaveBeenCalled();
-    expect(opts.onFanStrengthChange).not.toHaveBeenCalled();
-    expect(opts.onFanFalloffChange).not.toHaveBeenCalled();
-    expect(opts.onFanFrequencyChange).not.toHaveBeenCalled();
+    expect(opts.onToolParamChange).not.toHaveBeenCalled();
   });
 
   it('外部灌值不改預設值：雙擊仍回到建立時的值', () => {

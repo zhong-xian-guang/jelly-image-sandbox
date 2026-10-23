@@ -346,14 +346,13 @@ export interface ControlPanelOptions {
   onShowFanRangeChange: (visible: boolean) => void;
   onShowFanIconChange: (visible: boolean) => void;
   /**
-   * 電風扇「寬度」／「強度」／「衰減程度」／「頻率」滑桿變更（issue #67）——
-   * 即時反映到場上目前的風扇（若有）與下一次放置，兩件事都交給 `JellySandbox`
-   * 處理：`ControlPanel` 只負責把滑桿的新數值原封不動送出去。
+   * 七條工具參數拉霸的單一變更回呼（issue #160；與反方向的 `setToolParam` 對稱）：電風扇
+   * 寬度／強度／衰減程度／頻率（issue #67）、Pin 筆刷半徑（issue #123）、撒 Pin 間距
+   * （issue #69）、大把抓取半徑（issue #113）。`ControlPanel` 只負責把哪條拉霸、新數值
+   * 原封不動送出去；即時更新場上風扇、影響之後的撒／擦／抓都交給 `JellySandbox`（已經
+   * 撒出去的 Pin、已抓住的那一把不回頭改）。
    */
-  onFanWidthChange: (width: number) => void;
-  onFanStrengthChange: (strength: number) => void;
-  onFanFalloffChange: (falloffExponent: number) => void;
-  onFanFrequencyChange: (frequency: number) => void;
+  onToolParamChange: (key: ToolParamKey, value: number) => void;
   /**
    * 「開始設定形狀」／「重新設定編隊形狀」按鈕被按（issue #68）——面板用同一顆
    * 按鈕依目前是否在定義中／是否已有形狀切換文字（見 `formationParams`），按下
@@ -364,18 +363,6 @@ export interface ControlPanelOptions {
   onFormationDefineEnd: () => void;
   /** 「顯示編隊抓取提示」開關（issue #68）——同 `onShowFanRangeChange` 的理由，純視覺。 */
   onShowFormationHintChange: (visible: boolean) => void;
-  /**
-   * 「Pin 筆刷半徑」（issue #123；撒 Pin 與橡皮擦共用）／「撒 Pin 間距」（issue #69）拉霸
-   * 變更——比照四個電風扇滑桿，`ControlPanel` 只負責把新數值原封不動送出去，影響之後的
-   * 撒／擦與畫布上的筆刷圓圈（已經撒出去的 Pin 是既成事實，不會回頭重排）。
-   */
-  onPinBrushRadiusChange: (radius: number) => void;
-  onSpraySpacingChange: (spacing: number) => void;
-  /**
-   * 「大把抓取半徑」拉霸變更（issue #113 / V3 T4-1）——影響下一次按下（已抓住的那一把
-   * 不變）與畫布上的範圍圈，兩件事都交給 `JellySandbox`。
-   */
-  onHandfulRadiusChange: (radius: number) => void;
   /** 「顯示大把抓取範圍」開關（issue #113）——範圍圈是提示層，同 `onShowFormationHintChange`，純視覺。 */
   onShowHandfulRangeChange: (visible: boolean) => void;
   /**
@@ -683,25 +670,25 @@ export class ControlPanel {
       '風扇寬度',
       opts.fanWidthRange,
       opts.initial.fanWidth,
-      opts.onFanWidthChange,
+      (value) => opts.onToolParamChange('fanWidth', value),
     );
     const fanStrength = createRangeSlider(
       '風扇強度',
       opts.fanStrengthRange,
       opts.initial.fanStrength,
-      opts.onFanStrengthChange,
+      (value) => opts.onToolParamChange('fanStrength', value),
     );
     const fanFalloff = createRangeSlider(
       '風扇衰減程度',
       opts.fanFalloffRange,
       opts.initial.fanFalloffExponent,
-      opts.onFanFalloffChange,
+      (value) => opts.onToolParamChange('fanFalloffExponent', value),
     );
     const fanFrequency = createRangeSlider(
       '風扇頻率',
       opts.fanFrequencyRange,
       opts.initial.fanFrequency,
-      opts.onFanFrequencyChange,
+      (value) => opts.onToolParamChange('fanFrequency', value),
     );
 
     // 電風扇專屬參數（issue #67 事後檢視拆成兩顆顯示開關；「顯示風扇提示」→
@@ -728,13 +715,13 @@ export class ControlPanel {
       'Pin 筆刷半徑',
       opts.pinBrushRadiusRange,
       opts.initial.pinBrushRadius,
-      opts.onPinBrushRadiusChange,
+      (value) => opts.onToolParamChange('pinBrushRadius', value),
     );
     const spraySpacingRow = createRangeSlider(
       '撒 Pin 間距（越小越密）',
       opts.spraySpacingRange,
       opts.initial.spraySpacing,
-      opts.onSpraySpacingChange,
+      (value) => opts.onToolParamChange('spraySpacing', value),
     );
     const pinParams = this.toolParams('Pin', [
       this.modeRow('pin', opts.initial.toolModes.pin, opts.onModeChange),
@@ -749,7 +736,7 @@ export class ControlPanel {
       '大把抓取半徑',
       opts.handfulRadiusRange,
       opts.initial.handfulRadius,
-      opts.onHandfulRadiusChange,
+      (value) => opts.onToolParamChange('handfulRadius', value),
     );
     const grabParams = this.toolParams('抓取', [
       this.modeRow('grab', opts.initial.toolModes.grab, opts.onModeChange),
@@ -1252,7 +1239,7 @@ export class ControlPanel {
   /**
    * 工具參數變了之後把新值灌回對應的拉霸（issue #114；issue #122 推廣；issue #160 改成每次
    * `ToolParams` 變更都灌回）。同 `setSoftness` 的理由——只動 DOM、不觸發 `input` 事件、
-   * 不回呼 `onXChange`。
+   * 不回呼 `onToolParamChange`。
    */
   setToolParam(key: ToolParamKey, value: number): void {
     setRangeSliderValue(this.valueSliders[key], value);

@@ -37,6 +37,12 @@ export {
   FAN_FREQUENCY_RANGE,
   FAN_PARAM_KEYS,
 } from './ToolParams';
-export type { ModeValueKey, ToolParamKey, ToolParamListener, ValueRange } from './ToolParams';
+export type {
+  FanParams,
+  ModeValueKey,
+  ToolParamKey,
+  ToolParamListener,
+  ValueRange,
+} from './ToolParams';
 export { PointerInput } from './PointerInput';
 export type { PointerInputOptions } from './PointerInput';

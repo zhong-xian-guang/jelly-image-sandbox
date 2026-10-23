@@ -93,17 +93,14 @@ export interface ToolContextInit {
 
 export function createToolContext(init: ToolContextInit): ToolContext {
   const { project, config } = init;
-  const hitTest = init.hitTest;
-  const listPins = init.listPins;
-  const getFan = init.getFan;
   return {
     project,
     emit: init.emit,
-    hitTest: hitTest ? (world) => hitTest(world) : () => true,
+    hitTest: init.hitTest ?? (() => true),
     params: init.params,
     random: init.random ?? Math.random,
-    listPins: listPins ? () => listPins() : () => [],
-    getFan: getFan ? () => getFan() : () => null,
+    listPins: init.listPins ?? (() => []),
+    getFan: init.getFan ?? (() => null),
     config,
     gestureStart: (screenX, screenY, timeMs) => ({
       startX: screenX,

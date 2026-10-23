@@ -61,4 +61,16 @@ describe('ToolParams（issue #160：工具參數的唯一擁有者）', () => {
     expect(params.range('spraySpacing')).toEqual({ min: 12, max: 120, step: 2 });
     expect(params.range('fanWidth')).toEqual({ min: 20, max: 280, step: 5 });
   });
+
+  it('fan()：一次讀出電風扇四個參數（跟 setFan 事件同名的欄位）', () => {
+    const params = new ToolParams();
+    params.set('fanWidth', 200);
+    params.set('fanFrequency', 0.5);
+    expect(params.fan()).toEqual({
+      width: 200,
+      strength: 4000,
+      falloffExponent: 2,
+      frequency: 0.5,
+    });
+  });
 });

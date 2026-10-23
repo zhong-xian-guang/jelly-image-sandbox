@@ -121,6 +121,14 @@ export const FAN_PARAM_KEYS: readonly ToolParamKey[] = [
   'fanFrequency',
 ];
 
+/** 電風扇四個參數，欄位名跟 `setFan` 事件一致（放置、即時更新場上風扇都整包帶上）。 */
+export interface FanParams {
+  width: number;
+  strength: number;
+  falloffExponent: number;
+  frequency: number;
+}
+
 /** 變更通知：哪個參數、新值多少。 */
 export type ToolParamListener = (key: ToolParamKey, value: number) => void;
 
@@ -130,6 +138,16 @@ export class ToolParams {
 
   get(key: ToolParamKey): number {
     return this.values[key];
+  }
+
+  /** 一次讀出電風扇四個參數（`FAN_PARAM_KEYS` 那四個），欄位名跟 `setFan` 事件一致。 */
+  fan(): FanParams {
+    return {
+      width: this.values.fanWidth,
+      strength: this.values.fanStrength,
+      falloffExponent: this.values.fanFalloffExponent,
+      frequency: this.values.fanFrequency,
+    };
   }
 
   /** 這個參數的拉霸範圍。 */

@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { BackdropBoard, type Backdrop } from './BackdropBoard';
 import { BackgroundStore, memoryKeyValueStore } from './backgroundStore';
-import { type BackdropImageCodec, Backdrops, MAX_BACKDROP_SIZE } from './Backdrops';
+import {
+  type BackdropImageCodec,
+  Backdrops,
+  browserBackdropCodec,
+  MAX_BACKDROP_SIZE,
+} from './Backdrops';
 
 /** 假圖片：解碼結果，記得自己是哪個 blob、多大、有沒有被釋放。 */
 interface FakeImage {
@@ -375,5 +380,22 @@ describe('Backdrops：指令與選單', () => {
     ctx.backdrops.setVisible('backdrop/3', false);
     expect(ctx.backdrops.hitTest({ x: 0, y: 0 })).toBe('backdrop/2');
     expect(ctx.backdrops.hitTest({ x: 1e6, y: 0 })).toBeNull();
+  });
+});
+
+describe('browserBackdropCodec', () => {
+  // `decode` 在 frame loop 的 `flush()` 裡被呼叫：環境沒有 `createImageBitmap` 時不能同步丟例外，
+  // 要回失敗的 promise，讓 `Backdrops` 當成「這張解不開」略過。
+  it('沒有 createImageBitmap：decode 不同步丟例外，回失敗的 promise', async () => {
+    vi.stubGlobal('createImageBitmap', undefined);
+    try {
+      let result: Promise<unknown> | undefined;
+      expect(() => {
+        result = browserBackdropCodec.decode(fakeBlob('4x4'));
+      }).not.toThrow();
+      await expect(result).rejects.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

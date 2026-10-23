@@ -332,7 +332,14 @@ export class Backdrops<Img> {
  * WebP 的瀏覽器——Safari——會自動退回 PNG）、object URL 當縮圖。
  */
 export const browserBackdropCodec: BackdropImageCodec<ImageBitmap> = {
-  decode: (blob) => createImageBitmap(blob),
+  // `flush()` 在 frame loop 裡呼叫 `decode`：不支援 `createImageBitmap` 的環境要回失敗的
+  // promise（當成「這張解不開」略過），不能同步丟例外。
+  decode: async (blob) => {
+    if (typeof createImageBitmap !== 'function') {
+      throw new Error('這個環境不支援 createImageBitmap');
+    }
+    return createImageBitmap(blob);
+  },
   size: (image) => ({ width: image.width, height: image.height }),
   release: (image) => image.close(),
   async resizeToWebp(image, width, height) {
