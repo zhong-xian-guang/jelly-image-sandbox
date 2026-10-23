@@ -8,9 +8,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CleanView } from './CleanView';
-import { ControlPanel, type ControlPanelOptions, type TrackListRow } from './ControlPanel';
+import { clipAllows, type ClipPhase } from './Clip';
+import {
+  ControlPanel,
+  type ClipStatus,
+  type ControlPanelOptions,
+  type TrackListRow,
+} from './ControlPanel';
 import { TOOL_HELP_LINES } from './helpText';
 import { PANEL_LAYOUT_STORAGE_KEY, type KeyValueStorage } from './panelLayout';
+
+/** `setClipStatus` 的參數：某個 phase 下 `Clip` 會交給面板的狀態（許可規則用真的那份）。 */
+function clipStatus(phase: ClipPhase, paused = false): ClipStatus {
+  return { phase, paused, allows: (action) => clipAllows(phase, action) };
+}
 
 /** 記憶體版的 `localStorage`（issue #128）——每個測試各拿一份，展開狀態不會跨測試殘留。 */
 function memoryStorage(initial: Record<string, string> = {}): KeyValueStorage {
@@ -278,7 +289,7 @@ describe('ControlPanel — 依群組分區的 Track 清單（issue #43）', () =
     panel.setGroups(groupRows());
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
     panel.setPlayableTrackCount(1);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
 
     const controls = [
       ...panel.element.querySelectorAll('.jelly-group-section input, .jelly-group-section button'),
@@ -286,7 +297,7 @@ describe('ControlPanel — 依群組分區的 Track 清單（issue #43）', () =
     expect(controls.length).toBeGreaterThan(0);
     expect(controls.every((c) => c.disabled)).toBe(true);
 
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(controls.every((c) => !c.disabled)).toBe(true);
   });
 
@@ -344,14 +355,14 @@ describe('ControlPanel — 片段初始 Pin 列（issue #39）', () => {
   it('錄製中 / 播放中 → 兩顆鈕變灰，結束後解鎖（不受 Track 數量影響）', () => {
     expect(buttons().every((b) => !b.disabled)).toBe(true);
 
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(buttons().every((b) => b.disabled)).toBe(true);
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(buttons().every((b) => !b.disabled)).toBe(true);
 
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(buttons().every((b) => b.disabled)).toBe(true);
-    panel.setPlaybackControlsEnabled(true);
+    panel.setClipStatus(clipStatus('idle'));
     expect(buttons().every((b) => !b.disabled)).toBe(true);
   });
 });
@@ -401,12 +412,12 @@ describe('ControlPanel — 「設為初始位置」（issue #155）', () => {
     panel.setGroups(groupRows());
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
     poseButton().click();
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(poseButton().disabled).toBe(true);
     expect(poseButton().textContent).toBe('設為初始位置');
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(poseButton().disabled).toBe(false);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(poseButton().disabled).toBe(true);
   });
 });
@@ -460,17 +471,17 @@ describe('ControlPanel — Track 清單內改名（issue #54 / V2 T2-1）', () =
 
   it('錄製中 → 名稱欄位一併鎖住，結束後解鎖', () => {
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(labelInput().disabled).toBe(true);
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(labelInput().disabled).toBe(false);
   });
 
   it('播放中 → 名稱欄位一併鎖住', () => {
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(labelInput().disabled).toBe(true);
-    panel.setPlaybackControlsEnabled(true);
+    panel.setClipStatus(clipStatus('idle'));
     expect(labelInput().disabled).toBe(false);
   });
 });
@@ -496,8 +507,8 @@ describe('ControlPanel — 匯入圖片按鈕（issue #56）', () => {
       b.textContent?.includes('匯入圖片'),
     )!;
 
-    panel.setPlaybackControlsEnabled(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('recording'));
 
     expect(button.disabled).toBe(false);
     button.click();
@@ -526,8 +537,8 @@ describe('ControlPanel — 儲存片段按鈕（issue #57 / V2 T2-4）', () => {
       (b) => b.textContent === '儲存片段',
     )!;
 
-    panel.setPlaybackControlsEnabled(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('recording'));
 
     expect(button.disabled).toBe(false);
     button.click();
@@ -556,8 +567,8 @@ describe('ControlPanel — 載入片段按鈕（issue #58 / V2 T2-5）', () => {
       b.textContent?.includes('載入片段'),
     )!;
 
-    panel.setPlaybackControlsEnabled(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('recording'));
 
     expect(button.disabled).toBe(false);
     button.click();
@@ -811,10 +822,10 @@ describe('ControlPanel — 工具列（issue #122 / V4 T1；ADR-0016）', () => 
       ([...panel.element.querySelectorAll('.jelly-toolbar button')] as HTMLButtonElement[])
         .filter((b) => b.disabled)
         .map((b) => b.dataset.tool);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(disabled()).toEqual([]);
-    panel.setPlaybackControlsEnabled(true);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('idle'));
+    panel.setClipStatus(clipStatus('recording'));
     expect(disabled()).toEqual([]);
   });
 });
@@ -1025,8 +1036,8 @@ describe('ControlPanel — 顯示游標標籤開關（issue #122）', () => {
     const panel = new ControlPanel(makeOptions());
     const checkbox = cursorLabelCheckbox(panel);
     expect(checkbox.closest('.jelly-tool-section')).toBeNull();
-    panel.setPlaybackControlsEnabled(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('recording'));
     expect(checkbox.disabled).toBe(false);
   });
 });
@@ -1348,8 +1359,8 @@ describe('ControlPanel — 播放時隱藏提示（issue #71 / V2 T3-7）', () =
   it('播放中／錄製中仍可切換（不被 setPlaybackControlsEnabled／setRecordingActive 鎖住）', () => {
     const opts = makeOptions();
     const panel = new ControlPanel(opts);
-    panel.setPlaybackControlsEnabled(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('recording'));
 
     const checkbox = findHideHintsCheckbox(panel);
     expect(checkbox.disabled).toBe(false);
@@ -1408,10 +1419,10 @@ describe('ControlPanel — 匯入區塊：匯入尺寸拉霸（issue #88 / V3 T1
   it('不受播放／錄製鎖定影響（拉霸只管「下一次」匯入）', () => {
     const panel = new ControlPanel(makeOptions());
     const input = findRangeInputByLabel(panel, '匯入尺寸');
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(input.disabled).toBe(false);
-    panel.setRecordingActive(false);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('idle'));
+    panel.setClipStatus(clipStatus('playing'));
     expect(input.disabled).toBe(false);
   });
 });
@@ -1454,10 +1465,10 @@ describe('ControlPanel — 匯入區塊：網格密度拉霸（issue #89 / V3 T1
   it('不受播放／錄製鎖定影響（拉霸只管「下一次」匯入）', () => {
     const panel = new ControlPanel(makeOptions());
     const input = findRangeInputByLabel(panel, '網格密度');
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(input.disabled).toBe(false);
-    panel.setRecordingActive(false);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('idle'));
+    panel.setClipStatus(clipStatus('playing'));
     expect(input.disabled).toBe(false);
   });
 });
@@ -1485,22 +1496,22 @@ describe('ControlPanel — 匯入區塊：「全部重建」按鈕（issue #90 /
     const button = rebuildButton(panel);
     expect(button.disabled).toBe(false);
 
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(button.disabled).toBe(true);
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(button.disabled).toBe(false);
 
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(button.disabled).toBe(true);
-    panel.setPlaybackControlsEnabled(true);
+    panel.setClipStatus(clipStatus('idle'));
     expect(button.disabled).toBe(false);
 
     // 有 Track 也一樣：鎖與解鎖只看錄製／播放狀態。
     panel.setGroups(groupRows());
     panel.setTracks([actionRow('t1', ['default'], GROUPS_META)]);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(button.disabled).toBe(true);
-    panel.setPlaybackControlsEnabled(true);
+    panel.setClipStatus(clipStatus('idle'));
     expect(button.disabled).toBe(false);
   });
 });
@@ -1527,13 +1538,13 @@ describe('ControlPanel — 「清空全部」按鈕（issue #95 / V3 T3-2；ADR-
     const panel = new ControlPanel(makeOptions());
     const button = clearAllButton(panel);
     expect(button.disabled).toBe(false);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(button.disabled).toBe(true);
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(button.disabled).toBe(false);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(button.disabled).toBe(true);
-    panel.setPlaybackControlsEnabled(true);
+    panel.setClipStatus(clipStatus('idle'));
     expect(button.disabled).toBe(false);
   });
 });
@@ -1718,6 +1729,17 @@ describe('ControlPanel — 側欄可收合分區（issue #128 / V4 U1）', () =>
     expect(expandedSections(panel)).toEqual(['physics']);
     expect(sectionHeader(panel, 'physics').getAttribute('aria-expanded')).toBe('true');
     expect(sectionHeader(panel, 'import').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('Demo 按鈕：不允許播放時（錄製中、播放中）鎖住，回到閒置解鎖（issue #164）', () => {
+    const panel = new ControlPanel(makeOptions({ demos: [{ id: 'd1', label: 'Demo 一' }] }));
+    const demo = buttonByText(panel, 'Demo 一') as HTMLButtonElement;
+    panel.setClipStatus(clipStatus('recording'));
+    expect(demo.disabled).toBe(true);
+    panel.setClipStatus(clipStatus('playing'));
+    expect(demo.disabled).toBe(true);
+    panel.setClipStatus(clipStatus('idle'));
+    expect(demo.disabled).toBe(false);
   });
 
   it('各控制落在表格指定的區', () => {
@@ -1920,7 +1942,7 @@ describe('ControlPanel — 側欄收起（issue #128 / V4 U1）', () => {
   it('收起側欄不影響播放／錄製鎖定規則', () => {
     const panel = new ControlPanel(makeOptions());
     panel.setSidebarCollapsed(true);
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     expect(buttonByText(panel, '全部重建').disabled).toBe(true);
     expect(buttonByText(panel, '清空全部').disabled).toBe(true);
     panel.setSidebarCollapsed(false);
@@ -2022,13 +2044,13 @@ describe('ControlPanel — 畫布上的播放控制條（issue #129 / V4 U2）',
 
   it('錄製中：錄製鈕變「■ 停止錄製」且脈動（仍可按），播放鎖住；停止錄製後還原', () => {
     const panel = panelWithTrack();
-    panel.setRecordingActive(true);
+    panel.setClipStatus(clipStatus('recording'));
     const record = barButton(panel, 'record');
     expect(record.textContent).toBe('■ 停止錄製');
     expect(record.classList.contains('jelly-recording-active')).toBe(true);
     expect(barEnabled(panel)).toEqual([true, false, false, true]);
 
-    panel.setRecordingActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(record.textContent).toBe('● 錄製');
     expect(record.classList.contains('jelly-recording-active')).toBe(false);
     expect(barEnabled(panel)).toEqual([true, true, false, true]);
@@ -2036,42 +2058,39 @@ describe('ControlPanel — 畫布上的播放控制條（issue #129 / V4 U2）',
 
   it('播放中：錄製、播放鎖住，暫停、停止可按；播完回到閒置', () => {
     const panel = panelWithTrack();
-    panel.setPlaybackControlsEnabled(false);
-    panel.setPlaybackActive(true);
+    panel.setClipStatus(clipStatus('playing'));
     expect(barEnabled(panel)).toEqual([false, false, true, true]);
 
-    panel.setPlaybackControlsEnabled(true);
-    panel.setPlaybackActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(barEnabled(panel)).toEqual([true, true, false, true]);
   });
 
   it('暫停中：暫停鈕變「▶ 繼續」並變色；新一輪播放開始時還原', () => {
     const panel = panelWithTrack();
-    panel.setPlaybackControlsEnabled(false);
-    panel.setPlaybackActive(true);
-    panel.setPaused(true);
+    panel.setClipStatus(clipStatus('playing'));
+    panel.setClipStatus(clipStatus('playing', true));
     const pause = barButton(panel, 'pause');
     expect(pause.textContent).toBe('▶ 繼續');
     expect(pause.classList.contains('jelly-paused-active')).toBe(true);
     expect(barEnabled(panel)).toEqual([false, false, true, true]);
 
-    panel.setPaused(false);
+    panel.setClipStatus(clipStatus('playing'));
     expect(pause.textContent).toBe('⏸ 暫停');
     expect(pause.classList.contains('jelly-paused-active')).toBe(false);
 
-    panel.setPaused(true);
-    panel.setPlaybackActive(false);
-    panel.setPlaybackActive(true);
+    panel.setClipStatus(clipStatus('playing', true));
+    panel.setClipStatus(clipStatus('idle'));
+    panel.setClipStatus(clipStatus('playing'));
     expect(pause.textContent).toBe('⏸ 暫停');
   });
 
   it('時間讀數：播放中跟著 setPlaybackTime 走，播完歸零', () => {
     const panel = panelWithTrack();
     const time = panel.playbackBar.querySelector('.jelly-playback-time')!;
-    panel.setPlaybackActive(true);
+    panel.setClipStatus(clipStatus('playing'));
     panel.setPlaybackTime(1.234);
     expect(time.textContent).toBe('1.23 秒');
-    panel.setPlaybackActive(false);
+    panel.setClipStatus(clipStatus('idle'));
     expect(time.textContent).toBe('0.00 秒');
   });
 
@@ -2080,8 +2099,7 @@ describe('ControlPanel — 畫布上的播放控制條（issue #129 / V4 U2）',
     const panel = panelWithTrack(opts);
     barButton(panel, 'record').click();
     barButton(panel, 'play').click();
-    panel.setPlaybackControlsEnabled(false);
-    panel.setPlaybackActive(true);
+    panel.setClipStatus(clipStatus('playing'));
     barButton(panel, 'pause').click();
     barButton(panel, 'stop').click();
     expect(opts.onToggleRecording).toHaveBeenCalledTimes(1);
@@ -2161,8 +2179,8 @@ describe('ControlPanel — 畫布右下角的相機按鈕（issue #129 / V4 U2�
 
   it('播放中／錄製中相機按鈕照常可按（運鏡本來就可錄）', () => {
     const panel = new ControlPanel(makeOptions());
-    panel.setRecordingActive(true);
-    panel.setPlaybackControlsEnabled(false);
+    panel.setClipStatus(clipStatus('recording'));
+    panel.setClipStatus(clipStatus('playing'));
     expect(cameraButton(panel, 'follow-lock').disabled).toBe(false);
     expect(cameraButton(panel, 'frame').disabled).toBe(false);
   });
@@ -2265,17 +2283,17 @@ describe('ControlPanel — 再按一次確認（issue #131 / V4 U4）', () => {
       it('待確認時被鎖住（錄製中／播放中）→ 取消待確認，解鎖後要重新按兩下', () => {
         const { opts, panel, button } = setup();
         button.click();
-        panel.setRecordingActive(true);
+        panel.setClipStatus(clipStatus('recording'));
         expect(button.disabled).toBe(true);
         expect(button.textContent).toBe(label);
         expect(button.classList.contains('jelly-confirm-pending')).toBe(false);
-        panel.setRecordingActive(false);
+        panel.setClipStatus(clipStatus('idle'));
         button.click();
         expect(opts[callback]).not.toHaveBeenCalled();
 
-        panel.setPlaybackControlsEnabled(false);
+        panel.setClipStatus(clipStatus('playing'));
         expect(button.textContent).toBe(label);
-        panel.setPlaybackControlsEnabled(true);
+        panel.setClipStatus(clipStatus('idle'));
         button.click();
         expect(opts[callback]).not.toHaveBeenCalled();
         button.click();

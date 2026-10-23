@@ -10,15 +10,30 @@
  * 時沙盒交來 rest 座標）。每次狀態真的變了就呼叫建構時給的 `onChange`（沙盒在那裡把
  * `view()` 同步到側欄）；沒變（找不到 id、值相同）就不呼叫。
  *
- * 錄製／播放生命週期（DemoRunner、TrackRecorder、播放前鏡位）本張不動，仍在沙盒。
+ * **錄製／播放生命週期**（issue #164 / spec #158 B2）：單一互斥 `phase`（閒置／錄製中／播放中），
+ * `paused` 只在播放中有意義。`DemoRunner`（播）與 `TrackRecorder`（錄）是內部零件。frame loop
+ * 每個 sim step 呼叫一次 `step(dispatch)`——播放中經 `dispatch` 送出排定事件、自己播完時切回
+ * 閒置並經 `onChange` 回報；沙盒每送出一個輸入事件就交給 `record()`。兩個播放入口：
+ * `playTracks`（記下播放前鏡位，`reset()` 時交回一次）與 `playDemo`（不記鏡位）。
+ *
+ * **編輯許可**：`allows(動作)` 是「現在能不能做 X」的唯一規則（`clipAllows`）——側欄、鍵盤、
+ * 右鍵選單與沙盒入口都問它；Clip 自己的指令在不允許時直接忽略。
  */
 
 import type { CameraState } from '../camera';
 import type { Point } from '../mesh';
 import type { ClipCounters, ClipGroup, ClipPoint, ClipState, ClipTrack } from './clipFile';
-import { overlappingCameraTrackIds, setupPinsTrack, type OverlayTrack } from './demos/overlay';
-import { secondsToStep, stepToSeconds } from './demos/time';
+import { DemoRunner } from './demos/DemoRunner';
 import {
+  mergeTracks,
+  overlappingCameraTrackIds,
+  setupPinsTrack,
+  type OverlayTrack,
+} from './demos/overlay';
+import { secondsToStep, stepToSeconds } from './demos/time';
+import type { DemoEvent, DemoStep } from './demos/types';
+import {
+  TrackRecorder,
   createDefaultGroup,
   DEFAULT_GROUP_ID,
   toggleSolo,
@@ -103,6 +118,10 @@ export interface ClipView {
   playableTrackCount: number;
   /** 片段初始 Pin 快照有幾顆。 */
   setupPinCount: number;
+  /** 錄製／播放狀態。 */
+  phase: ClipPhase;
+  /** 播放中是否暫停（其他 phase 一律 `false`）。 */
+  paused: boolean;
 }
 
 /** 片段檔中 Clip 負責的那部分。 */
@@ -111,6 +130,41 @@ export interface ClipPart {
   groups: ClipGroup[];
   setupPins: ClipPoint[];
   counters: Pick<ClipCounters, 'nextTrackNum' | 'nextGroupNum'>;
+}
+
+/** 錄製／播放狀態（issue #164）：閒置／錄製中／播放中，三者互斥。 */
+export type ClipPhase = 'idle' | 'recording' | 'playing';
+
+/**
+ * `allows` 問的具名動作（issue #164）——側欄按鈕、鍵盤、右鍵選單與沙盒入口都問同一處。
+ * - `editTracks`：Track 清單與群組區的所有編輯
+ * - `record`：「● 錄製／■ 停止錄製」鈕
+ * - `play`：「▶ 播放」與 Demo 按鈕
+ * - `setupPins`：片段初始 Pin 的「設為目前 Pin」「清除」
+ * - `setInitialPose`／`rebuildAll`／`clearAll`：同名按鈕
+ * - `rebuildJelly`／`removeJelly`：Jelly 右鍵選單的「重建」「移除」
+ * - `selectRecordTarget`：錄製目標選擇器
+ */
+export type ClipAction =
+  | 'editTracks'
+  | 'record'
+  | 'play'
+  | 'setupPins'
+  | 'setInitialPose'
+  | 'rebuildAll'
+  | 'clearAll'
+  | 'rebuildJelly'
+  | 'removeJelly'
+  | 'selectRecordTarget';
+
+/**
+ * 某個 phase 允不允許某個動作（純函式，`Clip.allows` 用的就是它）：閒置時全部允許；錄製中
+ * 只剩錄製鈕（此時是「■ 停止錄製」）與 Jelly 選單的「移除」（會被錄成事件）；播放中全部鎖住。
+ */
+export function clipAllows(phase: ClipPhase, action: ClipAction): boolean {
+  if (phase === 'idle') return true;
+  if (phase === 'recording') return action === 'record' || action === 'removeJelly';
+  return false;
 }
 
 export interface ClipOptions {
@@ -123,7 +177,17 @@ export class Clip {
    * 按下錄製前選定的錄製目標（issue #33）——只錄動作／只錄運鏡／兩者同時。是使用者
    * 的設定而非片段內容：`clear()`／`fromClipPart()` 都不動它（跟整理前一樣）。
    */
-  recordTarget: RecordTarget = 'action';
+  private target: RecordTarget = 'action';
+  /** 錄製／播放狀態（issue #164）：互斥的單一 phase。 */
+  private currentPhase: ClipPhase = 'idle';
+  private isPaused = false;
+  private readonly recorder = new TrackRecorder();
+  private readonly runner = new DemoRunner();
+  /**
+   * 播放前的鏡位（issue #156）——播放 Track 時記下，「停止／重設」由 `reset()` 交回一次。
+   * 自己播完不清掉（播完再按重設仍會回到播放前）。
+   */
+  private cameraBeforePlayback: CameraState | null = null;
   /**
    * Track 清單——陣列順序＝錄製順序＝清單顯示順序＝相機軌「認先列」的先後
    * （`mergeTracks`）。生命週期（ADR-0013）：「清空全部」／載入片段才換掉；
@@ -148,6 +212,145 @@ export class Clip {
 
   constructor(options: ClipOptions = {}) {
     this.onChange = options.onChange ?? (() => {});
+  }
+
+  /** 目前的 phase 允不允許 `action`（規則見 `clipAllows`）。 */
+  allows(action: ClipAction): boolean {
+    return clipAllows(this.currentPhase, action);
+  }
+
+  /** 目前的錄製／播放狀態。 */
+  get phase(): ClipPhase {
+    return this.currentPhase;
+  }
+
+  get recordTarget(): RecordTarget {
+    return this.target;
+  }
+
+  /** 「錄製目標」選擇器——錄製中／播放中不允許時忽略。 */
+  set recordTarget(target: RecordTarget) {
+    if (!this.allows('selectRecordTarget')) return;
+    this.target = target;
+  }
+
+  /**
+   * 「● 錄製／■ 停止錄製」切換鈕：閒置時依錄製目標起錄（`startCamera` 是錄製起點的鏡頭
+   * 快照，相機軌硬切進場用，沙盒傳入前先拷貝）；錄製中則停止，把錄到的事件依種類拆成
+   * 動作軌／相機軌，非空的各新增一列（「兩者同時」一次產出兩列）。播放中不允許、忽略。
+   */
+  toggleRecording(startCamera: CameraState): void {
+    if (this.currentPhase === 'recording') {
+      const { action, camera, startCamera: recordedCamera } = this.recorder.stop();
+      this.currentPhase = 'idle';
+      this.onChange();
+      if (action.length > 0) this.addTrack('action', action, null);
+      if (camera.length > 0) this.addTrack('camera', camera, recordedCamera ?? null);
+      return;
+    }
+    if (!this.allows('record')) return;
+    this.recorder.start(this.target, startCamera);
+    this.currentPhase = 'recording';
+    this.onChange();
+  }
+
+  /**
+   * 沙盒每送出一個輸入事件或相機指令就交給這裡（錄製中才真的記下，時間戳記是錄製開始後
+   * 跑過的 sim step 數）。
+   */
+  record(event: DemoEvent): void {
+    this.recorder.record(event);
+  }
+
+  /**
+   * frame loop 每個固定 sim step 呼叫一次（在 `world.step` 之前）：播放中把這個 step 排定的
+   * 事件經 `dispatch` 送出，播完就切回閒置並通知；錄製中讓錄製時間軸前進一格。
+   */
+  step(dispatch: (event: DemoEvent) => void): void {
+    if (this.currentPhase === 'playing' && !this.isPaused) {
+      this.runner.advance(dispatch, dispatch);
+      if (!this.runner.isRunning) this.endPlayback();
+    }
+    this.recorder.tick();
+  }
+
+  /** 播放中已推進的 sim step 數（控制條的「目前 X.XX 秒」）；暫停時定住。 */
+  get playbackSteps(): number {
+    return this.runner.elapsedSteps;
+  }
+
+  /** 播放中是否暫停（只在播放中有意義；播放結束一律歸零）。 */
+  get paused(): boolean {
+    return this.isPaused;
+  }
+
+  /**
+   * 「▶ 播放」：把 `overlayTracks()` 疊成一條全域時間軸開始播放，並記下播放前的鏡位
+   * （`cameraNow`，「停止／重設」時由 `reset()` 交回）。不允許（錄製中、已在播放中）或沒有
+   * 可播放的 Track 時忽略。回傳是否真的開始播——是的話沙盒要接著 `world.reset()`。
+   */
+  playTracks(cameraNow: CameraState): boolean {
+    if (!this.allows('play')) return false;
+    const overlay = this.overlayTracks();
+    if (overlay.length === 0) return false;
+    this.cameraBeforePlayback = cameraNow;
+    this.startPlayback(mergeTracks(overlay));
+    return true;
+  }
+
+  /** Demo 按鈕：播放一段現成的排程；不記播放前鏡位。不允許時忽略。 */
+  playDemo(schedule: readonly DemoStep[]): void {
+    if (!this.allows('play')) return;
+    this.startPlayback(schedule);
+  }
+
+  /** 「⏸ 暫停／▶ 繼續」與空白鍵——只在播放中有作用。 */
+  togglePause(): void {
+    if (this.currentPhase !== 'playing') return;
+    this.isPaused = !this.isPaused;
+    this.onChange();
+  }
+
+  /** 只中斷播放（匯入圖片時）：錄製不受影響、播放前鏡位保留。 */
+  stopPlayback(): void {
+    if (this.currentPhase !== 'playing') return;
+    this.runner.stop();
+    this.endPlayback();
+  }
+
+  /** 中斷播放與錄製；進行中的錄製**丟棄**（「中斷」不是「存檔」）。播放前鏡位保留。 */
+  halt(): void {
+    this.stopPlayback();
+    if (this.currentPhase === 'recording') {
+      this.recorder.stop();
+      this.currentPhase = 'idle';
+      this.onChange();
+    }
+  }
+
+  /**
+   * 「停止／重設」：`halt()`，再交回播放前的鏡位（沒播放過、或已還原過則 `null`）——還原
+   * 一次就丟掉，之後使用者重新擺的鏡位不會又被下一次重設拉回去。
+   */
+  reset(): CameraState | null {
+    this.halt();
+    const camera = this.cameraBeforePlayback;
+    this.cameraBeforePlayback = null;
+    return camera;
+  }
+
+  private startPlayback(schedule: readonly DemoStep[]): void {
+    this.runner.start(schedule);
+    if (!this.runner.isRunning) return;
+    this.currentPhase = 'playing';
+    this.isPaused = false;
+    this.onChange();
+  }
+
+  private endPlayback(): void {
+    this.currentPhase = 'idle';
+    this.isPaused = false;
+    this.onChange();
   }
 
   /**
@@ -202,6 +405,7 @@ export class Clip {
   }
 
   deleteTrack(id: string): void {
+    if (!this.allows('editTracks')) return;
     this.tracks = this.tracks.filter((t) => t.id !== id);
     this.onChange();
   }
@@ -211,6 +415,7 @@ export class Clip {
    * 覆寫，之後調整起始／修剪／分群都不會蓋回。
    */
   renameTrack(id: string, name: string): void {
+    if (!this.allows('editTracks')) return;
     const track = this.tracks.find((t) => t.id === id);
     if (!track) return;
     const next = name === '' ? null : name;
@@ -224,12 +429,14 @@ export class Clip {
    * 上一份快照（存 rest 而非目前變形座標：播放會先 `world.reset()`，還原時才精準）。
    */
   setSetupPins(restPoints: readonly Point[]): void {
+    if (!this.allows('setupPins')) return;
     this.setupPins = restPoints.map((p) => ({ x: p.x, y: p.y }));
     this.onChange();
   }
 
   /** 「片段初始 Pin：清除」（issue #39）。 */
   clearSetupPins(): void {
+    if (!this.allows('setupPins')) return;
     if (this.setupPins.length === 0) return;
     this.setupPins = [];
     this.onChange();
@@ -237,6 +444,7 @@ export class Clip {
 
   /** 「＋ 新增群組」（issue #43）——新群組預設開啟、沒有成員；進行中的獨奏還原點作廢。 */
   addGroup(): void {
+    if (!this.allows('editTracks')) return;
     const num = this.nextGroupNum++;
     this.groups.push({ id: `g${num}`, name: `群組 ${num}`, enabled: true });
     this.soloState = null;
@@ -245,6 +453,7 @@ export class Clip {
 
   /** 某群組的開啟／關閉（issue #43）——手動動過開關，進行中的獨奏還原點作廢。 */
   setGroupEnabled(id: string, enabled: boolean): void {
+    if (!this.allows('editTracks')) return;
     const group = this.groups.find((g) => g.id === id);
     if (!group || group.enabled === enabled) return;
     group.enabled = enabled;
@@ -254,6 +463,7 @@ export class Clip {
 
   /** 某群組改名（issue #43）——`ControlPanel` 已擋掉空字串。 */
   renameGroup(id: string, name: string): void {
+    if (!this.allows('editTracks')) return;
     const group = this.groups.find((g) => g.id === id);
     if (!group || group.name === name) return;
     group.name = name;
@@ -262,6 +472,7 @@ export class Clip {
 
   /** 「獨奏」鈕（issue #43）——只留該群組開；對正在獨奏的群組再按一次還原先前的開關。 */
   toggleGroupSolo(id: string): void {
+    if (!this.allows('editTracks')) return;
     const { groups, solo } = toggleSolo(this.groups, this.soloState, id);
     this.groups = groups;
     this.soloState = solo;
@@ -273,6 +484,7 @@ export class Clip {
    * 預設群組（不變式）。預設群組不可刪。
    */
   deleteGroup(id: string): void {
+    if (!this.allows('editTracks')) return;
     if (id === DEFAULT_GROUP_ID) return;
     this.groups = this.groups.filter((g) => g.id !== id);
     for (const track of this.tracks) {
@@ -284,6 +496,7 @@ export class Clip {
 
   /** 某條 Track 的 `群組 ▾` 勾選（issue #43）——丟掉無效 id、全空時補回預設群組。 */
   setTrackGroups(trackId: string, groupIds: readonly string[]): void {
+    if (!this.allows('editTracks')) return;
     const track = this.tracks.find((t) => t.id === trackId);
     if (!track) return;
     track.groupIds = withGroupInvariant(groupIds, this.groups);
@@ -337,6 +550,8 @@ export class Clip {
       })),
       playableTrackCount: tracksInEnabledGroups(this.tracks, this.groups).length,
       setupPinCount: this.setupPins.length,
+      phase: this.currentPhase,
+      paused: this.isPaused,
     };
   }
 
@@ -363,8 +578,12 @@ export class Clip {
     };
   }
 
-  /** 以片段檔的 Clip 那部分整包取代目前狀態（載入片段，issue #58）；獨奏狀態清掉。 */
+  /**
+   * 以片段檔的 Clip 那部分整包取代目前狀態（載入片段，issue #58）；先 `halt()` 中斷錄製／播放，
+   * 獨奏狀態清掉。
+   */
   fromClipPart(part: Readonly<ClipPart> | ClipState): void {
+    this.halt();
     this.groups = part.groups.map((g) => ({ ...g }));
     this.tracks = part.tracks.map(hydrateClipTrack);
     this.nextTrackNum = part.counters.nextTrackNum;
@@ -374,8 +593,12 @@ export class Clip {
     this.onChange();
   }
 
-  /** 回到全新片段（「清空全部」）：Track／群組／片段初始 Pin／流水號全部歸零；錄製目標不動。 */
+  /**
+   * 回到全新片段（「清空全部」）：先 `halt()` 中斷錄製（丟棄）與播放，Track／群組／片段初始
+   * Pin／流水號全部歸零；錄製目標與播放前鏡位不動（跟整理前一樣）。
+   */
   clear(): void {
+    this.halt();
     this.tracks = [];
     this.nextTrackNum = 1;
     this.setupPins = [];
@@ -387,6 +610,7 @@ export class Clip {
 
   /** 找到 `id` 那條 Track、跑 `mutate` 改它的 step 欄位；找不到就不動。 */
   private updateTrack(id: string, mutate: (track: RecordedTrack) => void): void {
+    if (!this.allows('editTracks')) return;
     const track = this.tracks.find((t) => t.id === id);
     if (!track) return;
     mutate(track);
